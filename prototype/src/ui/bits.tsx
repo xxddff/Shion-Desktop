@@ -12,6 +12,18 @@ export function Avatar({ bot, size = 22 }: { bot?: Bot; size?: number }) {
   );
 }
 
+/**
+ * 詩音's mark: the first character of her name, drawn like her avatar, so wherever it
+ * appears it means "talk to 詩音". `mono` is the menu bar's template-icon style.
+ */
+export function Mark({ size = 16, mono = false }: { size?: number; mono?: boolean }) {
+  return (
+    <span className={`mark${mono ? ' mono' : ''}`} style={{ '--size': `${size}px` } as CSSProperties} aria-hidden="true">
+      詩
+    </span>
+  );
+}
+
 /** Three dots that breathe while an assistant is working. */
 export function Busy({ label = '在做' }: { label?: string }) {
   return (

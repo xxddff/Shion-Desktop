@@ -17,7 +17,7 @@ import {
 
 /**
  * Plays out the next few minutes of the demo day on the kanban board:
- * 「课程」 finishes card t_c7a1 and 紫苑 (subscribed to cards she creates) asks
+ * 「课程」 finishes card t_c7a1 and 詩音 (subscribed to cards she creates) asks
  * you about dates; t_c7b2 hits two-step sign-in on the cloud desktop and
  * blocks until you take over; 「资讯」 finishes its fact-check card.
  */
@@ -58,7 +58,7 @@ const studyTodos = (s: AppState): AppState => {
   };
 };
 
-/** 紫苑 is subscribed to the cards she creates: a terminal event wakes her Bot Chat. */
+/** 詩音 is subscribed to the cards she creates: a terminal event wakes her Bot Chat. */
 const notifyShion = (cardId: string, text: string, extra: { todoIds?: string[] } = {}) => (s: AppState): AppState => {
   let next = withItem(s, 'shion', { role: 'card', at: demoNow(), cardId });
   next = withItem(next, 'shion', { role: 'assistant', text, at: demoNow(), ...extra });
@@ -228,7 +228,7 @@ const scripts: Runner[] = [
       },
     },
   ]),
-  // 紫苑's noon nudge
+  // 詩音's noon nudge
   run('shion', 'shion', [
     { kind: 'wait', ticks: 40 },
     {
@@ -243,7 +243,7 @@ const scripts: Runner[] = [
           at: demoNow(),
           todoIds: ['td2'],
         });
-        return withToast(next, { title: '紫苑：课前小测 12:50 截止', body: '大概 15 分钟，做完再去吃饭？', botId: 'shion', href: '#todos' });
+        return withToast(next, { title: '詩音：课前小测 12:50 截止', body: '大概 15 分钟，做完再去吃饭？', botId: 'shion', href: '#todos' });
       },
     },
   ]),

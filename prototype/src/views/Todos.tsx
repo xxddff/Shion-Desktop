@@ -165,7 +165,7 @@ function TodoInspector({ t, state, now, onClose }: { t: Todo; state: AppState; n
           </dd>
         </dl>
         <section className="insp-sec">
-          <h4>紫苑会这样提醒你</h4>
+          <h4>詩音会这样提醒你</h4>
           <ul className="plain">
             {t.doAt && <li>到执行时间（{when(t.doAt, now)}）提醒一次</li>}
             {t.dueAt && <li>截止前 24 小时、3 小时各催一次</li>}

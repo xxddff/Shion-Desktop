@@ -1,9 +1,9 @@
-import { CalendarDays, CircleCheck, Flower2, Hand, Menu, Monitor, Newspaper, SquareKanban, Sun, type LucideIcon } from 'lucide-react';
+import { CalendarDays, CircleCheck, Hand, Menu, Monitor, Newspaper, SquareKanban, Sun, type LucideIcon } from 'lucide-react';
 import { createContext, useContext, type ReactNode } from 'react';
 import { dayDiff, demoNow } from '../data/clock';
 import type { AppState } from '../data/model';
 import type { Route } from '../route';
-import { Avatar, Busy, botMood } from '../ui/bits';
+import { Avatar, Busy, Mark, botMood } from '../ui/bits';
 
 export const NavContext = createContext<{ openNav: () => void; openQuick: () => void }>({ openNav: () => {}, openQuick: () => {} });
 
@@ -12,8 +12,8 @@ export function AskButton() {
   const { openQuick } = useContext(NavContext);
   return (
     <button className="ask-btn" onClick={openQuick}>
-      <Flower2 size={14} />
-      <span className="hide-narrow">跟紫苑说</span>
+      <Mark size={16} />
+      <span className="hide-narrow">跟詩音说</span>
       <kbd className="hide-narrow">⌘K</kbd>
     </button>
   );

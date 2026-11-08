@@ -1,10 +1,10 @@
-import { ArrowRight, CalendarDays, CircleCheck, Flower2, Hand, Monitor, Newspaper, Search, SquareKanban, Sun, TrainFront, X } from 'lucide-react';
+import { ArrowRight, CalendarDays, CircleCheck, Hand, Monitor, Newspaper, Search, SquareKanban, Sun, TrainFront, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { dayDiff } from '../data/clock';
 import type { AppState, Toast } from '../data/model';
 import { dismissToast, sendMessage, setActivityLog, setSimulate } from '../data/store';
 import { go } from '../route';
-import { AreaDot, Avatar } from '../ui/bits';
+import { AreaDot, Avatar, Mark } from '../ui/bits';
 import { hm, until, useNow, weekday } from '../ui/format';
 import { TodoRow } from './Items';
 
@@ -49,7 +49,7 @@ export function QuickAsk({ state, onClose }: { state: AppState; onClose: () => v
   return (
     <>
       <div className="scrim" onClick={onClose} />
-      <div className="quick" role="dialog" aria-label="跟紫苑说">
+      <div className="quick" role="dialog" aria-label="跟詩音说">
         <form
           className="quick-input"
           onSubmit={(e) => {
@@ -60,7 +60,7 @@ export function QuickAsk({ state, onClose }: { state: AppState; onClose: () => v
             } else if (q.trim()) send(q.trim());
           }}
         >
-          <Flower2 size={20} />
+          <Mark size={26} />
           <input
             id="quick-input"
             autoFocus
@@ -78,8 +78,8 @@ export function QuickAsk({ state, onClose }: { state: AppState; onClose: () => v
                 setSel((x) => Math.max(-1, x - 1));
               } else if (e.key === 'Escape') onClose();
             }}
-            placeholder="跟紫苑说点什么，或者搜索"
-            aria-label="跟紫苑说点什么，或者搜索"
+            placeholder="跟詩音说点什么，或者搜索"
+            aria-label="跟詩音说点什么，或者搜索"
           />
         </form>
         <ul className="quick-list">
@@ -114,7 +114,7 @@ export function QuickAsk({ state, onClose }: { state: AppState; onClose: () => v
                   </button>
                 </li>
               ))}
-              <li className="quick-group">按 ↩ 把这句话交给紫苑</li>
+              <li className="quick-group">按 ↩ 把这句话交给詩音</li>
             </>
           )}
         </ul>
@@ -257,7 +257,7 @@ export function MenuBar({ state, onQuickAsk }: { state: AppState; onQuickAsk: ()
         <span className="mb-menu hide-narrow">窗口</span>
         <span className="grow" />
         <button className={`mb-item${open ? ' on' : ''}`} onClick={() => setOpen((x) => !x)} aria-expanded={open} aria-label="Shion 菜单栏">
-          <Flower2 size={13} />
+          <Mark size={15} mono />
           {next ? (
             <span className="num">
               {hm(next.start)} {next.title.replace(/ 第\d+回/, '')}
@@ -308,8 +308,8 @@ export function MenuBar({ state, onQuickAsk }: { state: AppState; onQuickAsk: ()
               onQuickAsk();
             }}
           >
-            <Flower2 size={14} />
-            <span className="grow">跟紫苑说…</span>
+            <Mark size={18} />
+            <span className="grow">跟詩音说…</span>
             <kbd>⌥Space</kbd>
           </button>
         </div>

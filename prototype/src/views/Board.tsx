@@ -19,7 +19,7 @@ const who = (state: AppState, id: string) =>
   id === 'you' ? '你' : id.startsWith('routine:') ? `例行「${id.slice(8)}」` : state.bots.find((b) => b.id === id)?.name ?? id;
 
 /**
- * Work handed to assistants, on the Hermes kanban board. 紫苑 creates the
+ * Work handed to assistants, on the Hermes kanban board. 詩音 creates the
  * cards; each runs in its own worker session; a card that needs you waits in
  * 「等你」 until you comment or unblock it.
  */

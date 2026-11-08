@@ -1,4 +1,4 @@
-import { ArrowUpRight, Flower2 } from 'lucide-react';
+import { ArrowUpRight } from 'lucide-react';
 import { useState } from 'react';
 import { CardRow } from '../components/Cards';
 import { AskRow, TodoRow } from '../components/Items';
@@ -7,10 +7,10 @@ import { dayDiff } from '../data/clock';
 import type { AppState, CalEvent, Todo } from '../data/model';
 import { sendMessage, sortAsks } from '../data/store';
 import { go } from '../route';
-import { AREA, Busy } from '../ui/bits';
+import { AREA, Busy, Mark } from '../ui/bits';
 import { hm, md, useNow, weekday } from '../ui/format';
 
-/** What 紫苑 would say if you glanced up right now. */
+/** What 詩音 would say if you glanced up right now. */
 function brief(state: AppState, now: number) {
   const today = state.events.filter((e) => dayDiff(e.start, now) === 0);
   const nextClass = today.find((e) => e.kind === 'class' && e.start > now);
@@ -68,8 +68,8 @@ export function Today({ state }: { state: AppState }) {
             </h2>
             <p className="hero-brief">{brief(state, now)}</p>
             <form className="hero-ask" onSubmit={submit}>
-              <Flower2 size={16} />
-              <input id="today-ask" value={text} onChange={(e) => setText(e.target.value)} placeholder="跟紫苑说：「把实验报告挪到明天」" aria-label="跟紫苑说" />
+              <Mark size={20} />
+              <input id="today-ask" value={text} onChange={(e) => setText(e.target.value)} placeholder="跟詩音说：「把实验报告挪到明天」" aria-label="跟詩音说" />
               {text.trim() && <kbd>↩</kbd>}
             </form>
           </header>
