@@ -1,79 +1,97 @@
-# Shion
+# Shion（紫苑）
 
-一个 macOS 桌面端的 Hermes Agent 控制台：**看 Bot 在干什么、看看板在怎么流转、处理它们发来的审批**。
+macOS 上的私人秘书。你主要和总秘书「紫苑」打交道，她带着一组助手（课程、通勤、邮件、资讯、回顾）处理学习、工作和生活里的事；每个助手的对话也可以单独打开。
 
-这是 UI 原型：界面完整可交互，数据来自内置的模拟器（`src/data/simulator.ts`），帧的形状按 Hermes 的 TUI Gateway JSON-RPC 和 Kanban `task_events` 来写，接真协议时只需替换数据源。
+背后跑的是部署在 VPS 上的 [Hermes Agent](https://github.com/NousResearch/hermes-agent)，Shion 通过 Canonical Gateway Protocol 连接它，完全取代官方桌面端的 Bot Mode。
+
+> 现阶段：`prototype/` 是 UI 原型（React，示例数据，可交互），用来对齐界面和流程。正式的 App 用 SwiftUI 写，不套浏览器。
+
+## 已经定下来的
+
+| 问题 | 决定 |
+| --- | --- |
+| 和官方 Hermes Desktop 的关系 | 完全取代它的 Bot Mode |
+| 组织方式 | 一个总秘书带一组助手；每个助手的 Bot Chat 也能单独访问 |
+| Hermes 跑在哪 | 远端 VPS；以后可能也接入这台 Mac，让助手在本机做事（暂不实现） |
+| 技术栈 | 原型不限；正式版 SwiftUI 原生 |
+| 首批场景 | 邮件、日程、待办；通勤路线与延误；课后整理录音成待办；课程提醒；每日安排与催促；应用使用记录与每日回顾；事实核查；新闻和学习/工作/生活日报 |
+
+## 架构
+
+```
+┌──────────── 这台 Mac ────────────┐            ┌──────────────── VPS ─────────────────┐
+│ Shion.app (SwiftUI)              │   SSH 隧道  │ hermes serve / gateway owner          │
+│  ├ 窗口：今天 · 待办 · 日程 · 日报 │ ─────────▶ │  ├ Canonical Gateway Protocol (WS)    │
+│  │       等你确认 · 各助手 Bot Chat │            │  ├ profiles = 紫苑 + 各助手            │
+│  ├ 菜单栏常驻 + ⌥Space 随手交代     │            │  │   各自的 SOUL、记忆、技能、MCP、凭据   │
+│  ├ 系统通知（可直接在通知里回复）   │            │  ├ cron = 各助手的例行任务             │
+│  └ 应用使用记录（只记应用名和时长） │            │  ├ kanban = 交给助手的事                │
+└──────────────────────────────────┘            │  └ shion 插件：待办、日报、应用记录的存取 │
+                                                 └──────────────────────────────────────┘
+```
+
+**Shion 不做"聪明"的部分。** 理解、拆解、提醒的时机、写日报，都由 VPS 上的 Hermes 助手完成，Mac 合上了也照常运行。Shion 负责三件事：
+1. 把这些结果做成好用的界面；
+2. 在你需要拍板时打断你（通知、菜单栏、等你确认）；
+3. 提供 VPS 拿不到的本机数据（目前只有应用使用记录）。
+
+**为什么要一个 `shion` Hermes 插件。** Canonical 协议是围绕会话（对话）设计的，没有"列出待办""读日报"这类方法。Hermes 官方的扩展方式是插件 RPC：插件用 `ctx.register_rpc` 注册 `plugin.shion.<name>`，用 `ctx.emit_to_session` 推送事件，客户端从 `runtime.describe` 的 `plugin-rpc-v1` 能力判断可用。待办、今天的汇总、日报、应用记录上传都走这里。助手们操作同一份数据（同一个插件里的工具），这样你在 Shion 里看到的和助手看到的是同一份。
+
+## 场景由谁负责
+
+| 场景 | 助手 | Hermes 侧 | Shion 里看到的 |
+| --- | --- | --- | --- |
+| 邮件 | 邮件 | 邮箱技能或 MCP，例行整理收件箱 | 发出前到「等你确认」；需要处理的变成待办 |
+| 日程 | 紫苑 | 日历技能或 MCP | 日程（周视图）、今天的时间线 |
+| 待办 | 紫苑 | `shion` 插件存储；执行日期与截止日期分开 | 待办、菜单栏、今天 |
+| 通勤路线、延误 | 通勤 | 已有的交通 MCP；按日程生成出门提醒 | 今天的通勤卡片、通知、菜单栏 |
+| 课后整理 | 课程 | Notion MCP 读录音转写；按课表在课后触发 | 新待办先标"待确认日期"，在等你确认里定日期 |
+| 课程提醒 | 课程 | 按课表的例行任务 | 通知、菜单栏的"下一件" |
+| 每日安排与催促 | 紫苑 | 早报、12/18/21 点催促、睡前排明天 | 今天页顶部的一段话、通知 |
+| 应用记录与回顾 | 回顾 | 插件接收记录，22:30 写日报 | Mac 端采集；日报里的屏幕时间 |
+| 事实核查 | 资讯 | 网络搜索与网页读取 | 对话；新闻日报里的核查标注 |
+| 新闻 / 学习 / 工作 / 生活日报 | 资讯、回顾 | 例行任务生成 | 日报页 |
+| 全天录音（以后） | 新助手 | 转写 → 记忆 → 待办 | 暂不做 |
+
+**关于日报放不放进 Shion：** 生成不放在 Shion，交给 Hermes 的例行任务：Mac 关着也能按时写，还能同时推到手机（Telegram 等平台）。Shion 只负责阅读界面，再加上提供应用使用记录这一份 VPS 拿不到的数据。
+
+## Canonical Gateway Protocol 要点（写 Swift 客户端时用）
+
+依据 Hermes `main`（2026-11）的 `apps/desktop/docs/canonical-gateway-protocol.md`、`tui_gateway/contracts/canonical*.py` 和生成的 `apps/shared/src/gateway-contract.generated.ts`。
+
+- **连接**：WebSocket `/api/ws`，子协议 `hermes-gateway-v1`，方法表是 `CANONICAL_METHODS`。连上后先 `client.capabilities {server_requests: true}`，否则审批和提问会被直接撤回。
+- **鉴权**：本机由 profile 目录下的私有 control socket 签发一次性 ticket（30 秒）；远端走 `hermes serve` 的会话 token、OAuth 或 SSH 隧道。我们用 SSH 隧道，VPS 不开公网端口。
+- **身份**：`session.create` 带 `source`（必须在 `runtime.describe` 的 `session_create.sources` 里）和 `client: {name: "shion"}`。
+- **Bot Chat**：一个助手 = 一个 profile = 唯一一个标题为 `Bot Chat` 的会话。用 `session.list {title, include_hidden: true}` 按标题找，`profiles.list` 也直接给出 `canonical_session`。不存会话 id 指针。
+- **可靠提交**：客户端的 `input_id` 和服务端的 `admission_id` 分开，以回执为准（`prompt.receipt`、`prompt.resolve_unknown`）。
+- **审批、提问**：回复要对准 `prompt_id` 和 `execution_generation`；断线重连后用 `session.events.since` 恢复还没回答的请求。
+- **不在 canonical 里的**：看板走 `/api/plugins/kanban/*`，例行任务列表走 `/api/cron/jobs`（canonical 里只有 `cron.submit` 立即运行和 `cron.status`）。
+- **类型生成**：`apps/shared/src/gateway-contract.openrpc.json` 可以生成 Swift `Codable` 类型，不用手写。
+
+**还没验证的风险**
+1. 第三方客户端能用哪个 `source`（官方桌面端用 `gui`）。要在我们的 VPS 上看 `runtime.describe`。
+2. 远端经 `hermes serve` 时，canonical 方法和插件 RPC 是否都能用。
+3. 官方 Bot Mode 把头像、分组等存在 profile 的 `ui_meta` 里。Shion 要读写同样的键，才能和命令行、手机端保持一致。
+
+## 仓库结构
+
+```
+prototype/      UI 原型（Vite + React + TypeScript，示例数据）
+  src/data/     模型、示例数据、模拟器（课后整理、核查、催促会自己播放）
+  src/views/    今天、待办、日程、日报、等你确认、Bot Chat
+```
 
 ```bash
+cd prototype
 npm install
 npm run dev        # http://localhost:1420
-npm run typecheck
-npm run build
 ```
 
-## 定位
+## 路线图
 
-官方 Hermes Desktop 以「聊天」为中心。Shion 只做「运维台」这一件事：
-
-| 场景 | Shion 里的位置 |
-| --- | --- |
-| 一眼看全局：几个 Bot 在线、几张卡在跑、哪里卡住了 | 总览 |
-| Bot 要批准危险命令、向你提问、索要密钥 | 待处理（server→client 请求的统一收件箱） |
-| 盯某个 Bot 的实时输出、工具调用，必要时引导或打断 | Bot 详情 |
-| 看板流转、拖卡片、看心跳和运行记录 | 看板 + 任务详情 |
-| 调协议 | Bot 详情里的「协议帧」面板 |
-
-## 协议映射
-
-**Bot 实时活动**：TUI Gateway，WebSocket `/api/ws`，子协议 `hermes-gateway-v1`
-
-| UI 行为 | 协议 |
-| --- | --- |
-| 连接后第一件事 | 等 `gateway.ready` → `client.capabilities { server_requests: true }`（必须，否则审批会被直接撤回）→ `runtime.describe` |
-| Bot 列表 / 会话标签 | `session.active_list`、`session.list` |
-| 打开会话（多端同看，不抢占） | `session.activate`，历史用 `session.transcript`（cursor 分页） |
-| 流式输出、工具卡片 | `message.delta` / `message.complete`、`tool.start` / `tool.complete` |
-| 引导 / 后台提交 / 打断 | `session.steer` / `prompt.background` / `session.interrupt` |
-| 待处理收件箱 | 服务端发来的 `approval`、`clarify`、`secret` 请求；回复必须带同一个字符串 id；没实现的方法回 `-32601` |
-| 断线重连 | ticket 一次性，重连前重新 `hermes gateway attach --recover`；连上后 `session.events.since`，用 `open_requests` 恢复挂起的审批，用 `inflight` 接上正在输出的回复 |
-
-**看板**：Kanban 插件，REST `/api/plugins/kanban/*` + WS `/events?since=<event_id>`
-
-| UI 行为 | 协议 |
-| --- | --- |
-| 看板列 | `GET /board`，状态 `triage → todo → ready → running → blocked → review → done` |
-| 拖卡片、改负责人 | `PATCH /tasks/:id` |
-| 评论（Bot 之间交接的主要方式） | `POST /tasks/:id/comments` |
-| 实时更新 | `/events` 推送 `task_events`，记住最后一个 id，重连时 `?since=` 补齐 |
-| 心跳、运行记录 | `heartbeat` 事件、`GET /tasks/:id` 里的 `runs[]` |
-
-> 注意：kanban 插件的 HTTP 路由本身不鉴权，不要把 dashboard 绑到 `0.0.0.0`。
-
-协议类型在 `src/protocol/`，是按官方文档整理的，接入前请对照 `tui_gateway/server.py` 再核对一遍字段。
-
-## 代码结构
-
-```
-src/
-  protocol/   gateway.ts（JSON-RPC 方法/事件/服务端请求）、kanban.ts（任务、事件、运行）
-  data/       model.ts（UI 领域模型）、seed.ts（示例数据）、store.ts（状态 + 动作）、simulator.ts（假 gateway）
-  views/      Overview、Inbox、Bots（列表 + 详情）、Board（看板 + 任务详情）
-  components/ Shell（侧边栏、工具栏）、Overlays（⌘K、新建任务、连接、通知）
-```
-
-`store.ts` 里的 reducer（`withFrame`、`withTaskEvent`、`withItem`…）就是真客户端收到帧以后要调用的那一层。
-
-## 原型里可以试的
-
-- 在「待处理」或 Coder 的会话里批准 / 拒绝 `git push --force-with-lease`，Coder 会按你的选择继续
-- 回答 Atlas 的提问，它会接着拆子任务，新卡片出现在看板上
-- 给 Sentinel 提供 token，被阻塞的卡片会解除阻塞并被重新认领
-- 拖动卡片换列，在任务详情里看事件流和运行记录
-- ⌘K 搜索，⌘1/2/3 切换视图，连接面板里切换外观、暂停模拟
-
-## 下一步
-
-1. **套 Tauri 2 壳**：`titleBarStyle: Overlay` + `window-vibrancy`（侧边栏材质），前端已经为原生红绿灯留了位置；HTML 上有 `data-tauri-drag-region`。
-2. **真客户端**：`src/data/` 下加 `gateway-client.ts`（参考 Hermes 仓库里的 `@hermes/shared/gateway-client`）和 `kanban-client.ts`，替换 `simulator.ts`。
-3. **macOS 原生能力**：菜单栏 Extra 显示运行中任务数；待处理请求发系统通知，通知上直接批准；Dock 角标；全局快捷键呼出 ⌘K。
-4. **多 Gateway**：一个窗口里同时连多台机器（本机 + 远程服务器），侧边栏按 Gateway 分组。
+1. **对齐界面**（现在）：用原型把信息结构和关键流程定下来。
+2. **协议探路**：一个 Swift 命令行小程序，经 SSH 隧道连上 VPS，跑通握手、`profiles.list`、打开 Bot Chat、流式消息、回答审批，同时验证上面三个风险。
+3. **SwiftUI 骨架**：`NavigationSplitView` 主窗口、Bot Chat、等你确认、可回复的系统通知、`MenuBarExtra`、全局快捷键。
+4. **`shion` 插件和助手团队**：插件提供待办、今天汇总、日报、应用记录；把紫苑和各助手的 profile、SOUL、例行任务做成一套可一键部署的模板。
+5. **今天 / 待办 / 日程 / 日报** 接真实数据，加上 Mac 应用使用记录。
+6. 以后：接入这台 Mac 让助手在本机做事；全天录音。

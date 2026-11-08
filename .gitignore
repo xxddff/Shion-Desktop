@@ -2,4 +2,7 @@ node_modules
 dist
 *.local
 .DS_Store
-src-tauri/target
+# Xcode
+DerivedData/
+*.xcuserstate
+xcuserdata/

@@ -1,10 +1,9 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
-// Tauri expects a fixed dev port and does not want Vite to clear the terminal.
+// UI prototype only; the shipping app is SwiftUI (see ../README.md).
 export default defineConfig({
   plugins: [react()],
-  clearScreen: false,
-  server: { port: 1420, strictPort: true },
+  server: { port: 1420 },
   build: { target: 'safari15', outDir: 'dist' },
 });
