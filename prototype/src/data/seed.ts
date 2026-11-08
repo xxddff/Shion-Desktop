@@ -16,8 +16,8 @@ export const bots: Bot[] = [
     chief: true,
     model: 'claude-sonnet-5-5',
     status: 'online',
-    statusNote: '在等「课程」整理完录音',
-    tools: ['iCloud 日历', '提醒事项', '待办', '记忆', '委派给助手'],
+    statusNote: '跟进 4 张卡',
+    tools: ['iCloud 日历', '提醒事项', '待办', '记忆', '看板（建卡、指派）'],
     routines: [
       { id: 'r1', name: '早报', schedule: '每天 07:30', cron: '30 7 * * *', nextRunAt: at(1, 7, 30), lastRun: { at: at(0, 7, 30), ok: true } },
       { id: 'r2', name: '待办催促', schedule: '每天 12:00 · 18:00 · 21:00', cron: '0 12,18,21 * * *', nextRunAt: at(0, 12), lastRun: { at: at(-1, 21), ok: true } },
@@ -33,7 +33,7 @@ export const bots: Bot[] = [
     hue: 0,
     model: 'claude-sonnet-5-5',
     status: 'working',
-    statusNote: '正在整理「数据结构与算法 第7回」',
+    statusNote: 't_c7a1 · 整理第7回录音',
     tools: ['Notion', '日历（课表）', '待办', '云桌面浏览器'],
     routines: [
       { id: 'r4', name: '课前提醒', schedule: '每节课开始前 10 分钟', cron: '按课表生成', nextRunAt: at(0, 12, 50), lastRun: { at: at(0, 8, 50), ok: true } },
@@ -80,7 +80,7 @@ export const bots: Bot[] = [
     hue: 3,
     model: 'claude-sonnet-5-5',
     status: 'working',
-    statusNote: '核实「东京今冬电费上涨 30%」',
+    statusNote: 't_f1e0 · 核实电费传言',
     tools: ['网络搜索', '网页读取', '云桌面浏览器'],
     routines: [{ id: 'r9', name: '新闻日报', schedule: '每天 07:00', cron: '0 7 * * *', nextRunAt: at(1, 7), lastRun: { at: at(0, 7), ok: true } }],
     lastActiveAt: at(0, 10, 49),
@@ -103,79 +103,75 @@ export const bots: Bot[] = [
 const say = (role: ChatItem['role'], text: string, t: number, extra: Partial<ChatItem> = {}): ChatItem => ({ id: nextId(), role, text, at: t, ...extra });
 const did = (summary: string, tool: string, t: number): ChatItem => ({ id: nextId(), role: 'tool', at: t, tool: { summary, tool, status: 'done' } });
 
+const bot = (botId: string, items: ChatItem[]): Chat => ({ key: botId, botId, kind: 'bot', items });
+const worker = (botId: string, cardId: string, items: ChatItem[]): Chat => ({ key: `w:${cardId}`, botId, kind: 'worker', cardId, items });
+
 const chats: Chat[] = [
-  {
-    botId: 'shion',
-    items: [
-      say('system', '早报 · 07:30', at(0, 7, 30)),
-      say(
-        'assistant',
-        '早上好。今天两节课，6 件待办，其中「机器学习 课前小测」12:50 截止，最好在午饭前做完。中央線快速 延误约 8 分钟，「通勤」建议 08:00 出门、改走井の頭線。昨天的三份日报已经写好，在「日报」里。',
-        at(0, 7, 30),
-      ),
-      say('user', '帮我核实一下，网上说东京今年冬天电费要涨 30%，是真的吗', at(0, 8, 41)),
-      say('handoff', '交给「资讯」核实，有结论了告诉你。', at(0, 8, 41), { to: 'news' }),
-      say('user', '下课了，第7回的录音整理一下吧，作业别漏了', at(0, 10, 31)),
-      say('handoff', '好，交给「课程」去读 Notion 里的录音，整理出的事情会先放进待办，等你确认日期。', at(0, 10, 32), { to: 'study' }),
-    ],
-  },
-  {
-    botId: 'study',
-    items: [
-      say('system', '课后整理 · 数据结构与算法 第7回 · 由 紫苑 转交', at(0, 10, 32)),
-      did('读取了 Notion 页面「数据结构与算法 第7回」的录音转写（52 分钟）', 'notion.fetch_page', at(0, 10, 33)),
-      did('对照了课表和本周已有的待办', 'shion.todos.list', at(0, 10, 34)),
-    ],
-  },
-  {
-    botId: 'commute',
-    items: [
-      say('system', '出门提醒 · 07:50', at(0, 7, 50)),
-      did('查了 中央線快速、井の頭線、京王線 的运行情况', 'transit.status', at(0, 7, 50)),
-      say(
-        'assistant',
-        '中央線快速 因车辆检查延误约 8 分钟。改走 井の頭線 → 明大前 → 京王線，08:47 到新宿，比等中央線早 6 分钟。要改吗？',
-        at(0, 7, 51),
-      ),
-      say('user', '好，走京王', at(0, 7, 53)),
-      say('assistant', '已把出门提醒改到 08:00。回程我会在 17:55 再查一次。', at(0, 7, 53)),
-    ],
-  },
-  {
-    botId: 'mail',
-    items: [
-      say('system', '收件箱整理 · 08:00', at(0, 8)),
-      did('读了 9 封新邮件', 'mail.list_unread', at(0, 8)),
-      say('assistant', '新邮件 9 封，需要你处理的有 2 封：中村老师问中期报告的提交格式（昨天就该回了），实习 HR 的面谈时间确认（我已经帮你接受了周四 15:00）。', at(0, 8, 1)),
-      say('user', '老师那封你帮我回一下，说用 PDF 按时交', at(0, 8, 43)),
-      did('起草了给 中村老师 的回复', 'mail.draft', at(0, 8, 44)),
-      say('assistant', '草稿好了。发出去之前需要你确认一下。', at(0, 8, 44)),
-    ],
-  },
-  {
-    botId: 'news',
-    items: [
-      say('system', '新闻日报 · 07:00', at(0, 7)),
-      say('assistant', '今天的新闻日报好了，5 条，其中 1 条只有单一来源，已标出来。', at(0, 7, 2)),
-      say('handoff', '紫苑 转来一项核查：「东京今年冬天电费要涨 30%」。', at(0, 8, 41), { to: 'news' }),
-      did('搜索了 4 个来源，找到 电力公司 11 月的电费公告', 'web.search', at(0, 8, 43)),
-    ],
-  },
-  {
-    botId: 'journal',
-    items: [
-      say('system', '每日回顾 · 昨天 22:30', at(-1, 22, 30)),
-      did('读取了昨天的应用记录（8 小时 10 分）', 'shion.activity.day', at(-1, 22, 30)),
-      say('assistant', '昨天的三份日报写好了：学习 3 小时 40 分，完成 3 件；实习那边周报还没写；屏幕时间比前天少 40 分钟，主要少在视频网站。', at(-1, 22, 34)),
-    ],
-  },
+  bot('shion', [
+    say('system', '早报 · 07:30', at(0, 7, 30)),
+    say(
+      'assistant',
+      '早上好。今天两节课，6 件待办，其中「机器学习 课前小测」12:50 截止，最好在午饭前做完。中央線快速 延误约 8 分钟，「通勤」建议 08:00 出门、改走井の頭線。昨天的三份日报已经写好，在「日报」里。',
+      at(0, 7, 30),
+    ),
+    say('user', '帮我核实一下，网上说东京今年冬天电费要涨 30%，是真的吗', at(0, 8, 41)),
+    say('assistant', '我建了一张卡交给「资讯」去查，查完会回到这里告诉你。', at(0, 8, 41)),
+    say('card', '', at(0, 8, 41), { cardId: 't_f1e0' }),
+    say('user', '下课了，第7回的录音整理一下吧，作业别漏了', at(0, 10, 31)),
+    say('assistant', '建了两张卡给「课程」：先整理录音列出要做的事，再去课程平台下载课件。整理出的待办会先等你确认日期。', at(0, 10, 32)),
+    say('card', '', at(0, 10, 32), { cardId: 't_c7a1' }),
+    say('card', '', at(0, 10, 32), { cardId: 't_c7b2' }),
+  ]),
+  bot('study', [
+    say('user', '第6回的复习卡片做好了吗', at(-1, 21, 5)),
+    say('assistant', '做好了，12 张，放在 Notion「数据结构与算法」第6回页面下面。', at(-1, 21, 6)),
+  ]),
+  worker('study', 't_c7a1', [
+    say('system', '任务卡 t_c7a1 · 第 1 次运行 · 由 紫苑 创建', at(0, 10, 32)),
+    did('读取了 Notion 页面「数据结构与算法 第7回」的录音转写（52 分钟）', 'notion.fetch_page', at(0, 10, 33)),
+    did('对照了日程和本周已有的待办', 'shion.todos.list', at(0, 10, 34)),
+    did('心跳：读完录音，正在列待办', 'kanban_heartbeat', at(0, 10, 50)),
+  ]),
+  bot('commute', [
+    say('system', '出门提醒 · 07:50', at(0, 7, 50)),
+    did('查了 中央線快速、井の頭線、京王線 的运行情况', 'transit.status', at(0, 7, 50)),
+    say(
+      'assistant',
+      '中央線快速 因车辆检查延误约 8 分钟。改走 井の頭線 → 明大前 → 京王線，08:47 到新宿，比等中央線早 6 分钟。要改吗？',
+      at(0, 7, 51),
+    ),
+    say('user', '好，走京王', at(0, 7, 53)),
+    say('assistant', '已把出门提醒改到 08:00。回程我会在 17:55 再查一次。', at(0, 7, 53)),
+  ]),
+  bot('mail', [
+    say('system', '收件箱整理 · 08:00', at(0, 8)),
+    did('读了 9 封新邮件', 'mail.list_unread', at(0, 8)),
+    say('assistant', '新邮件 9 封，需要你处理的有 2 封：中村老师问中期报告的提交格式（昨天就该回了），实习 HR 的面谈时间确认（我已经帮你接受了周四 15:00）。', at(0, 8, 1)),
+    say('user', '老师那封你帮我回一下，说用 PDF 按时交', at(0, 8, 43)),
+    did('起草了给 中村老师 的回复', 'mail.draft', at(0, 8, 44)),
+    say('assistant', '草稿好了。发出去之前需要你确认一下。', at(0, 8, 44)),
+  ]),
+  bot('news', [
+    say('system', '新闻日报 · 07:00', at(0, 7)),
+    say('assistant', '今天的新闻日报好了，5 条，其中 1 条只有单一来源，已标出来。', at(0, 7, 2)),
+  ]),
+  worker('news', 't_f1e0', [
+    say('system', '任务卡 t_f1e0 · 第 1 次运行 · 由 紫苑 创建', at(0, 8, 42)),
+    did('搜索了 4 个来源，找到 电力公司 11 月的电费公告', 'web.search', at(0, 8, 43)),
+    did('心跳：找到公告，正在比对数字', 'kanban_heartbeat', at(0, 10, 40)),
+  ]),
+  bot('journal', [
+    say('system', '每日回顾 · 昨天 22:30', at(-1, 22, 30)),
+    did('读取了昨天的应用记录（8 小时 10 分）', 'shion.activity.day', at(-1, 22, 30)),
+    say('assistant', '昨天的三份日报写好了：学习 3 小时 40 分，完成 3 件；实习那边周报还没写；屏幕时间比前天少 40 分钟，主要少在视频网站。', at(-1, 22, 34)),
+  ]),
 ];
 
 export function seedState(): AppState {
   return {
     connection: { name: 'tokyo-vps', kind: 'cloudflare', host: 'https://hermes.example.dev', auth: 'Access service token', state: 'connected', latencyMs: 24, localMac: 'off', activityLog: true },
     bots,
-    chats: Object.fromEntries(chats.map((c) => [c.botId, c])),
+    chats: Object.fromEntries(chats.map((c) => [c.key, c])),
     todos: [
       {
         id: 'td1',
@@ -260,11 +256,71 @@ export function seedState(): AppState {
       { id: 'td11', title: '提交 线性代数 作业3', area: 'study', source: { kind: 'class', label: '线性代数' }, dueAt: at(-1, 23, 59), done: true, doneAt: at(-1, 21, 12), nudges: 0 },
       { id: 'td12', title: '回复实习 HR：面谈时间', area: 'work', source: { kind: 'mail', label: '来自 实习 HR 的邮件' }, done: true, doneAt: at(0, 8, 40), nudges: 0 },
     ],
-    delegations: [
-      { id: 'd1', botId: 'news', title: '核实「东京今冬电费上涨 30%」', state: 'running', note: '找到 电力公司 的公告，正在比对数字', updatedAt: at(0, 8, 43) },
-      { id: 'd2', botId: 'mail', title: '回复中村老师的邮件', state: 'waiting', note: '草稿等你确认', updatedAt: at(0, 8, 44) },
-      { id: 'd3', botId: 'study', title: '整理「数据结构与算法 第7回」', state: 'running', note: '读完录音，正在列待办', updatedAt: at(0, 10, 34) },
-      { id: 'd4', botId: 'study', title: '生成第6回复习卡片', state: 'done', note: '12 张卡片已存进 Notion', updatedAt: at(-1, 21) },
+    cards: [
+      {
+        id: 't_f1e0',
+        title: '核实「东京今冬电费上涨 30%」',
+        body: '用户在社交网络上看到的说法。找官方公告核对数字，结论要写清楚比较的口径。',
+        assignee: 'news',
+        createdBy: 'shion',
+        status: 'running',
+        heartbeat: { at: at(0, 10, 40), note: '找到公告，正在比对数字' },
+        comments: [{ author: 'shion', body: '用户只关心是不是真的、大概涨多少，结论两三句话就够。', at: at(0, 8, 41) }],
+        runs: [{ id: 'run-f1', startedAt: at(0, 8, 42), outcome: 'running' }],
+        createdAt: at(0, 8, 41),
+        updatedAt: at(0, 10, 40),
+      },
+      {
+        id: 't_c7a1',
+        title: '整理「数据结构与算法 第7回」录音，列出要做的事',
+        body: '读 Notion 里第7回的录音转写，列出作业、截止日期和要读的内容。按用户的日程排好执行日期，写成待办提案，等用户确认。',
+        assignee: 'study',
+        createdBy: 'shion',
+        status: 'running',
+        heartbeat: { at: at(0, 10, 50), note: '读完录音，正在列待办' },
+        comments: [],
+        runs: [{ id: 'run-c7a', startedAt: at(0, 10, 32), outcome: 'running' }],
+        createdAt: at(0, 10, 32),
+        updatedAt: at(0, 10, 50),
+      },
+      {
+        id: 't_c7b2',
+        title: '下载第7回课件，存进 Notion',
+        body: '在课程平台上找到第7回的课件 PDF，存到 Notion「数据结构与算法」第7回页面。课程平台要用云桌面上的浏览器。',
+        assignee: 'study',
+        createdBy: 'shion',
+        status: 'ready',
+        comments: [],
+        runs: [],
+        createdAt: at(0, 10, 32),
+        updatedAt: at(0, 10, 32),
+      },
+      {
+        id: 't_d6c3',
+        title: '生成第6回复习卡片',
+        body: '按第6回的内容做 10 到 15 张问答卡片。',
+        assignee: 'study',
+        createdBy: 'routine:每周复习计划',
+        status: 'done',
+        summary: '12 张卡片已存进 Notion',
+        comments: [],
+        runs: [{ id: 'run-d6', startedAt: at(-1, 20, 40), endedAt: at(-1, 21), outcome: 'completed' }],
+        createdAt: at(-1, 20, 39),
+        updatedAt: at(-1, 21),
+      },
+      {
+        id: 't_c7c3',
+        title: '用第7回课件做复习卡片',
+        body: '课件下载好以后，按第7回的内容做 10 到 15 张问答卡片，存进 Notion。',
+        assignee: 'study',
+        createdBy: 'shion',
+        status: 'todo',
+        parents: ['t_c7b2'],
+        comments: [{ author: 'shion', body: '等课件那张卡完成后自动开始。', at: at(0, 10, 32) }],
+        runs: [],
+        createdAt: at(0, 10, 32),
+        updatedAt: at(0, 10, 32),
+      },
     ],
     events: [
       { id: 'e1', title: '上学', kind: 'commute', area: 'life', start: at(0, 8), end: at(0, 8, 47), place: '吉祥寺 → 新宿', note: '井の頭線 · 京王線' },

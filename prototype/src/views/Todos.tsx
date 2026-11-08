@@ -1,4 +1,4 @@
-import { BellRing, CircleCheck, LoaderCircle, Plus, X } from 'lucide-react';
+import { BellRing, Plus, X } from 'lucide-react';
 import { useState } from 'react';
 import { dayDiff } from '../data/clock';
 import type { AppState, Area, Todo } from '../data/model';
@@ -6,7 +6,7 @@ import { addTodo, updateTodo } from '../data/store';
 import { TodoRow } from '../components/Items';
 import { Toolbar } from '../components/Shell';
 import { AREA, AreaChip, Avatar } from '../ui/bits';
-import { ago, until, useNow, when } from '../ui/format';
+import { until, useNow, when } from '../ui/format';
 
 type Filter = 'all' | Area;
 
@@ -39,7 +39,7 @@ const toLocal = (t?: number) => {
 };
 const fromLocal = (v: string) => (v ? new Date(v).getTime() : undefined);
 
-export function Todos({ state, tab }: { state: AppState; tab: 'mine' | 'delegated' }) {
+export function Todos({ state }: { state: AppState }) {
   const now = useNow(5000);
   const [filter, setFilter] = useState<Filter>('all');
   const [sel, setSel] = useState<string | null>(null);
@@ -51,75 +51,61 @@ export function Todos({ state, tab }: { state: AppState; tab: 'mine' | 'delegate
   return (
     <>
       <Toolbar title="待办" sub={`${state.todos.filter((t) => !t.done).length} 件未完成 · ${state.todos.filter((t) => t.proposed).length} 件等你确认日期`}>
-        <div className="segmented" role="group" aria-label="待办范围">
-          <button aria-pressed={tab === 'mine'} onClick={() => (location.hash = 'todos')}>
-            我的
-          </button>
-          <button aria-pressed={tab === 'delegated'} onClick={() => (location.hash = 'todos-delegated')}>
-            交给助手的
-          </button>
+        <div className="segmented" role="group" aria-label="按领域筛选">
+          {(['all', 'study', 'work', 'life'] as Filter[]).map((f) => (
+            <button key={f} aria-pressed={filter === f} onClick={() => setFilter(f)}>
+              {f === 'all' ? '全部' : AREA[f].label}
+            </button>
+          ))}
         </div>
-        {tab === 'mine' && (
-          <div className="segmented hide-narrow" role="group" aria-label="按领域筛选">
-            {(['all', 'study', 'work', 'life'] as Filter[]).map((f) => (
-              <button key={f} aria-pressed={filter === f} onClick={() => setFilter(f)}>
-                {f === 'all' ? '全部' : AREA[f].label}
-              </button>
-            ))}
-          </div>
-        )}
       </Toolbar>
       <div className="view" style={{ overflow: 'hidden' }}>
-        {tab === 'delegated' ? (
-          <Delegated state={state} now={now} />
-        ) : (
-          <div className="split">
-            <div className="split-main">
-              <form
-                className="quick-add"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  if (!draft.trim()) return;
-                  setSel(addTodo({ title: draft.trim(), area: filter === 'all' ? 'life' : filter }));
-                  setDraft('');
-                }}
-              >
-                <Plus size={15} />
-                <input id="todo-add" value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="添加待办，回车保存；日期可以之后再定，或者让紫苑帮你排" />
-              </form>
-              {GROUPS.map((g) => {
-                const items = list
-                  .filter((t) => group(t, now) === g.key)
-                  .sort((a, b) => (a.doAt ?? a.dueAt ?? Infinity) - (b.doAt ?? b.dueAt ?? Infinity));
-                if (!items.length) return null;
-                const collapsed = g.key === 'done' && !showDone;
-                return (
-                  <section key={g.key} className={`todo-group g-${g.key}`}>
-                    <h3>
-                      {g.key === 'done' ? (
-                        <button className="linkish" onClick={() => setShowDone((x) => !x)}>
-                          {g.label} {items.length} · {showDone ? '收起' : '展开'}
-                        </button>
-                      ) : (
-                        <>
-                          {g.label} <span className="faint num">{items.length}</span>
-                        </>
-                      )}
-                    </h3>
-                    {!collapsed && (
-                      <div className="todo-list">
-                        {items.map((t) => (
-                          <TodoRow key={t.id} t={t} now={now} selected={t.id === sel} onSelect={() => setSel(t.id)} />
-                        ))}
-                      </div>
+        <div className="split">
+          <div className="split-main">
+            <form
+              className="quick-add"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!draft.trim()) return;
+                setSel(addTodo({ title: draft.trim(), area: filter === 'all' ? 'life' : filter }));
+                setDraft('');
+              }}
+            >
+              <Plus size={15} />
+              <input id="todo-add" value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="添加待办，回车保存；日期可以之后再定，或者让紫苑帮你排" />
+            </form>
+            {GROUPS.map((g) => {
+              const items = list
+                .filter((t) => group(t, now) === g.key)
+                .sort((a, b) => (a.doAt ?? a.dueAt ?? Infinity) - (b.doAt ?? b.dueAt ?? Infinity));
+              if (!items.length) return null;
+              const collapsed = g.key === 'done' && !showDone;
+              return (
+                <section key={g.key} className={`todo-group g-${g.key}`}>
+                  <h3>
+                    {g.key === 'done' ? (
+                      <button className="linkish" onClick={() => setShowDone((x) => !x)}>
+                        {g.label} {items.length} · {showDone ? '收起' : '展开'}
+                      </button>
+                    ) : (
+                      <>
+                        {g.label} <span className="faint num">{items.length}</span>
+                      </>
                     )}
-                  </section>
-                );
-              })}
-            </div>
-            {selected && <TodoInspector t={selected} state={state} now={now} onClose={() => setSel(null)} />}
+                  </h3>
+                  {!collapsed && (
+                    <div className="todo-list">
+                      {items.map((t) => (
+                        <TodoRow key={t.id} t={t} now={now} selected={t.id === sel} onSelect={() => setSel(t.id)} />
+                      ))}
+                    </div>
+                  )}
+                </section>
+              );
+            })}
           </div>
-        )}
+          {selected && <TodoInspector t={selected} state={state} now={now} onClose={() => setSel(null)} />}
+        </div>
       </div>
     </>
   );
@@ -184,51 +170,5 @@ function TodoInspector({ t, state, now, onClose }: { t: Todo; state: AppState; n
         </section>
       </div>
     </aside>
-  );
-}
-
-function Delegated({ state, now }: { state: AppState; now: number }) {
-  const cols = [
-    { key: 'running', label: '在做' },
-    { key: 'waiting', label: '等你' },
-    { key: 'done', label: '做完了' },
-  ] as const;
-  return (
-    <div className="pad">
-      <p className="muted" style={{ marginTop: 0, maxWidth: 640 }}>
-        你交代给紫苑、再由紫苑分给各个助手的事。背后是 Hermes 的看板，助手之间靠评论交接。
-      </p>
-      <div className="deleg-cols">
-        {cols.map((c) => {
-          const items = state.delegations.filter((d) => d.state === c.key);
-          return (
-            <section key={c.key} className="deleg-col">
-              <h3>
-                {c.label} <span className="faint num">{items.length}</span>
-              </h3>
-              {items.map((d) => {
-                const b = state.bots.find((x) => x.id === d.botId);
-                return (
-                  <a key={d.id} className="panel deleg-card" href={`#chat-${d.botId}`}>
-                    <div className="dc-top">
-                      <Avatar bot={b} size={22} />
-                      <span>{b?.name}</span>
-                      {c.key === 'running' && <LoaderCircle size={13} className="spin" color="var(--info)" />}
-                      {c.key === 'done' && <CircleCheck size={13} color="var(--good)" />}
-                      <span className="faint" style={{ marginLeft: 'auto' }}>
-                        {ago(d.updatedAt, now)}
-                      </span>
-                    </div>
-                    <div className="dc-title">{d.title}</div>
-                    <div className="muted">{d.note}</div>
-                  </a>
-                );
-              })}
-              {items.length === 0 && <div className="faint empty-col">没有</div>}
-            </section>
-          );
-        })}
-      </div>
-    </div>
   );
 }

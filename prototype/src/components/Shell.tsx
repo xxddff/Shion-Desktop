@@ -1,4 +1,4 @@
-import { CalendarDays, CircleCheck, Hand, Menu, Monitor, Newspaper, Search, Sun } from 'lucide-react';
+import { CalendarDays, CircleCheck, Hand, Menu, Monitor, Newspaper, Search, SquareKanban, Sun } from 'lucide-react';
 import { createContext, useContext, type ReactNode } from 'react';
 import { demoNow } from '../data/clock';
 import type { AppState } from '../data/model';
@@ -64,6 +64,15 @@ export function Sidebar({ state, route, onQuickAsk, onConnection }: SidebarProps
           <CircleCheck size={15} />
           <span className="label">待办</span>
           {todayTodos > 0 && <span className="count">{todayTodos}</span>}
+        </a>
+        <a className="side-item" href="#board" aria-current={current('board') ?? (route.view === 'work' ? 'page' : undefined)}>
+          <SquareKanban size={15} />
+          <span className="label">看板</span>
+          {state.cards.some((c) => c.status === 'blocked') ? (
+            <span className="dot warning" title="有卡在等你" />
+          ) : (
+            <span className="count">{state.cards.filter((c) => c.status === 'running').length} 进行中</span>
+          )}
         </a>
         <a className="side-item" href="#calendar" aria-current={current('calendar')}>
           <CalendarDays size={15} />

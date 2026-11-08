@@ -1055,34 +1055,6 @@ a.chip {
   font-weight: 560;
   line-height: 1.4;
 }
-.deleg-list {
-  list-style: none;
-  margin: 0;
-  padding: 0 6px 8px;
-}
-.deleg-list a {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  padding: 7px 8px;
-  border-radius: 7px;
-  color: inherit;
-  text-decoration: none;
-}
-.deleg-list a:hover {
-  background: var(--bg-hover);
-}
-.dl-main {
-  flex: 1;
-  min-width: 0;
-  display: grid;
-}
-.dl-main span:last-child {
-  font-size: 12px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
 .ask-bar {
   position: absolute;
   left: 50%;
@@ -1384,39 +1356,6 @@ a.chip {
   gap: 4px;
   font-size: 12.5px;
   color: var(--text-2);
-}
-.deleg-cols {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 14px;
-  align-items: start;
-}
-.deleg-col {
-  display: grid;
-  gap: 8px;
-}
-.deleg-col h3 {
-  font-size: 12.5px;
-  color: var(--text-2);
-}
-.deleg-card {
-  padding: 10px 12px;
-  display: grid;
-  gap: 4px;
-  text-decoration: none;
-  color: inherit;
-}
-.deleg-card:hover {
-  border-color: var(--border-strong);
-}
-.dc-top {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-}
-.dc-title {
-  font-weight: 600;
 }
 .empty-col {
   padding: 8px 2px;
@@ -1875,11 +1814,6 @@ a.chip {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.mini-del {
-  font-size: 12.5px;
-  display: grid;
-  gap: 2px;
-}
 .routine {
   display: grid;
   gap: 1px;
@@ -2002,7 +1936,7 @@ a.chip {
 .toasts {
   position: absolute;
   right: 14px;
-  top: 62px;
+  bottom: 76px;
   z-index: 35;
   display: grid;
   gap: 8px;
@@ -2025,7 +1959,7 @@ a.chip {
 }
 @keyframes toast-in {
   from {
-    transform: translateX(16px);
+    transform: translateY(12px);
     opacity: 0;
   }
 }
@@ -2036,6 +1970,251 @@ a.chip {
   font-size: 12px;
   color: var(--text-2);
   overflow-wrap: anywhere;
+}
+
+/* ------------------------------------------------------------------ kanban */
+.kb {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(170px, 1fr));
+  gap: 14px;
+  align-items: start;
+  min-width: 0;
+}
+.kb-col {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.kb-col h3 {
+  font-size: 12.5px;
+  color: var(--text-2);
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 2px 2px 4px;
+}
+.kb-hint {
+  margin-left: auto;
+  font-size: 10.5px;
+}
+.kb-waiting h3 {
+  color: var(--warn);
+}
+.kb-card {
+  padding: 10px 12px;
+  display: grid;
+  gap: 6px;
+  text-decoration: none;
+  color: inherit;
+}
+.kb-card:hover {
+  border-color: var(--border-strong);
+}
+.kb-card.on {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.kc-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.kc-title {
+  font-weight: 600;
+  line-height: 1.4;
+}
+.kc-line {
+  font-size: 12px;
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  color: var(--text-2);
+}
+.kc-line.warn {
+  color: var(--warn);
+}
+.kc-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.kc-com {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.insp-title {
+  font-size: 17px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+.body-text {
+  margin: 0;
+  line-height: 1.6;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+.block-box {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  padding: 9px 11px;
+  border-radius: 8px;
+  background: var(--warn-soft);
+  line-height: 1.5;
+}
+.block-box strong {
+  color: var(--warn);
+}
+.summary-box {
+  display: grid;
+  gap: 2px;
+  padding: 9px 11px;
+  border-radius: 8px;
+  background: var(--good-soft);
+}
+.comment {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+}
+.comment .meta {
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+.comment .meta b {
+  color: var(--text);
+  font-weight: 600;
+  margin-right: 6px;
+}
+.comment p {
+  margin: 2px 0 0;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.run-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+.run-note {
+  flex-basis: 100%;
+  padding-left: 22px;
+}
+.card-chip {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 10px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: inherit;
+  text-decoration: none;
+  min-width: 0;
+}
+.card-chip:hover {
+  border-color: var(--border-strong);
+}
+.cc-icon {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.cc-main {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  line-height: 1.35;
+}
+.cc-title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cc-sub {
+  font-size: 11.5px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.card-list {
+  display: grid;
+  gap: 6px;
+  padding: 0 12px 12px;
+}
+.msg-card {
+  max-width: 560px;
+  width: 100%;
+}
+.worker-head {
+  display: grid;
+  gap: 6px;
+  max-width: 640px;
+  font-size: 12px;
+  padding-bottom: 4px;
+}
+.session-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  flex-shrink: 0;
+  background: var(--bg-content);
+}
+.session-tabs button {
+  border: 0;
+  background: none;
+  padding: 8px 8px 9px;
+  font-size: 12.5px;
+  color: var(--text-2);
+  border-bottom: 2px solid transparent;
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  white-space: nowrap;
+  margin-bottom: -1px;
+}
+.session-tabs button[aria-selected='true'] {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+}
+.mini-card {
+  display: grid;
+  gap: 3px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: inherit;
+  text-decoration: none;
+  font-size: 12.5px;
+}
+.mini-card:hover {
+  border-color: var(--border-strong);
+}
+.mc-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+@media (max-width: 1100px) {
+  .kb {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 760px) {
+  .kb {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 /* ----------------------------------------------------------- cloud desktop */
@@ -2447,9 +2626,6 @@ a.chip {
     font-size: 14px;
   }
   .report-tiles {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .deleg-cols {
     grid-template-columns: minmax(0, 1fr);
   }
   .todo {

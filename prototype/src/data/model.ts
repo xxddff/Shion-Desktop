@@ -46,19 +46,26 @@ export interface ToolNote {
 
 export interface ChatItem {
   id: string;
-  role: 'user' | 'assistant' | 'tool' | 'system' | 'handoff';
+  /** `card`: the turn created or reported on a kanban card (shown as a live chip). */
+  role: 'user' | 'assistant' | 'tool' | 'system' | 'card';
   at: number;
   text?: string;
   streaming?: boolean;
   tool?: ToolNote;
-  /** For `handoff`: which bot the secretary passed the work to. */
-  to?: string;
+  cardId?: string;
   /** Inline card referencing todos created by this turn. */
   todoIds?: string[];
 }
 
+/**
+ * A conversation. `bot` is the assistant's one Bot Chat (talk to it directly);
+ * `worker` is the session the kanban dispatcher spawns to run one card.
+ */
 export interface Chat {
+  key: string;
   botId: string;
+  kind: 'bot' | 'worker';
+  cardId?: string;
   items: ChatItem[];
 }
 
@@ -85,13 +92,43 @@ export interface Todo {
   proposed?: boolean;
 }
 
-/** Work handed to an assistant: backed by the Hermes kanban board. */
-export interface Delegation {
+/**
+ * A Hermes kanban card: work handed to an assistant. The dispatcher claims it,
+ * spawns a worker session for the assignee, and the card records heartbeats,
+ * blocks, comments (the inter-agent channel) and every run.
+ */
+export type CardStatus = 'todo' | 'ready' | 'running' | 'blocked' | 'review' | 'done';
+
+export interface CardComment {
+  /** A bot id, or `you`. */
+  author: string;
+  body: string;
+  at: number;
+}
+
+export interface CardRun {
   id: string;
-  botId: string;
+  startedAt: number;
+  endedAt?: number;
+  outcome: 'running' | 'completed' | 'blocked';
+  note?: string;
+}
+
+export interface Card {
+  id: string;
   title: string;
-  state: 'running' | 'waiting' | 'done';
-  note: string;
+  body: string;
+  assignee: string;
+  /** A bot id, `you`, or the routine that created it. */
+  createdBy: string;
+  status: CardStatus;
+  parents?: string[];
+  block?: { kind: 'needs_input' | 'capability' | 'transient'; reason: string };
+  heartbeat?: { at: number; note: string };
+  summary?: string;
+  comments: CardComment[];
+  runs: CardRun[];
+  createdAt: number;
   updatedAt: number;
 }
 
@@ -182,6 +219,8 @@ export interface Ask {
   preview?: { label: string; body: string };
   options: { label: string; value: string; primary?: boolean; danger?: boolean }[];
   todoId?: string;
+  /** The kanban card that is blocked on this ask, if any. */
+  cardId?: string;
 }
 
 export interface Toast {
@@ -210,7 +249,7 @@ export interface AppState {
   bots: Bot[];
   chats: Record<string, Chat>;
   todos: Todo[];
-  delegations: Delegation[];
+  cards: Card[];
   events: CalEvent[];
   commute: Commute;
   reports: Report[];

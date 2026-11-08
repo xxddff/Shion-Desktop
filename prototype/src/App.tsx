@@ -4,6 +4,7 @@ import { NavContext, Sidebar } from './components/Shell';
 import { startSimulator } from './data/simulator';
 import { useAppState } from './data/store';
 import { parseHash } from './route';
+import { BoardView } from './views/Board';
 import { CalendarView } from './views/Calendar';
 import { ChatView } from './views/Chat';
 import { DesktopView } from './views/Desktop';
@@ -84,7 +85,11 @@ export function App() {
             {nav && <div className="scrim" style={{ zIndex: 44 }} onClick={() => setNav(false)} />}
             <main className="main">
               {route.view === 'today' && <Today state={state} />}
-              {route.view === 'todos' && <Todos state={state} tab={route.tab} />}
+              {route.view === 'todos' && <Todos state={state} />}
+              {route.view === 'board' && <BoardView state={state} cardId={route.cardId} />}
+              {route.view === 'work' && (
+                <ChatView state={state} botId={state.cards.find((c) => c.id === route.cardId)?.assignee ?? ''} sessionKey={`w:${route.cardId}`} />
+              )}
               {route.view === 'calendar' && <CalendarView state={state} />}
               {route.view === 'reports' && <Reports state={state} kind={route.kind} />}
               {route.view === 'confirm' && <Confirm state={state} />}

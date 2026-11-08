@@ -16,6 +16,7 @@ macOS 上的私人秘书。你主要和总秘书「紫苑」打交道，她带�
 | 技术栈 | 原型不限；正式版不套浏览器，候选 SwiftUI 或 [MyGo](https://github.com/egoist/mygo)（Go，自绘原生 UI），倾向 SwiftUI，见下文 |
 | 连接方式 | 沿用现在的 Cloudflare Tunnel + Cloudflare Access，用 service token 过认证（官方桌面端也用同样的方式：给连接加额外请求头） |
 | 云桌面 | VPS 上的 Hermes 开了 Bot Screen（每个助手一块桌面），Shion 里要能看画面、接管、交还 |
+| 委派方式 | 看板为主：紫苑建卡交给助手，助手在单独的工作会话里完成；一问一答的小事才用助手之间的直接消息 |
 | 邮件 | 一个能收发大多数邮箱的工具：Hermes 自带的 himalaya 技能（IMAP/SMTP）加 email-inbox-triage 技能 |
 | 日历、提醒事项 | Apple 的，经 iCloud 云端接入 |
 | Notion | 主要放课程相关的内容（录音转写、笔记） |
@@ -44,6 +45,28 @@ macOS 上的私人秘书。你主要和总秘书「紫苑」打交道，她带�
 3. 提供 VPS 拿不到的本机数据（目前只有应用使用记录）。
 
 **为什么要一个 `shion` Hermes 插件。** Canonical 协议是围绕会话（对话）设计的，没有"列出待办""读日报"这类方法。Hermes 官方的扩展方式是插件 RPC：插件用 `ctx.register_rpc` 注册 `plugin.shion.<name>`，用 `ctx.emit_to_session` 推送事件，客户端从 `runtime.describe` 的 `plugin-rpc-v1` 能力判断可用。待办、今天的汇总、日报、应用记录上传都走这里。助手们操作同一份数据（同一个插件里的工具），这样你在 Shion 里看到的和助手看到的是同一份。
+
+## 委派：看板为主，消息为辅
+
+紫苑把事交给助手，默认走 **Hermes 看板**，不是聊天消息：
+
+- 紫苑开着 `kanban` 工具集（`hermes -p shion tools enable kanban`），在自己的 Bot Chat 里用 `kanban_create(assignee=…, body=…, parents=…)` 建卡。最好把她的工具限制在看板、记忆、日程这些调度工作上，她只拆事、不亲自干活。
+- 派发器为每张卡在负责助手名下起一个**工作会话**（worker session），和这个助手的 Bot Chat 分开。助手用 `kanban_heartbeat`、`kanban_complete`、`kanban_block` 汇报进度和结果。
+- **评论**是交接信息的渠道：卡片每次重新运行，助手都会读完整的评论串。你补充信息、解除阻塞，都是在卡片上留评论。
+- 卡片完成或阻塞时，紫苑会被叫醒（`kanban.auto_subscribe_on_create`，默认开启），她在 Bot Chat 里告诉你结果、问你要不要调整。
+- 卡片之间可以有依赖（`parents`）：前一张完成后，后一张自动从「排队」变成「就绪」。
+
+**适合用看板的事**：要花时间、有交付物、可能卡住要人帮忙、需要留记录的事，比如课后整理、下载课件、核实消息、做复习卡片。
+
+**`message_agent`（Bot Mode 里助手之间直接发消息）** 只用于一问一答的小事，比如"通勤，明天几点出门？"。消息落在对方的 Bot Chat 里，没有状态可追踪，来回次数也有上限（`gateway.bot_loop_guard.max_hops`，默认 4）。
+
+Shion 里的对应：
+- 紫苑的对话里，每张卡显示成一个会实时更新状态的卡片；
+- 「看板」页分四列：排队、进行中、等你、完成。点开卡片可以看评论、运行记录和工作记录，也能解除阻塞；
+- 每个助手页顶部有标签：Bot Chat，加上它今天跑过的每张卡的工作记录；
+- 卡在要人做的步骤时（`kanban_block`，类型 `needs_input`，比如两步验证），会出现在「等你确认」。你在云桌面上处理完、交还后，Shion 自动留评论并解除阻塞，派发器重新运行这张卡。
+
+看板接口：`/api/plugins/kanban/board`、`/tasks/:id`、`/tasks/:id/comments`、`PATCH /tasks/:id`，实时更新走 `/api/plugins/kanban/events?since=<id>`。都要带 Access 的头和 Hermes 的 token。
 
 ## 场景由谁负责
 
@@ -82,9 +105,9 @@ macOS 上的私人秘书。你主要和总秘书「紫苑」打交道，她带�
 VPS 上的 `hermes serve` 通过 Cloudflare Tunnel 暴露成一个 HTTPS 域名，前面挡着 Cloudflare Access。Shion 用 Access 的 service token 通过认证：
 
 - **每个请求都带两个头**：`CF-Access-Client-Id`、`CF-Access-Client-Secret`。普通 HTTP 请求要带，WebSocket 的握手请求也要带，包括对话用的 `/api/ws` 和云桌面用的 `/api/display/ws`。官方桌面端的做法一样：每个连接可以加"额外请求头"，界面上写明就是给 Cloudflare Access 用的。
-- **Hermes 自己的登录关卡**：如果 `hermes serve` 只绑在 `127.0.0.1`、由本机的 `cloudflared` 转发，Hermes 不会开启自己的登录关卡，Access 就是唯一一道门。建议再加一道 Hermes 会话 token（`HERMES_DASHBOARD_SESSION_TOKEN`，REST 带 `X-Hermes-Session-Token`，`/api/ws` 带 `?token=`），Shion 可以同时带两组凭证。
+- **Hermes 自己的登录**：现在两道门都开着，外面是 Cloudflare Access，里面是 Hermes 的会话 token（`HERMES_DASHBOARD_SESSION_TOKEN`）和登录。Shion 两组凭证一起带：REST 加 `X-Hermes-Session-Token`，`/api/ws` 和看板的 `/events` 加 `?token=`。
 - **凭证存放**：service token 和会话 token 存进 macOS 钥匙串。官方桌面端存在 Hermes 目录下一个权限 0600 的明文文件里。
-- **为什么要原生 WebSocket**：网页里的 WebSocket 不能自定义请求头，所以云桌面没法直接用网页版 noVNC 连过 Access。Swift 的 `URLSessionWebSocketTask` 可以带任意请求头，没有这个问题。
+- **为什么用原生 WebSocket**：浏览器里的 Webapp（包括云桌面）能正常连，是因为浏览器先走了 Access 的登录，之后靠 Access 的 cookie 过关。网页里的 WebSocket 不能自定义请求头，用不了 service token。原生 App 用 `URLSessionWebSocketTask`，每个连接都能直接带上 service token 的两个头，不需要浏览器登录那一步。
 
 ## 云桌面（Bot Screen）
 

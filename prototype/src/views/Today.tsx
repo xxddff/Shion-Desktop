@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { dayDiff } from '../data/clock';
 import type { AppState, CalEvent, Todo } from '../data/model';
 import { sendMessage, sortAsks } from '../data/store';
+import { CardChip } from '../components/Cards';
 import { AskCard, TodoRow } from '../components/Items';
 import { Toolbar } from '../components/Shell';
 import { go } from '../route';
@@ -48,7 +49,7 @@ export function Today({ state }: { state: AppState }) {
     .filter((t) => !t.done && ((t.doAt && dayDiff(t.doAt, now) <= 0) || (t.dueAt && dayDiff(t.dueAt, now) <= 0) || t.proposed))
     .sort((a, b) => (a.dueAt ?? a.doAt ?? Infinity) - (b.dueAt ?? b.doAt ?? Infinity));
   const doneToday = state.todos.filter((t) => t.done && t.doneAt && dayDiff(t.doneAt, now) === 0).length;
-  const busy = state.delegations.filter((d) => d.state !== 'done');
+  const busy = state.cards.filter((c) => c.status === 'running' || c.status === 'blocked' || c.status === 'review');
   const reports = state.reports;
 
   const submit = (e: React.FormEvent) => {
@@ -179,29 +180,15 @@ export function Today({ state }: { state: AppState }) {
                 <section className="panel">
                   <div className="panel-head">
                     <h2>助手在做</h2>
-                    <a className="btn ghost mini" href="#todos-delegated">
-                      全部
+                    <a className="btn ghost mini" href="#board">
+                      看板
                     </a>
                   </div>
-                  <ul className="deleg-list">
-                    {busy.map((d) => {
-                      const b = state.bots.find((x) => x.id === d.botId);
-                      return (
-                        <li key={d.id}>
-                          <a href={`#chat-${d.botId}`}>
-                            <Avatar bot={b} size={22} />
-                            <span className="dl-main">
-                              <span>{d.title}</span>
-                              <span className="faint">
-                                {b?.name} · {d.note}
-                              </span>
-                            </span>
-                            {d.state === 'running' ? <LoaderCircle size={14} className="spin" color="var(--info)" /> : <span className="pill tone-warning">等你</span>}
-                          </a>
-                        </li>
-                      );
-                    })}
-                  </ul>
+                  <div className="card-list">
+                    {busy.map((c) => (
+                      <CardChip key={c.id} card={c} state={state} />
+                    ))}
+                  </div>
                 </section>
               )}
             </div>

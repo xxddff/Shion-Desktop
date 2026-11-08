@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react';
 import { demoNow } from './clock';
-import type { AppState, Ask, ChatItem, Delegation, Screen, Todo, Toast } from './model';
+import type { AppState, Ask, Card, ChatItem, Screen, Todo, Toast } from './model';
 import { nextId, seedState } from './seed';
 
 /**
@@ -31,9 +31,10 @@ let toastSeq = 0;
 
 // ------------------------------------------------------------- reducers
 
-export const withItem = (s: AppState, botId: string, item: Omit<ChatItem, 'id'>): AppState => {
-  const chat = s.chats[botId] ?? { botId, items: [] };
-  return { ...s, chats: { ...s.chats, [botId]: { ...chat, items: [...chat.items, { ...item, id: nextId() }] } } };
+/** Append to a chat by key: a bot id for its Bot Chat, `w:<card id>` for a worker session. */
+export const withItem = (s: AppState, key: string, item: Omit<ChatItem, 'id'>): AppState => {
+  const chat = s.chats[key] ?? { key, botId: key, kind: 'bot' as const, items: [] };
+  return { ...s, chats: { ...s.chats, [key]: { ...chat, items: [...chat.items, { ...item, id: nextId() }] } } };
 };
 
 export const withTodo = (s: AppState, id: string, fn: (t: Todo) => Todo): AppState => ({
@@ -41,10 +42,59 @@ export const withTodo = (s: AppState, id: string, fn: (t: Todo) => Todo): AppSta
   todos: s.todos.map((t) => (t.id === id ? fn(t) : t)),
 });
 
-export const withDelegation = (s: AppState, id: string, patch: Partial<Delegation>): AppState => ({
+export const withCard = (s: AppState, id: string, fn: (c: Card) => Card): AppState => ({
   ...s,
-  delegations: s.delegations.map((d) => (d.id === id ? { ...d, ...patch, updatedAt: demoNow() } : d)),
+  cards: s.cards.map((c) => (c.id === id ? { ...fn(c), updatedAt: demoNow() } : c)),
 });
+
+/** Dispatcher claims a ready card: a new run and (on the first run) a worker session for the assignee. */
+export function withClaim(s: AppState, id: string): AppState {
+  const card = s.cards.find((c) => c.id === id);
+  if (!card) return s;
+  const n = card.runs.length + 1;
+  let next = withCard(s, id, (c) => ({
+    ...c,
+    status: 'running',
+    block: undefined,
+    heartbeat: { at: demoNow(), note: '刚认领' },
+    runs: [...c.runs, { id: `run-${id}-${n}`, startedAt: demoNow(), outcome: 'running' }],
+  }));
+  const key = `w:${id}`;
+  if (!next.chats[key]) next = { ...next, chats: { ...next.chats, [key]: { key, botId: card.assignee, kind: 'worker', cardId: id, items: [] } } };
+  const last = card.comments[card.comments.length - 1];
+  return withItem(next, key, {
+    role: 'system',
+    text: `任务卡 ${id} · 第 ${n} 次运行${n > 1 && last ? ` · 读到评论：「${last.body}」` : ''}`,
+    at: demoNow(),
+  });
+}
+
+export function withComplete(s: AppState, id: string, summary: string): AppState {
+  let next = withCard(s, id, (c) => ({
+    ...c,
+    status: 'done',
+    summary,
+    heartbeat: undefined,
+    runs: c.runs.map((r) => (r.outcome === 'running' ? { ...r, outcome: 'completed', endedAt: demoNow() } : r)),
+  }));
+  // children whose parents are all done move from todo to ready
+  for (const child of next.cards.filter((c) => c.status === 'todo' && c.parents?.includes(id))) {
+    if (child.parents!.every((p) => next.cards.find((x) => x.id === p)?.status === 'done')) {
+      next = withCard(next, child.id, (c) => ({ ...c, status: 'ready' }));
+    }
+  }
+  return next;
+}
+
+export function withBlock(s: AppState, id: string, block: NonNullable<Card['block']>): AppState {
+  return withCard(s, id, (c) => ({
+    ...c,
+    status: 'blocked',
+    block,
+    heartbeat: undefined,
+    runs: c.runs.map((r) => (r.outcome === 'running' ? { ...r, outcome: 'blocked', endedAt: demoNow(), note: block.reason } : r)),
+  }));
+}
 
 export const withBot = (s: AppState, id: string, patch: Partial<AppState['bots'][number]>): AppState => ({
   ...s,
@@ -102,8 +152,19 @@ export function takeOver(botId: string) {
 /** `display.lease.release`: the bot re-captures the screen and continues. */
 export function handBack(botId: string) {
   setState((s) => {
-    const next = withScreen(s, botId, { control: 'bot', handedBackAt: demoNow(), needsHuman: undefined });
-    return withItem(next, botId, { role: 'system', text: '你把云桌面交还给了助手', at: demoNow() });
+    let next = withScreen(s, botId, { control: 'bot', handedBackAt: demoNow(), needsHuman: undefined });
+    next = withItem(next, botId, { role: 'system', text: '你把云桌面交还给了助手', at: demoNow() });
+    // a card blocked on "needs a human on the screen" goes back to ready with your note for the next run
+    const blocked = next.cards.find((c) => c.assignee === botId && c.status === 'blocked' && c.block?.kind === 'needs_input');
+    if (blocked) {
+      next = withCard(next, blocked.id, (c) => ({
+        ...c,
+        status: 'ready',
+        block: undefined,
+        comments: [...c.comments, { author: 'you', body: '我在云桌面上登录好了，继续吧。', at: demoNow() }],
+      }));
+    }
+    return next;
   });
 }
 
@@ -128,13 +189,10 @@ export function answerAsk(ask: Ask, value: string) {
         next = withItem(next, 'mail', { role: 'tool', at: demoNow(), tool: { summary: '把回复发给了 中村老师', tool: 'mail.send', status: 'done' } });
         next = withItem(next, 'mail', { role: 'assistant', text: '已发送。「回复中村老师」这件待办我帮你勾掉了。', at: demoNow() });
         next = withTodo(next, 'td1', (t) => ({ ...t, done: true, doneAt: demoNow() }));
-        next = withDelegation(next, 'd2', { state: 'done', note: '已发送' });
       } else if (value === 'edit') {
         next = withItem(next, 'mail', { role: 'assistant', text: '好，草稿放在邮箱的「草稿」里了，你改完直接发就行。', at: demoNow() });
-        next = withDelegation(next, 'd2', { state: 'done', note: '草稿交给你修改' });
       } else {
         next = withItem(next, 'mail', { role: 'assistant', text: '好，这封不发了。待办还留着，记得自己回一下。', at: demoNow() });
-        next = withDelegation(next, 'd2', { state: 'done', note: '你选择不发' });
       }
       next = withBot(next, 'mail', { status: 'online', statusNote: '下次整理 13:00' });
     }
@@ -145,7 +203,7 @@ export function answerAsk(ask: Ask, value: string) {
         if (value === 'self') return { ...t, proposed: false, doAt: undefined };
         return { ...t, proposed: false };
       });
-      next = withItem(next, 'study', {
+      next = withItem(next, 'shion', {
         role: 'assistant',
         text: value === 'self' ? '好，作业4 不排执行时间，截止前一天我会再提醒你。' : '好，已经排进日程，到时间我会提醒你。',
         at: demoNow(),
@@ -174,6 +232,22 @@ export function runRoutine(botId: string, routineName: string) {
     next = withBot(next, botId, { lastActiveAt: demoNow() });
     const bot = next.bots.find((b) => b.id === botId);
     return withToast(next, { title: `已让「${bot?.name}」现在运行「${routineName}」`, botId, href: `#chat-${botId}` });
+  });
+}
+
+// ------------------------------------------------------------- kanban
+
+/** `POST /tasks/:id/comments`: comments are how people and bots hand context to the next run. */
+export function commentCard(id: string, body: string) {
+  setState((s) => withCard(s, id, (c) => ({ ...c, comments: [...c.comments, { author: 'you', body, at: demoNow() }] })));
+}
+
+/** Unblock with a comment: the card returns to ready and the dispatcher re-runs it with the comment in context. */
+export function unblockCard(id: string, body: string) {
+  setState((s) => {
+    let next = withCard(s, id, (c) => ({ ...c, status: 'ready', block: undefined, comments: [...c.comments, { author: 'you', body, at: demoNow() }] }));
+    next = { ...next, asks: next.asks.filter((a) => a.cardId !== id) };
+    return next;
   });
 }
 
