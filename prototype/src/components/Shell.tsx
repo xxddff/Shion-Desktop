@@ -1,4 +1,4 @@
-import { CalendarDays, CircleCheck, Hand, Menu, Newspaper, Search, Sun } from 'lucide-react';
+import { CalendarDays, CircleCheck, Hand, Menu, Monitor, Newspaper, Search, Sun } from 'lucide-react';
 import { createContext, useContext, type ReactNode } from 'react';
 import { demoNow } from '../data/clock';
 import type { AppState } from '../data/model';
@@ -79,6 +79,16 @@ export function Sidebar({ state, route, onQuickAsk, onConnection }: SidebarProps
           {state.asks.length > 0 && <span className="badge">{state.asks.length}</span>}
         </a>
 
+        <a className="side-item" href="#desktop" aria-current={current('desktop')}>
+          <Monitor size={15} />
+          <span className="label">云桌面</span>
+          {Object.values(state.screens).some((x) => x.needsHuman || x.control === 'you') ? (
+            <span className="dot warning" title="有助手在等你接管" />
+          ) : (
+            <span className="count">{Object.values(state.screens).filter((x) => x.running).length} 在运行</span>
+          )}
+        </a>
+
         <div className="side-label">秘书</div>
         <a className="side-item tall" href={`#chat-${chief.id}`} aria-current={current('chat', chief.id)}>
           <Avatar bot={chief} size={26} showStatus />
@@ -103,7 +113,7 @@ export function Sidebar({ state, route, onQuickAsk, onConnection }: SidebarProps
           <span className="meta">
             <span>{c.state === 'connected' ? `已连接 ${c.name}` : '未连接'}</span>
             <span className="mono">
-              {c.kind === 'tailscale' ? 'Tailscale' : c.kind === 'https' ? 'HTTPS' : 'SSH'} · {c.latencyMs}ms · 本机{c.localMac === 'on' ? '已接入' : '未接入'}
+              {c.kind === 'cloudflare' ? 'Cloudflare' : c.kind === 'tailscale' ? 'Tailscale' : 'SSH'} · {c.latencyMs}ms · 本机{c.localMac === 'on' ? '已接入' : '未接入'}
             </span>
           </span>
         </button>

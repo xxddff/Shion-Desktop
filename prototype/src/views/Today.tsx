@@ -2,7 +2,7 @@ import { ArrowRight, BookOpen, Briefcase, CircleCheck, Focus, LoaderCircle, Send
 import { useState } from 'react';
 import { dayDiff } from '../data/clock';
 import type { AppState, CalEvent, Todo } from '../data/model';
-import { sendMessage } from '../data/store';
+import { sendMessage, sortAsks } from '../data/store';
 import { AskCard, TodoRow } from '../components/Items';
 import { Toolbar } from '../components/Shell';
 import { go } from '../route';
@@ -123,7 +123,7 @@ export function Today({ state }: { state: AppState }) {
                     </a>
                   </div>
                   <div className="ask-list">
-                    {state.asks.slice(0, 3).map((a) => (
+                    {sortAsks(state.asks).slice(0, 3).map((a) => (
                       <AskCard key={a.id} ask={a} state={state} now={now} compact />
                     ))}
                   </div>

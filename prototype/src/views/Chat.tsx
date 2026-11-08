@@ -3,6 +3,8 @@ import { useEffect, useRef, useState } from 'react';
 import type { AppState, Bot, ChatItem } from '../data/model';
 import { runRoutine, sendMessage } from '../data/store';
 import { AskCard, TodoRow } from '../components/Items';
+import { ScreenMock } from '../components/Screen';
+import { ControlChip } from './Desktop';
 import { Toolbar } from '../components/Shell';
 import { Avatar, BotStatusPill } from '../ui/bits';
 import { ago, dayLabel, hm, useNow, when } from '../ui/format';
@@ -182,6 +184,16 @@ function BotPanel({ bot, state, now }: { bot: Bot; state: AppState; now: number 
         {bot.status === 'working' && <LoaderCircle size={13} className="spin" color="var(--info)" />}
         <span>{bot.statusNote}</span>
       </div>
+
+      {state.screens[bot.id] && (
+        <a className="side-screen" href={`#desktop-${bot.id}`} aria-label={`打开${bot.name}的云桌面`}>
+          <ScreenMock screen={state.screens[bot.id]} />
+          <span className="ss-meta">
+            <span className="grow">云桌面</span>
+            <ControlChip screen={state.screens[bot.id]} />
+          </span>
+        </a>
+      )}
 
       {bot.chief && (
         <section className="side-sec">

@@ -14,7 +14,8 @@ macOS 上的私人秘书。你主要和总秘书「紫苑」打交道，她带�
 | 组织方式 | 一个总秘书带一组助手；每个助手的 Bot Chat 也能单独访问 |
 | Hermes 跑在哪 | 远端 VPS；以后可能也接入这台 Mac，让助手在本机做事（暂不实现） |
 | 技术栈 | 原型不限；正式版不套浏览器，候选 SwiftUI 或 [MyGo](https://github.com/egoist/mygo)（Go，自绘原生 UI），倾向 SwiftUI，见下文 |
-| 连接方式 | 和官方 Webapp、桌面端一样走「远程网关」：URL + 登录。首选 Tailscale + 会话 token；SSH 隧道只作备用 |
+| 连接方式 | 沿用现在的 Cloudflare Tunnel + Cloudflare Access，用 service token 过认证（官方桌面端也用同样的方式：给连接加额外请求头） |
+| 云桌面 | VPS 上的 Hermes 开了 Bot Screen（每个助手一块桌面），Shion 里要能看画面、接管、交还 |
 | 邮件 | 一个能收发大多数邮箱的工具：Hermes 自带的 himalaya 技能（IMAP/SMTP）加 email-inbox-triage 技能 |
 | 日历、提醒事项 | Apple 的，经 iCloud 云端接入 |
 | Notion | 主要放课程相关的内容（录音转写、笔记） |
@@ -26,10 +27,11 @@ macOS 上的私人秘书。你主要和总秘书「紫苑」打交道，她带�
 
 ```
 ┌──────────── 这台 Mac ────────────┐            ┌──────────────── VPS ─────────────────┐
-│ Shion.app (SwiftUI)              │ Tailscale  │ hermes serve / gateway owner          │
-│  ├ 窗口：今天 · 待办 · 日程 · 日报 │ 会话 token │  ├ Canonical Gateway Protocol (WS)    │
-│  │       等你确认 · 各助手 Bot Chat │            │  ├ profiles = 紫苑 + 各助手            │
-│  ├ 菜单栏常驻 + ⌥Space 随手交代     │            │  │   各自的 SOUL、记忆、技能、MCP、凭据   │
+│ Shion.app (SwiftUI)              │ Cloudflare │ hermes serve / gateway owner          │
+│  ├ 窗口：今天 · 待办 · 日程 · 日报 │ Tunnel +   │  ├ Canonical Gateway Protocol (WS)    │
+│  │       等你确认 · 各助手 Bot Chat │ Access     │  ├ profiles = 紫苑 + 各助手            │
+│  ├ 云桌面：看画面、接管、交还       │            │  │   各自的 SOUL、记忆、技能、MCP、凭据   │
+│  ├ 菜单栏常驻 + ⌥Space 随手交代     │            │  ├ Bot Screen：每个助手一块 Xfce 桌面   │
 │  ├ 系统通知（可直接在通知里回复）   │            │  ├ cron = 各助手的例行任务             │
 │  └ 应用使用记录（只记应用名和时长） │            │  ├ kanban = 交给助手的事                │
 └──────────────────────────────────┘            │  └ shion 插件：待办、日报、应用记录的存取 │
@@ -57,6 +59,7 @@ macOS 上的私人秘书。你主要和总秘书「紫苑」打交道，她带�
 | 应用记录与回顾 | 回顾 | 插件接收记录，22:30 写日报 | Mac 端采集；日报里的屏幕时间 |
 | 事实核查 | 资讯 | 网络搜索与网页读取 | 对话；新闻日报里的核查标注 |
 | 新闻 / 学习 / 工作 / 生活日报 | 资讯、回顾 | 例行任务生成 | 日报页 |
+| 要登录、两步验证、验证码的网站（学校统一认证、Moodle、教务） | 课程等 | 助手在自己的云桌面上用浏览器操作；登录状态保留在它的浏览器里 | 「等你确认」里出现「去接管」，在云桌面页接管、登录、交还 |
 | 全天录音（以后） | 新助手 | 转写 → 记忆 → 待办 | 暂不做 |
 
 **关于日报放不放进 Shion：** 生成不放在 Shion，交给 Hermes 的例行任务：Mac 关着也能按时写，还能同时推到手机（Telegram 等平台）。Shion 只负责阅读界面，再加上提供应用使用记录这一份 VPS 拿不到的数据。
@@ -66,7 +69,7 @@ macOS 上的私人秘书。你主要和总秘书「紫苑」打交道，她带�
 依据 Hermes `main`（2026-11）的 `apps/desktop/docs/canonical-gateway-protocol.md`、`tui_gateway/contracts/canonical*.py` 和生成的 `apps/shared/src/gateway-contract.generated.ts`。
 
 - **连接**：WebSocket `/api/ws`，子协议 `hermes-gateway-v1`，方法表是 `CANONICAL_METHODS`。连上后先 `client.capabilities {server_requests: true}`，否则审批和提问会被直接撤回。
-- **鉴权**：本机由 profile 目录下的私有 control socket 签发一次性 ticket（30 秒）。远端和官方 Webapp、桌面端一样走 `hermes serve` 的登录提供方（见下一节）。
+- **鉴权**：本机由 profile 目录下的私有 control socket 签发一次性 ticket（30 秒）。远端经 Cloudflare Access，再加可选的 Hermes 会话 token（见下一节）。
 - **身份**：`session.create` 带 `source`（必须在 `runtime.describe` 的 `session_create.sources` 里）和 `client: {name: "shion"}`。
 - **Bot Chat**：一个助手 = 一个 profile = 唯一一个标题为 `Bot Chat` 的会话。用 `session.list {title, include_hidden: true}` 按标题找，`profiles.list` 也直接给出 `canonical_session`。不存会话 id 指针。
 - **可靠提交**：客户端的 `input_id` 和服务端的 `admission_id` 分开，以回执为准（`prompt.receipt`、`prompt.resolve_unknown`）。
@@ -74,23 +77,36 @@ macOS 上的私人秘书。你主要和总秘书「紫苑」打交道，她带�
 - **不在 canonical 里的**：看板走 `/api/plugins/kanban/*`，例行任务列表走 `/api/cron/jobs`（canonical 里只有 `cron.submit` 立即运行和 `cron.status`）。
 - **类型生成**：`apps/shared/src/gateway-contract.openrpc.json` 可以生成 Swift `Codable` 类型，不用手写。
 
-## 连接远端：和官方保持一致
+## 连接远端：Cloudflare Tunnel + Access
 
-官方 Webapp 和桌面端连远端都是「远程网关」：`hermes serve` 绑到一个能访问到的地址，绑到非本机地址时自动启用登录关卡，然后用以下任一方式登录：
+VPS 上的 `hermes serve` 通过 Cloudflare Tunnel 暴露成一个 HTTPS 域名，前面挡着 Cloudflare Access。Shion 用 Access 的 service token 通过认证：
 
-| 方式 | 适合 | Shion 怎么带凭证 |
-| --- | --- | --- |
-| 部署会话 token（`HERMES_DASHBOARD_SESSION_TOKEN`） | Tailscale 等私有网络 | REST 带 `X-Hermes-Session-Token` 头；`/api/ws` 带 `?token=` |
-| 用户名密码 | 可信局域网、VPN | 先登录换会话，再带会话 |
-| OAuth（Nous Portal 或自建 OIDC） | 暴露到公网（配 HTTPS 反代） | 浏览器授权后带 bearer token |
+- **每个请求都带两个头**：`CF-Access-Client-Id`、`CF-Access-Client-Secret`。普通 HTTP 请求要带，WebSocket 的握手请求也要带，包括对话用的 `/api/ws` 和云桌面用的 `/api/display/ws`。官方桌面端的做法一样：每个连接可以加"额外请求头"，界面上写明就是给 Cloudflare Access 用的。
+- **Hermes 自己的登录关卡**：如果 `hermes serve` 只绑在 `127.0.0.1`、由本机的 `cloudflared` 转发，Hermes 不会开启自己的登录关卡，Access 就是唯一一道门。建议再加一道 Hermes 会话 token（`HERMES_DASHBOARD_SESSION_TOKEN`，REST 带 `X-Hermes-Session-Token`，`/api/ws` 带 `?token=`），Shion 可以同时带两组凭证。
+- **凭证存放**：service token 和会话 token 存进 macOS 钥匙串。官方桌面端存在 Hermes 目录下一个权限 0600 的明文文件里。
+- **为什么要原生 WebSocket**：网页里的 WebSocket 不能自定义请求头，所以云桌面没法直接用网页版 noVNC 连过 Access。Swift 的 `URLSessionWebSocketTask` 可以带任意请求头，没有这个问题。
 
-**第一版：VPS 加入 Tailscale**，`hermes serve --host <tailscale-ip>`，用会话 token。Mac 和手机都能连，不开公网端口，也不用维持隧道。以后要从公网访问，再加 HTTPS 反代和 OAuth。SSH 隧道是官方桌面端支持的四种连接方式之一，Shion 留作备用。
+## 云桌面（Bot Screen）
+
+VPS 上每个助手（profile）有自己的一块 Xfce 桌面：助手的 `computer_use` 和有界面的浏览器都在这块桌面上操作，画面留在 VPS 上，你的 Mac 关了也不影响。遇到登录、两步验证、验证码、付款这类步骤，助手会停下来请你接管。你接管期间，助手的桌面和浏览器操作都会被拒绝（`human_has_control`）；你交还后它接着做。助手的浏览器登录状态会保留，你帮它登录过一次的网站，之后它可以自己用。
+
+Shion 里的位置：
+- **云桌面页**：所有助手的桌面缩略图，加一个大的实时画面，可以启动、接管、交还；
+- **每个助手的侧栏**：一块桌面预览，点开进入云桌面页；
+- **等你确认、系统通知**：助手卡在要人来做的步骤时，出现「去接管」。
+
+协议（官方桌面端的做法）：
+- `display.status`、`display.thumbnail`（预览图，几秒刷新一次）、`display.start` / `display.stop`；
+- `display.observe` 换一张 30 秒、一次性的 ticket，再用它开 WebSocket `/api/display/ws?ticket=…`，里面跑的是 RFB（VNC）画面流；
+- 接管、交还用 `display.lease.acquire` / `display.lease.release`。断线时控制权留在你手里，直到你回来交还；两个人同时看时，最后接管的人拿到控制权。
 
 **还没验证的风险**
 1. 第三方客户端能用哪个 `source`（官方桌面端用 `gui`）。要在我们的 VPS 上看 `runtime.describe`。
 2. 远端经 `hermes serve` 时，canonical 方法和插件 RPC 是否都能用。
 3. 官方 Bot Mode 把头像、分组等存在 profile 的 `ui_meta` 里。Shion 要读写同样的键，才能和命令行、手机端保持一致。
-4. **Apple 提醒事项经云端读写不一定可靠。** iCloud 日历走 CalDAV 没问题；但按 BusyMac、2Do 的说明，iOS 13 / macOS Catalina 之后升级过的提醒事项列表不再走 CalDAV，有的 MCP 声称能读写，说法不一。先用实际要用的工具测一遍；不行的话，就由 Mac 上的 Shion 用 EventKit 读写提醒事项（这正好是"接入本机"的第一个用途），或者以 `shion` 插件里的待办为准，只往提醒事项单向同步。
+4. **云桌面相关的方法不在 canonical 方法表里。** `display.*` 属于通用方法表，官方桌面端在远程连接上能用。要验证 Shion 经 Cloudflare 连上后，同一条连接能不能调到它们。
+5. **Swift 里要有 RFB（VNC）解码。** 候选是 RoyalVNCKit（Swift 写的 VNC 客户端库，MIT 许可，需要评估），需要给它换一个跑在 WebSocket 上的传输层。实在不行，就用一个只显示云桌面的 WKWebView 加 noVNC 作过渡，但它连不过 Access 的请求头，得先拿到 Access 的 cookie 再塞进去。
+6. **Apple 提醒事项经云端读写不一定可靠。** iCloud 日历走 CalDAV 没问题；但按 BusyMac、2Do 的说明，iOS 13 / macOS Catalina 之后升级过的提醒事项列表不再走 CalDAV，有的 MCP 声称能读写，说法不一。先用实际要用的工具测一遍；不行的话，就由 Mac 上的 Shion 用 EventKit 读写提醒事项（这正好是"接入本机"的第一个用途），或者以 `shion` 插件里的待办为准，只往提醒事项单向同步。
 
 ## 技术栈：SwiftUI 还是 MyGo
 
@@ -123,8 +139,8 @@ npm run dev        # http://localhost:1420
 ## 路线图
 
 1. **对齐界面**（现在）：用原型把信息结构和关键流程定下来。
-2. **协议探路**：一个命令行小程序，经 Tailscale 用会话 token 连上 VPS，跑通握手、`profiles.list`、打开 Bot Chat、流式消息、回答审批，同时验证上面三个风险。
-3. **SwiftUI 骨架**：`NavigationSplitView` 主窗口、Bot Chat、等你确认、可回复的系统通知、`MenuBarExtra`、全局快捷键。
+2. **协议探路**：一个命令行小程序，经 Cloudflare Tunnel 用 Access service token 连上 VPS，跑通握手、`profiles.list`、打开 Bot Chat、流式消息、回答审批，同时验证上面三个风险。
+3. **SwiftUI 骨架**：`NavigationSplitView` 主窗口、Bot Chat、等你确认、可回复的系统通知、`MenuBarExtra`、全局快捷键；云桌面先做缩略图和接管、交还，再做实时画面。
 4. **`shion` 插件和助手团队**：插件提供待办、今天汇总、日报、应用记录；把紫苑和各助手的 profile、SOUL、例行任务做成一套可一键部署的模板。
 5. **今天 / 待办 / 日程 / 日报** 接真实数据，加上 Mac 应用使用记录。
 6. 以后：接入这台 Mac 让助手在本机做事；全天录音。

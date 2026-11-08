@@ -34,7 +34,7 @@ export const bots: Bot[] = [
     model: 'claude-sonnet-5-5',
     status: 'working',
     statusNote: '正在整理「数据结构与算法 第7回」',
-    tools: ['Notion', '日历（课表）', '待办'],
+    tools: ['Notion', '日历（课表）', '待办', '云桌面浏览器'],
     routines: [
       { id: 'r4', name: '课前提醒', schedule: '每节课开始前 10 分钟', cron: '按课表生成', nextRunAt: at(0, 12, 50), lastRun: { at: at(0, 8, 50), ok: true } },
       { id: 'r5', name: '课后整理', schedule: '每节课结束后 20 分钟', cron: '按课表生成', nextRunAt: at(0, 14, 50), lastRun: { at: at(0, 10, 50), ok: true, note: '运行中' } },
@@ -51,7 +51,7 @@ export const bots: Bot[] = [
     model: 'claude-haiku-5-5',
     status: 'online',
     statusNote: '回程 18:10 · 中央線快速 正常',
-    tools: ['换乘查询', '运行信息', '地图'],
+    tools: ['换乘查询', '运行信息', '地图', '云桌面浏览器'],
     routines: [
       { id: 'r7', name: '出门提醒', schedule: '有课的日子 · 出发前 15 分钟', cron: '按日程生成', nextRunAt: at(0, 17, 55), lastRun: { at: at(0, 7, 50), ok: true } },
     ],
@@ -81,7 +81,7 @@ export const bots: Bot[] = [
     model: 'claude-sonnet-5-5',
     status: 'working',
     statusNote: '核实「东京今冬电费上涨 30%」',
-    tools: ['网络搜索', '网页读取'],
+    tools: ['网络搜索', '网页读取', '云桌面浏览器'],
     routines: [{ id: 'r9', name: '新闻日报', schedule: '每天 07:00', cron: '0 7 * * *', nextRunAt: at(1, 7), lastRun: { at: at(0, 7), ok: true } }],
     lastActiveAt: at(0, 10, 49),
   },
@@ -158,7 +158,7 @@ const chats: Chat[] = [
       say('system', '新闻日报 · 07:00', at(0, 7)),
       say('assistant', '今天的新闻日报好了，5 条，其中 1 条只有单一来源，已标出来。', at(0, 7, 2)),
       say('handoff', '紫苑 转来一项核查：「东京今年冬天电费要涨 30%」。', at(0, 8, 41), { to: 'news' }),
-      did('搜索了 4 个来源，找到 东京电力 11 月的电费公告', 'web.search', at(0, 8, 43)),
+      did('搜索了 4 个来源，找到 电力公司 11 月的电费公告', 'web.search', at(0, 8, 43)),
     ],
   },
   {
@@ -173,7 +173,7 @@ const chats: Chat[] = [
 
 export function seedState(): AppState {
   return {
-    connection: { name: 'tokyo-vps', kind: 'tailscale', host: 'http://tokyo-vps:9119', auth: '会话 token', state: 'connected', latencyMs: 18, localMac: 'off', activityLog: true },
+    connection: { name: 'tokyo-vps', kind: 'cloudflare', host: 'https://hermes.example.dev', auth: 'Access service token', state: 'connected', latencyMs: 24, localMac: 'off', activityLog: true },
     bots,
     chats: Object.fromEntries(chats.map((c) => [c.botId, c])),
     todos: [
@@ -261,7 +261,7 @@ export function seedState(): AppState {
       { id: 'td12', title: '回复实习 HR：面谈时间', area: 'work', source: { kind: 'mail', label: '来自 实习 HR 的邮件' }, done: true, doneAt: at(0, 8, 40), nudges: 0 },
     ],
     delegations: [
-      { id: 'd1', botId: 'news', title: '核实「东京今冬电费上涨 30%」', state: 'running', note: '找到 东京电力 的公告，正在比对数字', updatedAt: at(0, 8, 43) },
+      { id: 'd1', botId: 'news', title: '核实「东京今冬电费上涨 30%」', state: 'running', note: '找到 电力公司 的公告，正在比对数字', updatedAt: at(0, 8, 43) },
       { id: 'd2', botId: 'mail', title: '回复中村老师的邮件', state: 'waiting', note: '草稿等你确认', updatedAt: at(0, 8, 44) },
       { id: 'd3', botId: 'study', title: '整理「数据结构与算法 第7回」', state: 'running', note: '读完录音，正在列待办', updatedAt: at(0, 10, 34) },
       { id: 'd4', botId: 'study', title: '生成第6回复习卡片', state: 'done', note: '12 张卡片已存进 Notion', updatedAt: at(-1, 21) },
@@ -296,7 +296,7 @@ export function seedState(): AppState {
         kind: 'news',
         date: at(0, 7),
         botId: 'news',
-        headline: '今日 5 条：日银利率决议、山手线新车、AI 版权诉讼…',
+        headline: '今日 5 条：央行利率决议、环状线新车、AI 版权诉讼…',
         blocks: [],
       },
       {
@@ -337,10 +337,10 @@ export function seedState(): AppState {
       },
     ],
     news: [
-      { title: '日本银行维持政策利率不变，暗示 12 月可能加息', source: 'NHK · 日经', check: 'verified', checkNote: '两家来源一致' },
-      { title: '山手线新型车辆 明年春季投入运营', source: 'JR 东日本 新闻稿', check: 'verified', checkNote: '官方发布' },
-      { title: '东京地方法院受理首起生成式 AI 版权集体诉讼', source: '共同社', check: 'single', checkNote: '只找到一个来源，等待更多报道' },
-      { title: '日元兑美元跌至 158，创三个月新低', source: '路透 · 彭博', check: 'verified', checkNote: '行情数据一致' },
+      { title: '央行维持政策利率不变，暗示 12 月可能加息', source: '两家主流媒体', check: 'verified', checkNote: '两家来源一致' },
+      { title: '环状线新型车辆 明年春季投入运营', source: '铁路公司新闻稿', check: 'verified', checkNote: '官方发布' },
+      { title: '法院受理首起生成式 AI 版权集体诉讼', source: '一家通讯社', check: 'single', checkNote: '只找到一个来源，等待更多报道' },
+      { title: '日元兑美元跌至 158，创三个月新低', source: '两家财经媒体', check: 'verified', checkNote: '行情数据一致' },
       { title: '「东京今冬电费上涨 30%」在社交网络流传', source: 'X 上的帖子', check: 'disputed', checkNote: '「资讯」正在核实' },
     ],
     usage: [
@@ -391,6 +391,14 @@ export function seedState(): AppState {
         ],
       },
     ],
+    screens: {
+      shion: { botId: 'shion', running: false, control: 'bot' },
+      study: { botId: 'study', running: false, control: 'bot' },
+      commute: { botId: 'commute', running: true, control: 'bot', app: 'transit', url: 'transit-info.example/status', activity: '07:50 查过运行信息，空闲中' },
+      mail: { botId: 'mail', running: false, control: 'bot' },
+      news: { botId: 'news', running: true, control: 'bot', app: 'news', url: 'news.example/energy', activity: '在读电费相关的报道' },
+      journal: { botId: 'journal', running: false, control: 'bot' },
+    },
     toasts: [],
     simulate: true,
   };

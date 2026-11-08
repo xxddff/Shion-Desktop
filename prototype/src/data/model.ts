@@ -150,9 +150,30 @@ export interface AppUsage {
   minutes: number;
 }
 
+/**
+ * A bot's own cloud desktop (Hermes Bot Screen): an Xfce screen on the VPS
+ * that the bot's computer_use and headed browser act on. You can watch it,
+ * take over (the control lease) and hand back.
+ */
+export type ScreenApp = 'sso' | 'moodle' | 'news' | 'transit';
+
+export interface Screen {
+  botId: string;
+  running: boolean;
+  control: 'bot' | 'you';
+  app?: ScreenApp;
+  url?: string;
+  /** What the bot is doing on the screen right now. */
+  activity?: string;
+  /** Why the bot stopped and needs a human, e.g. two-step sign-in. */
+  needsHuman?: string;
+  /** Set when you hand control back after a takeover. */
+  handedBackAt?: number;
+}
+
 export interface Ask {
   id: string;
-  kind: 'approval' | 'clarify';
+  kind: 'approval' | 'clarify' | 'takeover';
   botId: string;
   at: number;
   title: string;
@@ -173,10 +194,10 @@ export interface Toast {
 
 export interface Connection {
   name: string;
-  /** How the remote `hermes serve` is reached; SSH stays available as a fallback. */
-  kind: 'tailscale' | 'https' | 'ssh';
+  /** How the remote `hermes serve` is reached. */
+  kind: 'cloudflare' | 'tailscale' | 'ssh';
   host: string;
-  /** Dashboard auth provider: session token, username/password or OAuth. */
+  /** What gets the client through, e.g. a Cloudflare Access service token. */
   auth: string;
   state: 'connected' | 'reconnecting' | 'offline';
   latencyMs: number;
@@ -197,6 +218,7 @@ export interface AppState {
   usage: UsageSlice[];
   apps: AppUsage[];
   asks: Ask[];
+  screens: Record<string, Screen>;
   toasts: Toast[];
   simulate: boolean;
 }

@@ -1,7 +1,7 @@
 import { at, demoNow } from './clock';
 import type { AppState } from './model';
 import { nextId } from './seed';
-import { getState, replyQueue, setState, withBot, withDelegation, withItem, withToast, withTodo } from './store';
+import { getState, replyQueue, setState, withBot, withDelegation, withItem, withScreen, withToast, withTodo } from './store';
 
 /**
  * Plays out the next few minutes of the demo day: 「课程」 finishes the class
@@ -15,7 +15,8 @@ type Step =
   | { kind: 'say'; text: string; todoIds?: string[] }
   | { kind: 'tool'; summary: string; tool: string; ticks: number; effect?: (s: AppState) => AppState }
   | { kind: 'effect'; run: (s: AppState) => AppState }
-  | { kind: 'wait'; ticks: number };
+  | { kind: 'wait'; ticks: number }
+  | { kind: 'until'; test: (s: AppState) => boolean };
 
 interface Runner {
   botId: string;
@@ -82,6 +83,62 @@ const scripts: Runner[] = [
           return withToast(next, { title: '课程 整理完第7回', body: '新增 3 件待办，作业4 的日期等你确认', botId: 'study', href: '#confirm' });
         },
       },
+      // then it fetches the slides from the course site on its cloud desktop and hits two-step sign-in
+      { kind: 'wait', ticks: 16 },
+      {
+        kind: 'effect',
+        run: (s) => {
+          let next = withScreen(s, 'study', { running: true, app: 'sso', url: 'sso.univ.example/login', activity: '打开课程平台，跳到了学校统一认证' });
+          next = withItem(next, 'study', { role: 'tool', at: demoNow(), tool: { summary: '在云桌面上打开课程平台，准备下载第7回课件', tool: 'browser.navigate', status: 'done' } });
+          return withBot(next, 'study', { status: 'working', statusNote: '在云桌面上：课程平台' });
+        },
+      },
+      { kind: 'wait', ticks: 8 },
+      {
+        kind: 'effect',
+        run: (s) => {
+          let next = withScreen(s, 'study', { needsHuman: '学校统一认证要两步验证', activity: '停在登录页，等你接管' });
+          next = {
+            ...next,
+            asks: [
+              ...next.asks,
+              {
+                id: 'ask-sso',
+                kind: 'takeover',
+                botId: 'study',
+                at: demoNow(),
+                title: '学校统一认证要两步验证，需要你在云桌面上登录一次',
+                detail: '接管后登录、在手机上确认，然后点「交还」。登录状态会留在它的浏览器里，以后不用再登录。',
+                options: [
+                  { label: '去接管', value: 'go', primary: true },
+                  { label: '稍后', value: 'later' },
+                ],
+              },
+            ],
+          };
+          next = withItem(next, 'study', { role: 'assistant', text: '课程平台跳到了学校统一认证，要两步验证，这一步得你来。我停在登录页了，你接管登录一下，好了点「交还」，我接着下载课件。', at: demoNow() });
+          next = withBot(next, 'study', { status: 'blocked', statusNote: '等你接管云桌面：两步验证' });
+          return withToast(next, { title: '课程 需要你接管云桌面', body: '学校统一认证要两步验证', botId: 'study', href: '#desktop-study' });
+        },
+      },
+      { kind: 'until', test: (s) => s.screens.study?.handedBackAt != null && s.screens.study.control === 'bot' },
+      { kind: 'wait', ticks: 4 },
+      {
+        kind: 'effect',
+        run: (s) => {
+          const next = withScreen(s, 'study', { app: 'moodle', url: 'lms.univ.example/course/ds/week7', activity: '在下载第7回课件' });
+          return withBot(next, 'study', { status: 'working', statusNote: '在云桌面上下载第7回课件' });
+        },
+      },
+      { kind: 'tool', summary: '下载了第7回课件（PDF，3.2 MB），存进 Notion「数据结构与算法」', tool: 'browser.download', ticks: 8 },
+      { kind: 'say', text: '课件存好了。登录状态留在云桌面的浏览器里，之后去课程平台不用再登录。' },
+      {
+        kind: 'effect',
+        run: (s) => {
+          const next = withScreen(s, 'study', { activity: '空闲中' });
+          return withBot(next, 'study', { status: 'online', statusNote: '下一节 13:00 机器学习基础' });
+        },
+      },
     ],
   },
   {
@@ -90,10 +147,10 @@ const scripts: Runner[] = [
     progress: 0,
     steps: [
       { kind: 'wait', ticks: 70 },
-      { kind: 'tool', summary: '读了 东京电力 和 经济产业省 的公告', tool: 'web.fetch', ticks: 6 },
+      { kind: 'tool', summary: '读了 电力公司 和 主管部门 的公告', tool: 'web.fetch', ticks: 6 },
       {
         kind: 'say',
-        text: '结论：说法不准确。东京电力 12 月的标准家庭电费比 11 月高约 4%，主要因为政府补贴结束。「30%」是拿去年补贴期间的最低月份和今年的峰值比出来的，口径不同。',
+        text: '结论：说法不准确。电力公司 12 月的标准家庭电费比 11 月高约 4%，主要因为政府补贴结束。「30%」是拿去年补贴期间的最低月份和今年的峰值比出来的，口径不同。',
       },
       {
         kind: 'effect',
@@ -104,6 +161,7 @@ const scripts: Runner[] = [
             news: next.news.map((n) => (n.check === 'disputed' ? { ...n, checkNote: '不准确：实际约 +4%，口径不同' } : n)),
           };
           next = withBot(next, 'news', { status: 'idle', statusNote: '下次 明天 07:00' });
+          next = withScreen(next, 'news', { activity: '空闲中' });
           next = withItem(next, 'shion', { role: 'assistant', text: '「资讯」核实完了：电费上涨 30% 的说法不准确，实际约 4%。细节在它的对话里。', at: demoNow() });
           return withToast(next, { title: '资讯 核实完了', body: '「电费上涨 30%」不准确，实际约 +4%', botId: 'news', href: '#chat-news' });
         },
@@ -157,6 +215,10 @@ function stepRunner(s: AppState, r: Runner): AppState {
       r.idx++;
       r.progress = 0;
     }
+    return s;
+  }
+  if (step.kind === 'until') {
+    if (step.test(s)) r.idx++;
     return s;
   }
   if (step.kind === 'effect') {

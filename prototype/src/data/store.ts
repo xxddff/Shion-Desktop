@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react';
 import { demoNow } from './clock';
-import type { AppState, Ask, ChatItem, Delegation, Todo, Toast } from './model';
+import type { AppState, Ask, ChatItem, Delegation, Screen, Todo, Toast } from './model';
 import { nextId, seedState } from './seed';
 
 /**
@@ -51,10 +51,19 @@ export const withBot = (s: AppState, id: string, patch: Partial<AppState['bots']
   bots: s.bots.map((b) => (b.id === id ? { ...b, ...patch } : b)),
 });
 
+export const withScreen = (s: AppState, botId: string, patch: Partial<Screen>): AppState => ({
+  ...s,
+  screens: { ...s.screens, [botId]: { ...(s.screens[botId] ?? { botId, running: false, control: 'bot' }), ...patch } },
+});
+
 export const withToast = (s: AppState, t: Omit<Toast, 'id'>): AppState => ({
   ...s,
   toasts: [...s.toasts, { ...t, id: ++toastSeq }].slice(-3),
 });
+
+/** Most urgent first: a bot stuck on your screen, then things it wants to send, then questions. */
+const ASK_RANK = { takeover: 0, approval: 1, clarify: 2 } as const;
+export const sortAsks = (asks: Ask[]) => [...asks].sort((a, b) => ASK_RANK[a.kind] - ASK_RANK[b.kind] || b.at - a.at);
 
 // ------------------------------------------------------------- actions
 
@@ -79,7 +88,36 @@ export function addTodo(input: Pick<Todo, 'title' | 'area'> & Partial<Todo>): st
   return id;
 }
 
+// ------------------------------------------------- cloud desktop (Bot Screen)
+
+/** `display.lease.acquire`: your keyboard and mouse drive the bot's screen. */
+export function takeOver(botId: string) {
+  setState((s) => {
+    let next = withScreen(s, botId, { control: 'you', running: true });
+    next = { ...next, asks: next.asks.filter((a) => !(a.kind === 'takeover' && a.botId === botId)) };
+    return withItem(next, botId, { role: 'system', text: '你接管了云桌面，助手暂停操作', at: demoNow() });
+  });
+}
+
+/** `display.lease.release`: the bot re-captures the screen and continues. */
+export function handBack(botId: string) {
+  setState((s) => {
+    const next = withScreen(s, botId, { control: 'bot', handedBackAt: demoNow(), needsHuman: undefined });
+    return withItem(next, botId, { role: 'system', text: '你把云桌面交还给了助手', at: demoNow() });
+  });
+}
+
+/** `display.start`: screens are off until someone needs them. */
+export function startScreen(botId: string) {
+  setState((s) => withScreen(s, botId, { running: true, activity: '桌面已启动，空闲中' }));
+}
+
 export function answerAsk(ask: Ask, value: string) {
+  if (ask.kind === 'takeover') {
+    if (value === 'go') takeOver(ask.botId);
+    else setState((s) => ({ ...s, asks: s.asks.filter((a) => a.id !== ask.id) }));
+    return;
+  }
   setState((s) => {
     let next: AppState = { ...s, asks: s.asks.filter((a) => a.id !== ask.id) };
     const label = ask.options.find((o) => o.value === value)?.label ?? value;

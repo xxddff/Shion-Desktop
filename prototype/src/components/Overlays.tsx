@@ -135,7 +135,7 @@ export function ConnectionPopover({ state, theme, setTheme, onClose }: { state: 
             <div>{c.name}（VPS）</div>
             <div className="faint mono">{c.host}</div>
             <div className="faint">
-              远程网关 · 经 {c.kind === 'tailscale' ? 'Tailscale' : c.kind === 'https' ? 'HTTPS' : 'SSH 隧道'} · {c.auth}登录
+              {c.kind === 'cloudflare' ? 'Cloudflare Tunnel · Access' : c.kind === 'tailscale' ? 'Tailscale' : 'SSH 隧道'} · {c.auth}
             </div>
           </div>
         </div>

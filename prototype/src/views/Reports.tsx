@@ -1,6 +1,7 @@
 import { CircleAlert, CircleCheck, CircleHelp } from 'lucide-react';
 import type { AppState, ReportKind } from '../data/model';
 import { AskCard } from '../components/Items';
+import { sortAsks } from '../data/store';
 import { Toolbar } from '../components/Shell';
 import { AREA, Avatar } from '../ui/bits';
 import { dayLabel, hm, minutes, useNow } from '../ui/format';
@@ -145,7 +146,7 @@ export function Confirm({ state }: { state: AppState }) {
             </div>
           ) : (
             <div className="ask-page">
-              {state.asks.map((a) => (
+              {sortAsks(state.asks).map((a) => (
                 <AskCard key={a.id} ask={a} state={state} now={now} />
               ))}
             </div>

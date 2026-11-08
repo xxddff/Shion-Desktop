@@ -3,6 +3,7 @@ import type { AppState, Ask, Todo } from '../data/model';
 import { answerAsk, confirmTodo, toggleTodo } from '../data/store';
 import { AreaDot, Avatar } from '../ui/bits';
 import { ago, until, when } from '../ui/format';
+import { go } from '../route';
 
 export function Checkbox({ done, onToggle, label }: { done: boolean; onToggle: () => void; label: string }) {
   return (
@@ -74,7 +75,14 @@ export function AskCard({ ask, state, now, compact = false }: { ask: Ask; state:
       )}
       <div className="actions">
         {ask.options.map((o) => (
-          <button key={o.value} className={`btn${o.primary ? ' primary' : ''}${o.danger ? ' danger' : ''}${compact ? ' mini' : ''}`} onClick={() => answerAsk(ask, o.value)}>
+          <button
+            key={o.value}
+            className={`btn${o.primary ? ' primary' : ''}${o.danger ? ' danger' : ''}${compact ? ' mini' : ''}`}
+            onClick={() => {
+              answerAsk(ask, o.value);
+              if (ask.kind === 'takeover' && o.value === 'go') go(`desktop-${ask.botId}`);
+            }}
+          >
             {o.label}
           </button>
         ))}

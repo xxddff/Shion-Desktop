@@ -6,6 +6,7 @@ import { useAppState } from './data/store';
 import { parseHash } from './route';
 import { CalendarView } from './views/Calendar';
 import { ChatView } from './views/Chat';
+import { DesktopView } from './views/Desktop';
 import { Confirm, Reports } from './views/Reports';
 import { Today } from './views/Today';
 import { Todos } from './views/Todos';
@@ -87,6 +88,7 @@ export function App() {
               {route.view === 'calendar' && <CalendarView state={state} />}
               {route.view === 'reports' && <Reports state={state} kind={route.kind} />}
               {route.view === 'confirm' && <Confirm state={state} />}
+              {route.view === 'desktop' && <DesktopView state={state} botId={route.botId} />}
               {route.view === 'chat' && <ChatView state={state} botId={route.botId} />}
               <Toasts toasts={state.toasts} state={state} />
             </main>
