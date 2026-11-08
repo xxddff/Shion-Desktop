@@ -244,6 +244,21 @@ export interface Connection {
   activityLog: boolean;
 }
 
+/**
+ * How the Hermes kanban dispatcher hands out work (the `kanban.*` keys in config.yaml).
+ * Hermes defaults, as of main in 2026-11:
+ * - maxInProgress unset: on Linux the gateway derives MemTotal / 512 MB, clamped to 2–8
+ *   (macOS and Windows: no cap); the docs still say "unlimited".
+ * - perProfile unset: no per-assistant limit.
+ * - one dispatch tick every 60 s, or right away via POST /api/plugins/kanban/dispatch.
+ * - under memory pressure a tick spawns at most one worker (elevated) or none (critical).
+ */
+export interface DispatchConfig {
+  maxInProgress: number | null;
+  perProfile: number | null;
+  intervalSec: number;
+}
+
 export interface AppState {
   connection: Connection;
   bots: Bot[];
@@ -258,6 +273,7 @@ export interface AppState {
   apps: AppUsage[];
   asks: Ask[];
   screens: Record<string, Screen>;
+  dispatch: DispatchConfig;
   toasts: Toast[];
   simulate: boolean;
 }

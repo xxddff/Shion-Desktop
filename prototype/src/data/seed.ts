@@ -455,6 +455,10 @@ export function seedState(): AppState {
       news: { botId: 'news', running: true, control: 'bot', app: 'news', url: 'news.example/energy', activity: '在读电费相关的报道' },
       journal: { botId: 'journal', running: false, control: 'bot' },
     },
+    // Shion's suggested config for a 2 GB VPS. Hermes would derive the same board-wide 4 on its own;
+    // perProfile 1 is the change: each assistant has one cloud desktop and one browser, so two of its
+    // cards running at once would fight over them.
+    dispatch: { maxInProgress: 4, perProfile: 1, intervalSec: 60 },
     toasts: [],
     simulate: true,
   };

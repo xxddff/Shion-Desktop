@@ -68,6 +68,27 @@ Shion 里的对应：
 
 看板接口：`/api/plugins/kanban/board`、`/tasks/:id`、`/tasks/:id/comments`、`PATCH /tasks/:id`，实时更新走 `/api/plugins/kanban/events?since=<id>`。都要带 Access 的头和 Hermes 的 token。
 
+### 同时能做几件（Hermes 默认值，2026-11 的 main）
+
+| 配置 | 默认 | 说明 |
+| --- | --- | --- |
+| `kanban.max_in_progress`（整个看板同时在做的上限） | 不设时，Linux 上按内存推导：总内存 ÷ 512 MB，最少 2、最多 8；macOS、Windows 上不限 | 文档里还写着"不设就不限"，但代码（`hermes_cli/kanban_db_dispatch.py` 的 `derive_default_max_in_progress`）已经改成按内存推导。2 GB 的 VPS 就是 4，4 GB 及以上是 8 |
+| `kanban.max_in_progress_per_profile`（每个助手同时在做的上限） | 不限 | 同一个助手可以同时跑好几张卡 |
+| `kanban.dispatch_interval_seconds` | 60 秒 | 卡片变成就绪后，最多等一分钟被派发；调用 `POST /api/plugins/kanban/dispatch` 可以马上派发 |
+| 内存压力保护 | 自动 | 内存偏紧时这一轮最多派 1 件，告急时这一轮一件都不派（延后，不会丢） |
+
+依赖（`parents`）不属于并发限制：前一张没做完，后一张会一直留在「排队」。
+
+**Shion 建议的配置**（原型就是按这个跑的）：
+
+```yaml
+kanban:
+  max_in_progress: 4               # 按 VPS 内存和同时开着的云桌面数量定
+  max_in_progress_per_profile: 1   # 每个助手一次只做一件
+```
+
+每个助手只有一块云桌面、一个浏览器配置。同一个助手的两张卡要是同时跑，会抢同一块屏幕和同一套登录状态。所以建议每个助手一次一件，不同助手之间照样并行。另外，Shion 在你新建卡、解除阻塞、交还云桌面之后会主动调用 `/dispatch`，不用等下一轮。看板里排队的卡会写明在等什么：等前一张做完、这个助手手上还有一件、整个看板满了，或者等下一轮派发。
+
 ## 场景由谁负责
 
 | 场景 | 助手 | Hermes 侧 | Shion 里看到的 |

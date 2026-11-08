@@ -40,7 +40,17 @@ export function cardLine(card: Card, state: AppState, now: number): string {
     const parent = state.cards.find((c) => c.id === card.parents![0]);
     return parent ? `等「${parent.title}」做完` : '等前一件做完';
   }
-  return '排队中，轮到就开始';
+  return queueReason(card, state);
+}
+
+/** Why a ready card has not started yet, in the dispatcher's own terms. */
+export function queueReason(card: Card, state: AppState): string {
+  const running = state.cards.filter((c) => c.status === 'running');
+  const { maxInProgress, perProfile } = state.dispatch;
+  const name = state.bots.find((b) => b.id === card.assignee)?.name ?? '它';
+  if (perProfile && running.filter((c) => c.assignee === card.assignee).length >= perProfile) return `${name}手上还有一件，做完就开始`;
+  if (maxInProgress && running.length >= maxInProgress) return `同时在做的已满 ${maxInProgress} 件，空出来就开始`;
+  return '下一轮派发就开始';
 }
 
 export function CardRow({ card, state, now }: { card: Card; state: AppState; now: number }) {

@@ -251,6 +251,64 @@ const scripts: Runner[] = [
 
 const runners: Runner[] = scripts;
 let cardSeq = 0x3a0;
+let tick = 0;
+
+/** Cards whose whole story is scripted above; the generic dispatcher leaves them alone. */
+const SCRIPTED = new Set(['t_c7a1', 't_c7b2', 't_c7c3', 't_f1e0']);
+/** card id → tick it was claimed by the generic dispatcher */
+const autoRuns = new Map<string, number>();
+
+/**
+ * A pocket kanban dispatcher for cards created during the demo: claims ready cards within
+ * `state.dispatch` (board-wide and per-assistant caps), runs them briefly, completes them,
+ * and wakes 詩音. Every 20 ticks stands in for Shion nudging POST /dispatch after a change.
+ */
+function dispatchTick(s: AppState): AppState {
+  let next = s;
+  const { maxInProgress, perProfile } = next.dispatch;
+  for (const card of next.cards.filter((c) => c.status === 'ready' && !SCRIPTED.has(c.id))) {
+    const running = next.cards.filter((c) => c.status === 'running');
+    if (maxInProgress && running.length >= maxInProgress) break;
+    if (perProfile && running.filter((c) => c.assignee === card.assignee).length >= perProfile) continue;
+    next = withClaim(next, card.id);
+    next = withItem(next, `w:${card.id}`, {
+      role: 'tool',
+      at: demoNow(),
+      tool: { summary: card.assignee === 'news' ? '搜索了相关来源，正在比对说法' : '开始处理', tool: 'web.search', status: 'running' },
+    });
+    const bot = next.bots.find((b) => b.id === card.assignee);
+    next = withBot(next, card.assignee, { status: 'working', statusNote: `在做：${card.title}` });
+    autoRuns.set(card.id, tick);
+    if (bot) next = withBot(next, bot.id, { lastActiveAt: demoNow() });
+  }
+  return next;
+}
+
+function finishAutoRuns(s: AppState): AppState {
+  let next = s;
+  for (const [id, at] of autoRuns) {
+    if (tick - at < 30) continue;
+    autoRuns.delete(id);
+    const card = next.cards.find((c) => c.id === id);
+    if (!card || card.status !== 'running') continue;
+    const summary = card.assignee === 'news' ? '示例结论：找到 3 个来源，说法部分属实' : '示例：处理完了';
+    const key = `w:${id}`;
+    next = {
+      ...next,
+      chats: {
+        ...next.chats,
+        [key]: { ...next.chats[key], items: next.chats[key].items.map((i) => (i.tool?.status === 'running' ? { ...i, tool: { ...i.tool, status: 'done' } } : i)) },
+      },
+    };
+    next = withItem(next, key, { role: 'tool', at: demoNow(), tool: { summary: `交付：${summary}`, tool: 'kanban_complete', status: 'done' } });
+    next = withComplete(next, id, summary);
+    next = notifyShion(id, `「${card.title}」查完了。${summary}，细节在卡片里。`)(next);
+    const bot = next.bots.find((b) => b.id === card.assignee);
+    next = withBot(next, card.assignee, { status: 'online', statusNote: '等待新的事' });
+    next = withToast(next, { title: `「${bot?.name}」做完了`, body: card.title, botId: card.assignee, href: '#chat-shion' });
+  }
+  return next;
+}
 
 function replyFor(botId: string, text: string): Step[] {
   if (botId === 'shion') {
@@ -357,6 +415,9 @@ function onTick() {
   setState((s) => {
     let next = s;
     for (const r of runners) next = stepRunner(next, r);
+    tick++;
+    if (tick % 20 === 0) next = dispatchTick(next);
+    next = finishAutoRuns(next);
     const msg = replyQueue.shift();
     if (msg) runners.push(run(msg.botId, msg.botId, [{ kind: 'wait', ticks: 3 }, ...replyFor(msg.botId, msg.text)]));
     if (Math.random() < 0.03) next = { ...next, connection: { ...next.connection, latencyMs: 18 + Math.round(Math.random() * 12) } };
