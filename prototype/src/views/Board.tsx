@@ -1,6 +1,6 @@
-import { ArrowRight, GitBranch, HeartPulse, MessageSquare, Monitor, X } from 'lucide-react';
+import { ArrowUpRight, Monitor, X } from 'lucide-react';
 import { useState } from 'react';
-import { CardStatusPill, cardHref, workHref } from '../components/Cards';
+import { CardState, cardHref, cardLine, workHref } from '../components/Cards';
 import { Toolbar } from '../components/Shell';
 import type { AppState, Card } from '../data/model';
 import { commentCard, unblockCard } from '../data/store';
@@ -8,171 +8,118 @@ import { go } from '../route';
 import { Avatar } from '../ui/bits';
 import { ago, hm, useNow } from '../ui/format';
 
-const COLUMNS: { key: string; label: string; hint: string; match: (c: Card) => boolean }[] = [
-  { key: 'queue', label: '排队', hint: 'todo · ready', match: (c) => c.status === 'todo' || c.status === 'ready' },
-  { key: 'running', label: '进行中', hint: 'running', match: (c) => c.status === 'running' },
-  { key: 'waiting', label: '等你', hint: 'blocked · review', match: (c) => c.status === 'blocked' || c.status === 'review' },
-  { key: 'done', label: '完成', hint: 'done', match: (c) => c.status === 'done' },
+const COLUMNS: { key: string; label: string; match: (c: Card) => boolean }[] = [
+  { key: 'queue', label: '排队', match: (c) => c.status === 'todo' || c.status === 'ready' },
+  { key: 'running', label: '在做', match: (c) => c.status === 'running' },
+  { key: 'waiting', label: '等你', match: (c) => c.status === 'blocked' || c.status === 'review' },
+  { key: 'done', label: '完成', match: (c) => c.status === 'done' },
 ];
 
 const who = (state: AppState, id: string) =>
   id === 'you' ? '你' : id.startsWith('routine:') ? `例行「${id.slice(8)}」` : state.bots.find((b) => b.id === id)?.name ?? id;
 
 /**
- * The Hermes kanban board as the place where work handed to assistants lives:
- * 紫苑 creates cards, the dispatcher runs them as worker sessions, and a card
- * that needs you waits in 「等你」 until you comment or unblock it.
+ * Work handed to assistants, on the Hermes kanban board. 紫苑 creates the
+ * cards; each runs in its own worker session; a card that needs you waits in
+ * 「等你」 until you comment or unblock it.
  */
 export function BoardView({ state, cardId }: { state: AppState; cardId?: string }) {
   const now = useNow(5000);
   const selected = state.cards.find((c) => c.id === cardId);
+  const running = state.cards.filter((c) => c.status === 'running').length;
+  const waiting = state.cards.filter((c) => c.status === 'blocked' || c.status === 'review').length;
   return (
     <>
-      <Toolbar title="看板" sub="交给助手的事 · Hermes 看板 default · 紫苑创建，派发器每 60 秒派一次" />
-      <div className="view" style={{ overflow: 'hidden' }}>
-        <div className="split">
-          <div className="split-main">
-            <div className="kb">
-              {COLUMNS.map((col) => {
-                const cards = state.cards.filter(col.match).sort((a, b) => b.updatedAt - a.updatedAt);
-                return (
-                  <section key={col.key} className={`kb-col kb-${col.key}`}>
-                    <h3>
-                      {col.label} <span className="faint num">{cards.length}</span>
-                      <span className="mono faint kb-hint">{col.hint}</span>
-                    </h3>
-                    {cards.map((c) => (
-                      <CardTile key={c.id} card={c} state={state} now={now} selected={c.id === cardId} />
-                    ))}
-                    {cards.length === 0 && <div className="faint empty-col">没有</div>}
-                  </section>
-                );
-              })}
-            </div>
+      <Toolbar title="看板" sub={`${running} 件在做${waiting ? ` · ${waiting} 件等你` : ''}`} />
+      <div className="view split">
+        <div className="split-main board-canvas">
+          <div className="kb">
+            {COLUMNS.map((col) => {
+              const cards = state.cards.filter(col.match).sort((a, b) => b.updatedAt - a.updatedAt);
+              return (
+                <section key={col.key} className={`kb-col kb-${col.key}`}>
+                  <h3>
+                    {col.label}
+                    <span>{cards.length}</span>
+                  </h3>
+                  {cards.map((c) => {
+                    const bot = state.bots.find((b) => b.id === c.assignee);
+                    return (
+                      <a key={c.id} className={`kb-card${c.id === cardId ? ' on' : ''}`} href={cardHref(c.id)}>
+                        <span className="kb-title">{c.title}</span>
+                        <span className={`kb-line${col.key === 'waiting' ? ' warm' : ''}`}>{cardLine(c, state, now)}</span>
+                        <span className="kb-who">
+                          <Avatar bot={bot} size={16} />
+                          {bot?.name}
+                        </span>
+                      </a>
+                    );
+                  })}
+                  {cards.length === 0 && <p className="kb-empty">没有</p>}
+                </section>
+              );
+            })}
           </div>
-          {selected && <CardInspector card={selected} state={state} now={now} />}
         </div>
+        {selected && <CardInspector card={selected} state={state} now={now} />}
       </div>
     </>
-  );
-}
-
-function CardTile({ card, state, now, selected }: { card: Card; state: AppState; now: number; selected: boolean }) {
-  const bot = state.bots.find((b) => b.id === card.assignee);
-  return (
-    <a className={`panel kb-card${selected ? ' on' : ''}`} href={cardHref(card.id)}>
-      <div className="kc-top">
-        <span className="mono faint">{card.id}</span>
-        <CardStatusPill card={card} />
-      </div>
-      <div className="kc-title">{card.title}</div>
-      {card.status === 'running' && card.heartbeat && (
-        <div className="kc-line">
-          <HeartPulse size={12} color="var(--info)" />
-          <span>
-            {ago(card.heartbeat.at, now)} · {card.heartbeat.note}
-          </span>
-        </div>
-      )}
-      {card.status === 'blocked' && card.block && <div className="kc-line warn">{card.block.reason}</div>}
-      {card.status === 'done' && card.summary && <div className="kc-line muted">{card.summary}</div>}
-      {card.status === 'todo' && card.parents?.length ? (
-        <div className="kc-line faint">
-          <GitBranch size={12} />等 {card.parents.join('、')} 完成
-        </div>
-      ) : null}
-      <div className="kc-foot">
-        <Avatar bot={bot} size={18} />
-        <span>{bot?.name}</span>
-        <span className="faint">· {who(state, card.createdBy)}创建</span>
-        {card.comments.length > 0 && (
-          <span className="faint kc-com">
-            <MessageSquare size={11} />
-            {card.comments.length}
-          </span>
-        )}
-      </div>
-    </a>
   );
 }
 
 function CardInspector({ card, state, now }: { card: Card; state: AppState; now: number }) {
   const [text, setText] = useState('');
   const bot = state.bots.find((b) => b.id === card.assignee);
-  const screenAsk = state.asks.find((a) => a.cardId === card.id && a.kind === 'takeover');
-  const hasWork = !!state.chats[`w:${card.id}`];
+  const onScreen = state.asks.some((a) => a.cardId === card.id && a.kind === 'takeover');
+  const hasLog = !!state.chats[`w:${card.id}`];
+  const blocked = card.status === 'blocked';
   return (
-    <aside className="inspector" aria-label="任务卡详情">
-      <div className="insp-head">
-        <span className="mono faint">{card.id}</span>
-        <CardStatusPill card={card} />
-        <button className="btn ghost icon" style={{ marginLeft: 'auto' }} onClick={() => go('board')} aria-label="关闭">
-          <X size={15} />
+    <aside className="insp" aria-label="任务详情">
+      <div className="insp-bar">
+        <CardState card={card} />
+        <button className="icon-btn" onClick={() => go('board')} aria-label="关闭">
+          <X size={16} />
         </button>
       </div>
       <div className="insp-body">
         <h2 className="insp-title">{card.title}</h2>
-        <dl className="props">
-          <dt>负责</dt>
-          <dd>
-            <a className="chip" href={`#chat-${card.assignee}`}>
-              <Avatar bot={bot} size={14} />
-              {bot?.name}
-            </a>
-          </dd>
-          <dt>创建</dt>
-          <dd className="muted">
-            {who(state, card.createdBy)} · {ago(card.createdAt, now)}
-          </dd>
-          {card.parents?.length ? (
-            <>
-              <dt>依赖</dt>
-              <dd>
-                {card.parents.map((p) => (
-                  <a key={p} className="chip mono" href={cardHref(p)}>
-                    {p}
-                  </a>
-                ))}
-              </dd>
-            </>
-          ) : null}
-        </dl>
-        <p className="body-text">{card.body}</p>
+        <p className="insp-meta">
+          <a className="inline-link" href={`#chat-${card.assignee}`}>
+            <Avatar bot={bot} size={16} />
+            {bot?.name}
+          </a>
+          负责 · {who(state, card.createdBy)}交代的 · {ago(card.createdAt, now)}
+        </p>
+        <p className="insp-text">{card.body}</p>
 
-        {card.status === 'blocked' && card.block && (
-          <div className="block-box">
-            <strong>{card.block.kind === 'needs_input' ? '等你：' : '受阻：'}</strong>
-            {card.block.reason}
-            {screenAsk && (
-              <button className="btn primary mini" onClick={() => go(`desktop-${card.assignee}`)}>
-                <Monitor size={12} />
-                去云桌面接管
+        {blocked && card.block && (
+          <div className="callout warm">
+            <span>{card.block.reason}</span>
+            {onScreen && (
+              <button className="btn sm primary" onClick={() => go(`desktop-${card.assignee}`)}>
+                <Monitor size={13} />
+                去云桌面
               </button>
             )}
           </div>
         )}
-        {card.summary && (
-          <div className="summary-box">
-            <span className="faint">结果</span>
-            {card.summary}
-          </div>
-        )}
-        {hasWork && (
-          <a className="btn" href={workHref(card.id)}>
-            看工作记录 <ArrowRight size={12} />
+        {card.summary && <div className="callout">{card.summary}</div>}
+        {hasLog && (
+          <a className="inline-link more" href={workHref(card.id)}>
+            看它是怎么做的 <ArrowUpRight size={12} />
           </a>
         )}
 
-        <section className="side-sec">
-          <h3>评论（助手每次运行都会读到）</h3>
-          {card.comments.length === 0 && <span className="faint">还没有评论</span>}
+        <section className="insp-sec">
+          <h4>留言</h4>
+          <p className="quiet small">助手每次开始做都会先读这里。</p>
           {card.comments.map((c, i) => {
             const b = state.bots.find((x) => x.id === c.author);
             return (
-              <div key={i} className="comment">
+              <div key={i} className="note">
                 <Avatar bot={b} size={20} />
-                <div style={{ minWidth: 0 }}>
-                  <div className="meta">
+                <div>
+                  <div className="note-head">
                     <b>{c.author === 'you' ? '你' : b?.name ?? c.author}</b>
                     {ago(c.at, now)}
                   </div>
@@ -182,46 +129,49 @@ function CardInspector({ card, state, now }: { card: Card; state: AppState; now:
             );
           })}
           <form
-            className="actions"
+            className="inline-form"
             onSubmit={(e) => {
               e.preventDefault();
               if (!text.trim()) return;
-              if (card.status === 'blocked') unblockCard(card.id, text.trim());
+              if (blocked) unblockCard(card.id, text.trim());
               else commentCard(card.id, text.trim());
               setText('');
             }}
           >
             <input
-              id={`card-comment-${card.id}`}
+              id={`card-note-${card.id}`}
               className="field"
-              style={{ flex: 1 }}
               value={text}
               onChange={(e) => setText(e.target.value)}
-              placeholder={card.status === 'blocked' ? '写下补充的信息，解除阻塞后重新运行' : '留评论，下次运行时助手会读到'}
+              placeholder={blocked ? '补充它需要的信息' : '留言'}
+              aria-label="留言"
             />
             <button className="btn primary" type="submit" disabled={!text.trim()}>
-              {card.status === 'blocked' ? '解除阻塞' : '评论'}
+              {blocked ? '让它继续' : '发送'}
             </button>
           </form>
         </section>
 
-        <section className="side-sec">
-          <h3>运行记录</h3>
-          {card.runs.length === 0 && <span className="faint">还没运行过</span>}
-          {[...card.runs].reverse().map((r, i) => (
-            <div key={r.id} className="run-row">
-              <span className="mono faint">#{card.runs.length - i}</span>
-              <span>
-                {hm(r.startedAt)}
-                {r.endedAt ? `–${hm(r.endedAt)}` : ' 起'}
-              </span>
-              <span className={`pill tone-${r.outcome === 'completed' ? 'good' : r.outcome === 'running' ? 'info' : 'warning'}`}>
-                {{ running: '运行中', completed: '完成', blocked: '阻塞' }[r.outcome]}
-              </span>
-              {r.note && <span className="faint run-note">{r.note}</span>}
-            </div>
-          ))}
-        </section>
+        {card.runs.length > 0 && (
+          <section className="insp-sec">
+            <h4>经过</h4>
+            <ol className="runs">
+              {card.runs.map((r, i) => (
+                <li key={r.id}>
+                  <span className="runs-n">第 {i + 1} 次</span>
+                  <span className="quiet">
+                    {hm(r.startedAt)}
+                    {r.endedAt ? `–${hm(r.endedAt)}` : ' 开始'}
+                  </span>
+                  <span className={r.outcome === 'completed' ? 'ok' : r.outcome === 'blocked' ? 'warm' : 'quiet'}>
+                    {{ running: '进行中', completed: '做完了', blocked: '停下来等你' }[r.outcome]}
+                  </span>
+                </li>
+              ))}
+            </ol>
+          </section>
+        )}
+        <p className="insp-tech">编号 {card.id} · Hermes 看板 default</p>
       </div>
     </aside>
   );

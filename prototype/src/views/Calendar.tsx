@@ -18,7 +18,7 @@ export function CalendarView({ state }: { state: AppState }) {
 
   return (
     <>
-      <Toolbar title="日程" sub={`${md(days[0])} – ${md(days[6])} · 课表、日程和排进去的待办`}>
+      <Toolbar title="日程" sub={`${md(days[0])} – ${md(days[6])}`}>
         <div className="legend hide-narrow">
           {(['study', 'work', 'life'] as const).map((a) => (
             <span key={a}>

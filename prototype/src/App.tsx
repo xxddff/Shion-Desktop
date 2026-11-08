@@ -76,20 +76,18 @@ export function App() {
   const openQuick = useCallback(() => setQuick(true), []);
 
   return (
-    <NavContext.Provider value={{ openNav }}>
+    <NavContext.Provider value={{ openNav, openQuick }}>
       <div className="desk">
         <MenuBar state={state} onQuickAsk={openQuick} />
         <div className="window-wrap">
           <div className={`window${nav ? ' nav-open' : ''}`}>
-            <Sidebar state={state} route={route} onQuickAsk={openQuick} onConnection={() => setConn((x) => !x)} />
+            <Sidebar state={state} route={route} onConnection={() => setConn((x) => !x)} />
             {nav && <div className="scrim" style={{ zIndex: 44 }} onClick={() => setNav(false)} />}
             <main className="main">
               {route.view === 'today' && <Today state={state} />}
               {route.view === 'todos' && <Todos state={state} />}
               {route.view === 'board' && <BoardView state={state} cardId={route.cardId} />}
-              {route.view === 'work' && (
-                <ChatView state={state} botId={state.cards.find((c) => c.id === route.cardId)?.assignee ?? ''} sessionKey={`w:${route.cardId}`} />
-              )}
+              {route.view === 'work' && <ChatView state={state} botId={state.cards.find((c) => c.id === route.cardId)?.assignee ?? ''} focusCard={route.cardId} />}
               {route.view === 'calendar' && <CalendarView state={state} />}
               {route.view === 'reports' && <Reports state={state} kind={route.kind} />}
               {route.view === 'confirm' && <Confirm state={state} />}

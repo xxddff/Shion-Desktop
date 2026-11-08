@@ -1,4 +1,4 @@
-import { ArrowRight, CalendarDays, CircleCheck, Flower2, Hand, Newspaper, Send, Sun, TrainFront, X } from 'lucide-react';
+import { ArrowRight, CalendarDays, CircleCheck, Flower2, Hand, Monitor, Newspaper, Search, SquareKanban, Sun, TrainFront, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { dayDiff } from '../data/clock';
 import type { AppState, Toast } from '../data/model';
@@ -28,10 +28,12 @@ export function QuickAsk({ state, onClose }: { state: AppState; onClose: () => v
     if (!k) return [];
     const pages: Hit[] = [
       { label: '今天', icon: <Sun size={15} />, hash: 'today' },
+      { label: '等你确认', icon: <Hand size={15} />, hash: 'confirm' },
       { label: '待办', icon: <CircleCheck size={15} />, hash: 'todos' },
       { label: '日程', icon: <CalendarDays size={15} />, hash: 'calendar' },
       { label: '日报', icon: <Newspaper size={15} />, hash: 'reports' },
-      { label: '等你确认', icon: <Hand size={15} />, hash: 'confirm' },
+      { label: '看板', icon: <SquareKanban size={15} />, hash: 'board' },
+      { label: '云桌面', icon: <Monitor size={15} />, hash: 'desktop' },
     ];
     const bots = state.bots.map((b) => ({ label: b.name, hint: b.title, icon: <Avatar bot={b} size={18} />, hash: `chat-${b.id}` }));
     const todos = state.todos.filter((t) => !t.done).map((t) => ({ label: t.title, hint: '待办', icon: <AreaDot area={t.area} />, hash: 'todos' }));
@@ -58,7 +60,7 @@ export function QuickAsk({ state, onClose }: { state: AppState; onClose: () => v
             } else if (q.trim()) send(q.trim());
           }}
         >
-          <Avatar bot={chief} size={26} />
+          <Flower2 size={20} />
           <input
             id="quick-input"
             autoFocus
@@ -76,43 +78,47 @@ export function QuickAsk({ state, onClose }: { state: AppState; onClose: () => v
                 setSel((x) => Math.max(-1, x - 1));
               } else if (e.key === 'Escape') onClose();
             }}
-            placeholder="跟紫苑说点什么，或者搜索…"
+            placeholder="跟紫苑说点什么，或者搜索"
+            aria-label="跟紫苑说点什么，或者搜索"
           />
-          <kbd>↩ 发送</kbd>
         </form>
-        <ul>
+        <ul className="quick-list">
           {hits.length === 0 && (
             <>
-              <li className="grp">可以这样说</li>
+              <li className="quick-group">可以这样说</li>
               {SUGGEST.map((s) => (
                 <li key={s}>
-                  <button onClick={() => send(s)}>
-                    <Send size={14} />
-                    {s}
-                  </button>
+                  <button onClick={() => send(s)}>{s}</button>
                 </li>
               ))}
             </>
           )}
-          {hits.length > 0 && <li className="grp">跳转到</li>}
-          {hits.map((h, i) => (
-            <li key={`${h.hash}-${h.label}`}>
-              <button
-                aria-selected={i === sel}
-                onMouseEnter={() => setSel(i)}
-                onClick={() => {
-                  go(h.hash);
-                  onClose();
-                }}
-              >
-                {h.icon}
-                <span className="grow">{h.label}</span>
-                {h.hint && <span className="faint">{h.hint}</span>}
-              </button>
-            </li>
-          ))}
+          {hits.length > 0 && (
+            <>
+              <li className="quick-group">
+                <Search size={11} /> 跳转
+              </li>
+              {hits.map((h, i) => (
+                <li key={`${h.hash}-${h.label}`}>
+                  <button
+                    aria-selected={i === sel}
+                    onMouseEnter={() => setSel(i)}
+                    onClick={() => {
+                      go(h.hash);
+                      onClose();
+                    }}
+                  >
+                    {h.icon}
+                    <span className="grow">{h.label}</span>
+                    {h.hint && <span className="quiet">{h.hint}</span>}
+                  </button>
+                </li>
+              ))}
+              <li className="quick-group">按 ↩ 把这句话交给紫苑</li>
+            </>
+          )}
         </ul>
-        <div className="quick-foot faint">在 Mac 上任何地方按 ⌥Space 都能叫出这个框</div>
+        <p className="quick-foot">在 Mac 上任何地方按 ⌥Space 都能叫出这里</p>
       </div>
     </>
   );
@@ -127,73 +133,77 @@ export function ConnectionPopover({ state, theme, setTheme, onClose }: { state: 
   return (
     <>
       <div className="scrim clear" onClick={onClose} />
-      <div className="popover" role="dialog" aria-label="连接">
-        <div className="section-title">Hermes 在哪里</div>
-        <div className="conn-row">
-          <span className="dot good" />
-          <div>
-            <div>{c.name}（VPS）</div>
-            <div className="faint mono">{c.host}</div>
-            <div className="faint">
-              {c.kind === 'cloudflare' ? 'Cloudflare Tunnel · Access' : c.kind === 'tailscale' ? 'Tailscale' : 'SSH 隧道'} · {c.auth}
+      <div className="popover" role="dialog" aria-label="连接与设置">
+        <section>
+          <h4>Hermes</h4>
+          <div className="pop-row">
+            <span className={`conn-dot ${c.state}`} />
+            <div className="grow">
+              <div>{c.name}</div>
+              <div className="quiet small">
+                {c.kind === 'cloudflare' ? 'Cloudflare Tunnel · Access' : c.kind === 'tailscale' ? 'Tailscale' : 'SSH 隧道'} · {c.auth} · {c.latencyMs} ms
+              </div>
             </div>
           </div>
-        </div>
-        <div className="conn-row off">
-          <span className="dot" />
-          <div>
-            <div>这台 Mac</div>
-            <div className="faint">以后接入：让助手在本机打开应用、读文件、用提醒事项</div>
+          <div className="pop-row off">
+            <span className="conn-dot offline" />
+            <div className="grow">
+              <div>这台 Mac</div>
+              <div className="quiet small">以后接入：让助手在本机打开应用、读文件、用提醒事项</div>
+            </div>
           </div>
-        </div>
-        <label className="switch" htmlFor="activity-toggle">
-          <span>
-            记录应用使用情况
-            <span className="faint block">只记应用名和时长，用来写每日回顾</span>
-          </span>
-          <input id="activity-toggle" type="checkbox" checked={c.activityLog} onChange={(e) => setActivityLog(e.target.checked)} />
-        </label>
-        <label className="switch" htmlFor="sim-toggle">
-          <span>示例数据实时播放</span>
-          <input id="sim-toggle" type="checkbox" checked={state.simulate} onChange={(e) => setSimulate(e.target.checked)} />
-        </label>
-        <div className="switch">
-          <span>外观</span>
-          <div className="segmented" role="group" aria-label="外观">
-            {(['system', 'light', 'dark'] as Theme[]).map((t) => (
-              <button key={t} aria-pressed={theme === t} onClick={() => setTheme(t)}>
-                {{ system: '跟随系统', light: '浅色', dark: '深色' }[t]}
-              </button>
-            ))}
+        </section>
+        <section>
+          <label className="pop-switch" htmlFor="activity-toggle">
+            <span className="grow">
+              记录应用使用情况
+              <span className="quiet small block">只记应用名和时长，用来写每日回顾</span>
+            </span>
+            <input id="activity-toggle" type="checkbox" checked={c.activityLog} onChange={(e) => setActivityLog(e.target.checked)} />
+          </label>
+          <label className="pop-switch" htmlFor="sim-toggle">
+            <span className="grow">示例数据自动播放</span>
+            <input id="sim-toggle" type="checkbox" checked={state.simulate} onChange={(e) => setSimulate(e.target.checked)} />
+          </label>
+          <div className="pop-switch">
+            <span className="grow">外观</span>
+            <div className="seg sm" role="group" aria-label="外观">
+              {(['system', 'light', 'dark'] as Theme[]).map((t) => (
+                <button key={t} aria-pressed={theme === t} onClick={() => setTheme(t)}>
+                  {{ system: '自动', light: '浅色', dark: '深色' }[t]}
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
+        </section>
       </div>
     </>
   );
 }
 
-// ------------------------------------------------------------ toasts (system notifications)
+// ------------------------------------------------------------ notifications
 
+/** Stand-ins for macOS notifications: at most two at a time, newest on top, each gone after a few seconds. */
 export function Toasts({ toasts, state }: { toasts: Toast[]; state: AppState }) {
+  const shown = [...toasts].reverse();
   useEffect(() => {
     if (!toasts.length) return;
-    const id = window.setTimeout(() => dismissToast(toasts[0].id), 7000);
+    const id = window.setTimeout(() => dismissToast(toasts[0].id), 6000);
     return () => window.clearTimeout(id);
   }, [toasts]);
   return (
     <div className="toasts" aria-live="polite">
-      {toasts.map((t) => {
+      {shown.map((t) => {
         const bot = state.bots.find((b) => b.id === t.botId);
         return (
           <a key={t.id} className="toast" href={t.href} onClick={() => dismissToast(t.id)}>
-            <Avatar bot={bot} size={30} />
-            <span>
-              <div className="t">{t.title}</div>
-              {t.body && <div className="b">{t.body}</div>}
+            <Avatar bot={bot} size={28} />
+            <span className="toast-main">
+              <span className="toast-title">{t.title}</span>
+              {t.body && <span className="toast-body">{t.body}</span>}
             </span>
             <button
-              className="btn ghost icon"
-              style={{ width: 20, height: 20 }}
+              className="icon-btn sm"
               aria-label="关闭"
               onClick={(e) => {
                 e.preventDefault();
@@ -201,7 +211,7 @@ export function Toasts({ toasts, state }: { toasts: Toast[]; state: AppState }) 
                 dismissToast(t.id);
               }}
             >
-              <X size={12} />
+              <X size={13} />
             </button>
           </a>
         );
@@ -233,7 +243,7 @@ export function MenuBar({ state, onQuickAsk }: { state: AppState; onQuickAsk: ()
   }, [open]);
   const next = state.events.filter((e) => dayDiff(e.start, now) === 0 && e.start > now && e.kind !== 'commute')[0];
   const top = state.todos
-    .filter((t) => !t.done && ((t.doAt && dayDiff(t.doAt, now) <= 0) || (t.dueAt && dayDiff(t.dueAt, now) <= 0)))
+    .filter((t) => !t.done && !t.proposed && ((t.doAt && dayDiff(t.doAt, now) <= 0) || (t.dueAt && dayDiff(t.dueAt, now) <= 0)))
     .sort((a, b) => (a.dueAt ?? a.doAt ?? Infinity) - (b.dueAt ?? b.doAt ?? Infinity))
     .slice(0, 3);
   const c = state.commute;
@@ -262,51 +272,47 @@ export function MenuBar({ state, onQuickAsk }: { state: AppState; onQuickAsk: ()
         </span>
       </div>
       {open && (
-        <>
-          <div className="mb-pop" role="dialog" aria-label="Shion">
-            {next && (
-              <div className="mbp-next">
-                <span className="faint">下一件 · {until(next.start, now)}</span>
-                <strong>{next.title}</strong>
-                <span className="muted">
-                  {hm(next.start)}–{hm(next.end)} · {next.place}
-                </span>
-              </div>
-            )}
-            <div className="mbp-row">
-              <TrainFront size={14} />
-              <span>
-                回程 {hm(c.leaveAt)} · {c.route.join(' → ')}
+        <div className="mb-pop" role="dialog" aria-label="Shion">
+          {next && (
+            <div className="mbp-next">
+              <span className="quiet small">下一件 · {until(next.start, now)}</span>
+              <strong>{next.title}</strong>
+              <span className="quiet">
+                {hm(next.start)}–{hm(next.end)} · {next.place}
               </span>
-              <span className={`pill ${c.status === 'normal' ? 'tone-good' : 'tone-warning'}`}>{c.status === 'normal' ? '正常' : '延误'}</span>
             </div>
-            <div className="mbp-todos">
-              {top.map((t) => (
-                <TodoRow key={t.id} t={t} now={now} />
-              ))}
-            </div>
-            {state.asks.length > 0 && (
-              <a
-                className="mbp-row link"
-                href="#confirm"
-                onClick={() => setOpen(false)}
-              >
-                <Hand size={14} />
-                <span>{state.asks.length} 件事等你确认</span>
-                <ArrowRight size={12} />
-              </a>
-            )}
-            <button
-              className="mbp-ask"
-              onClick={() => {
-                setOpen(false);
-                onQuickAsk();
-              }}
-            >
-              跟紫苑说… <kbd>⌥Space</kbd>
-            </button>
+          )}
+          <div className="mbp-row">
+            <TrainFront size={14} />
+            <span className="grow">
+              回程 {hm(c.leaveAt)} · {c.route.join(' → ')}
+            </span>
+            <span className={c.status === 'normal' ? 'ok' : 'warm'}>{c.status === 'normal' ? '正常' : '延误'}</span>
           </div>
-        </>
+          <div className="mbp-todos">
+            {top.map((t) => (
+              <TodoRow key={t.id} t={t} now={now} withDay={false} />
+            ))}
+          </div>
+          {state.asks.length > 0 && (
+            <a className="mbp-row link" href="#confirm" onClick={() => setOpen(false)}>
+              <Hand size={14} />
+              <span className="grow">{state.asks.length} 件事等你确认</span>
+              <ArrowRight size={13} />
+            </a>
+          )}
+          <button
+            className="mbp-ask"
+            onClick={() => {
+              setOpen(false);
+              onQuickAsk();
+            }}
+          >
+            <Flower2 size={14} />
+            <span className="grow">跟紫苑说…</span>
+            <kbd>⌥Space</kbd>
+          </button>
+        </div>
       )}
     </div>
   );

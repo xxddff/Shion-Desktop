@@ -66,3 +66,22 @@ export function useNow(intervalMs = 1000): number {
   }, [intervalMs]);
   return now;
 }
+
+const isEndOfDay = (t: number) => {
+  const d = new Date(t);
+  return (d.getHours() === 23 && d.getMinutes() === 59) || (d.getHours() === 0 && d.getMinutes() === 0);
+};
+
+/** When you plan to do it: just the time on the day you are looking at, else day and time. */
+export function planLabel(t: number, now: number, withDay: boolean): string {
+  if (!withDay) return isEndOfDay(t) ? '' : hm(t);
+  return isEndOfDay(t) ? dayLabel(t, now) : `${dayLabel(t, now)} ${hm(t)}`;
+}
+
+/** The deadline in words, with how loudly it should be shown. */
+export function dueLabel(t: number, now: number): { text: string; level: 'over' | 'soon' | 'calm' } {
+  if (t < now) return { text: dayDiff(t, now) === 0 ? `${hm(t)} 已截止` : `${dayLabel(t, now)}截止`, level: 'over' };
+  const sameDay = dayDiff(t, now) === 0;
+  const text = sameDay ? (isEndOfDay(t) ? '今天截止' : `${hm(t)} 截止`) : `${dayLabel(t, now)}截止`;
+  return { text, level: t - now < 24 * 3_600_000 ? 'soon' : 'calm' };
+}

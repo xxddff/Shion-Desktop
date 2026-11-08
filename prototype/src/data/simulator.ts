@@ -63,7 +63,7 @@ const notifyShion = (cardId: string, text: string, extra: { todoIds?: string[] }
   let next = withItem(s, 'shion', { role: 'card', at: demoNow(), cardId });
   next = withItem(next, 'shion', { role: 'assistant', text, at: demoNow(), ...extra });
   const open = next.cards.filter((c) => c.createdBy === 'shion' && c.status !== 'done').length;
-  return withBot(next, 'shion', { lastActiveAt: demoNow(), statusNote: open ? `跟进 ${open} 张卡` : '没有在跟的卡' });
+  return withBot(next, 'shion', { lastActiveAt: demoNow(), statusNote: open ? `在跟进 ${open} 件事` : '没有在跟进的事' });
 };
 
 const scripts: Runner[] = [
@@ -74,15 +74,15 @@ const scripts: Runner[] = [
       kind: 'say',
       text: '第7回讲了堆和优先队列。录音里老师提到 3 件要做的事：作业4（用数组实现二叉堆，附测试）周五 23:59 截止；下次课前读教材 7.3 节；期中考试范围到第8回。',
     },
-    { kind: 'tool', summary: '把 3 件待办提案写进 Shion 待办，日期等用户确认', tool: 'shion.todos.propose', ticks: 4, effect: studyTodos },
+    { kind: 'tool', summary: '把 3 件事写进了待办，日期先标成建议', tool: 'shion.todos.propose', ticks: 4, effect: studyTodos },
     {
       kind: 'tool',
-      summary: '完成任务卡：3 件待办提案，作业4 建议周三 19:00 做',
+      summary: '交付：3 件待办，作业4 建议周三 19:00 做',
       tool: 'kanban_complete',
       ticks: 3,
       effect: (s) => {
         let next = withComplete(s, 't_c7a1', '3 件待办提案，作业4 建议周三 19:00 做');
-        next = notifyShion('t_c7a1', '「课程」整理完第7回了，3 件事放进了待办。作业4 我排在周三 19:00 做，那天只有两节课，周五 23:59 截止前还空出一天。这样可以吗？', {
+        next = notifyShion('t_c7a1', '「课程」整理完第7回了，3 件事放进了待办。作业4 我排在周三 19:00，那天只有两节课，离周五 23:59 截止还空出一天。这样可以吗？', {
           todoIds: ['td7', 'td8', 'td13'],
         })(next);
         next = {
@@ -95,7 +95,7 @@ const scripts: Runner[] = [
               botId: 'shion',
               at: demoNow(),
               title: '作业4 排在周三 19:00 做，周五 23:59 截止，可以吗？',
-              detail: '来自任务卡 t_c7a1「整理第7回录音」。',
+              detail: '来自第7回录音的整理。',
               options: [
                 { label: '可以', value: 'ok', primary: true },
                 { label: '往后挪一天', value: 'later' },
@@ -105,8 +105,8 @@ const scripts: Runner[] = [
             },
           ],
         };
-        next = withBot(next, 'study', { status: 'online', statusNote: '等待下一张卡' });
-        return withToast(next, { title: '课程 完成了 t_c7a1', body: '新增 3 件待办，作业4 的日期等你确认', botId: 'shion', href: '#chat-shion' });
+        next = withBot(next, 'study', { status: 'online', statusNote: '接下来下载第7回课件' });
+        return withToast(next, { title: '「课程」整理完了第7回', body: '新增 3 件待办，作业4 的日期等你确认', botId: 'study', href: '#chat-shion' });
       },
     },
     // the dispatcher picks up the next card for the same assistant
@@ -117,7 +117,7 @@ const scripts: Runner[] = [
         let next = withClaim(s, 't_c7b2');
         next = withScreen(next, 'study', { running: true, app: 'sso', url: 'sso.univ.example/login', activity: '打开课程平台，跳到了学校统一认证' });
         next = withItem(next, 'w:t_c7b2', { role: 'tool', at: demoNow(), tool: { summary: '在云桌面上打开课程平台，准备下载第7回课件', tool: 'browser.navigate', status: 'done' } });
-        return withBot(next, 'study', { status: 'working', statusNote: 't_c7b2 · 在云桌面上：课程平台' });
+        return withBot(next, 'study', { status: 'working', statusNote: '在云桌面上打开课程平台' });
       },
     },
   ]),
@@ -125,10 +125,10 @@ const scripts: Runner[] = [
   run('w:t_c7b2', 'study', [
     { kind: 'until', test: (s) => s.cards.find((c) => c.id === 't_c7b2')?.status === 'running' },
     { kind: 'wait', ticks: 6 },
-    { kind: 'say', text: '课程平台跳到了学校统一认证，要两步验证，这一步得用户来。我先把卡标成「等人」，登录状态会留在云桌面的浏览器里。' },
+    { kind: 'say', text: '课程平台跳到了学校统一认证，要两步验证，这一步得你来。我先停在登录页，你登录一次，登录状态会留在云桌面的浏览器里。' },
     {
       kind: 'tool',
-      summary: '标记阻塞（needs_input）：需要你在云桌面上完成两步验证',
+      summary: '停下来等你：需要在云桌面上完成两步验证',
       tool: 'kanban_block',
       ticks: 2,
       effect: (s) => {
@@ -144,7 +144,7 @@ const scripts: Runner[] = [
               botId: 'study',
               at: demoNow(),
               title: '学校统一认证要两步验证，需要你在云桌面上登录一次',
-              detail: '任务卡 t_c7b2 卡在这一步。接管后登录、在手机上确认，然后点「交还」，卡片会自动继续。',
+              detail: '下载课件卡在这一步。接管后登录、在手机上确认，然后交还，它会接着做。',
               options: [
                 { label: '去接管', value: 'go', primary: true },
                 { label: '稍后', value: 'later' },
@@ -153,8 +153,8 @@ const scripts: Runner[] = [
             },
           ],
         };
-        next = withBot(next, 'study', { status: 'blocked', statusNote: 't_c7b2 等你接管云桌面' });
-        return withToast(next, { title: '课程 需要你接管云桌面', body: 't_c7b2：学校统一认证要两步验证', botId: 'study', href: '#desktop-study' });
+        next = withBot(next, 'study', { status: 'blocked', statusNote: '等你接管云桌面' });
+        return withToast(next, { title: '「课程」需要你接管云桌面', body: '学校统一认证要两步验证', botId: 'study', href: '#desktop-study' });
       },
     },
     // you take over, sign in and hand back: the card goes to ready and is re-run with your comment
@@ -165,28 +165,28 @@ const scripts: Runner[] = [
       run: (s) => {
         let next = withClaim(s, 't_c7b2');
         next = withScreen(next, 'study', { app: 'moodle', url: 'lms.univ.example/course/ds/week7', activity: '在下载第7回课件' });
-        return withBot(next, 'study', { status: 'working', statusNote: 't_c7b2 · 下载第7回课件' });
+        return withBot(next, 'study', { status: 'working', statusNote: '在下载第7回课件' });
       },
     },
     { kind: 'tool', summary: '下载了第7回课件（PDF，3.2 MB），存进 Notion「数据结构与算法」', tool: 'browser.download', ticks: 8 },
     {
       kind: 'tool',
-      summary: '完成任务卡：课件已存进 Notion',
+      summary: '交付：课件已存进 Notion',
       tool: 'kanban_complete',
       ticks: 2,
       effect: (s) => {
         let next = withComplete(s, 't_c7b2', '第7回课件已存进 Notion');
-        next = notifyShion('t_c7b2', '第7回课件也存进 Notion 了。复习卡片那张卡（t_c7c3）等着它，现在可以开始了。')(next);
+        next = notifyShion('t_c7b2', '第7回课件也存进 Notion 了，接下来做复习卡片。')(next);
         next = withScreen(next, 'study', { activity: '空闲中' });
-        next = withBot(next, 'study', { status: 'online', statusNote: '下一张：t_c7c3 复习卡片' });
-        return withToast(next, { title: '课程 完成了 t_c7b2', body: '第7回课件已存进 Notion', botId: 'shion', href: '#board' });
+        next = withBot(next, 'study', { status: 'online', statusNote: '接下来做复习卡片' });
+        return withToast(next, { title: '「课程」下载好了第7回课件', body: '已存进 Notion', botId: 'study', href: '#board' });
       },
     },
     // its child card t_c7c3 was waiting on it; the dispatcher claims it on the next tick
     { kind: 'wait', ticks: 12 },
     {
       kind: 'effect',
-      run: (s) => withBot(withClaim(s, 't_c7c3'), 'study', { status: 'working', statusNote: 't_c7c3 · 做第7回复习卡片' }),
+      run: (s) => withBot(withClaim(s, 't_c7c3'), 'study', { status: 'working', statusNote: '在做第7回复习卡片' }),
     },
   ]),
   run('w:t_c7c3', 'study', [
@@ -195,7 +195,7 @@ const scripts: Runner[] = [
     { kind: 'tool', summary: '做了 14 张问答卡片，存进 Notion「数据结构与算法」第7回', tool: 'notion.append_blocks', ticks: 8 },
     {
       kind: 'tool',
-      summary: '完成任务卡：14 张复习卡片',
+      summary: '交付：14 张复习卡片',
       tool: 'kanban_complete',
       ticks: 2,
       effect: (s) => {
@@ -215,7 +215,7 @@ const scripts: Runner[] = [
     },
     {
       kind: 'tool',
-      summary: '完成任务卡：不准确，实际约 +4%',
+      summary: '交付：不准确，实际约 +4%',
       tool: 'kanban_complete',
       ticks: 2,
       effect: (s) => {
@@ -224,7 +224,7 @@ const scripts: Runner[] = [
         next = notifyShion('t_f1e0', '电费那条查完了：上涨 30% 的说法不准确，12 月实际比 11 月高约 4%，主要是补贴结束。「30%」是拿不同口径的月份比出来的。')(next);
         next = withBot(next, 'news', { status: 'idle', statusNote: '下次 明天 07:00' });
         next = withScreen(next, 'news', { activity: '空闲中' });
-        return withToast(next, { title: '资讯 完成了 t_f1e0', body: '「电费上涨 30%」不准确，实际约 +4%', botId: 'shion', href: '#chat-shion' });
+        return withToast(next, { title: '「资讯」核实完了电费传言', body: '「上涨 30%」不准确，实际约 +4%', botId: 'news', href: '#chat-shion' });
       },
     },
   ]),
@@ -257,7 +257,7 @@ function replyFor(botId: string, text: string): Step[] {
     if (/核实|真的吗|查一下|是不是|调研|找一下/.test(text)) {
       const id = `t_${(++cardSeq).toString(16)}`;
       return [
-        { kind: 'say', text: '好，我建一张卡交给「资讯」，查完回到这里告诉你。' },
+        { kind: 'say', text: '好，交给「资讯」去查，有结论我回来告诉你。' },
         {
           kind: 'effect',
           run: (s) => {

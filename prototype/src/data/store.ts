@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react';
 import { demoNow } from './clock';
+import { hm } from '../ui/format';
 import type { AppState, Ask, Card, ChatItem, Screen, Todo, Toast } from './model';
 import { nextId, seedState } from './seed';
 
@@ -64,7 +65,7 @@ export function withClaim(s: AppState, id: string): AppState {
   const last = card.comments[card.comments.length - 1];
   return withItem(next, key, {
     role: 'system',
-    text: `任务卡 ${id} · 第 ${n} 次运行${n > 1 && last ? ` · 读到评论：「${last.body}」` : ''}`,
+    text: `第 ${n} 次 · ${hm(demoNow())} 开始${n > 1 && last ? ` · 先读了留言：「${last.body}」` : ''}`,
     at: demoNow(),
   });
 }
@@ -108,7 +109,8 @@ export const withScreen = (s: AppState, botId: string, patch: Partial<Screen>): 
 
 export const withToast = (s: AppState, t: Omit<Toast, 'id'>): AppState => ({
   ...s,
-  toasts: [...s.toasts, { ...t, id: ++toastSeq }].slice(-3),
+  // like macOS banners: at most two on screen, older ones are dropped rather than queued
+  toasts: [...s.toasts, { ...t, id: ++toastSeq }].slice(-2),
 });
 
 /** Most urgent first: a bot stuck on your screen, then things it wants to send, then questions. */

@@ -1,132 +1,122 @@
-import { CalendarDays, CircleCheck, Hand, Menu, Monitor, Newspaper, Search, SquareKanban, Sun } from 'lucide-react';
+import { CalendarDays, CircleCheck, Flower2, Hand, Menu, Monitor, Newspaper, SquareKanban, Sun, type LucideIcon } from 'lucide-react';
 import { createContext, useContext, type ReactNode } from 'react';
-import { demoNow } from '../data/clock';
+import { dayDiff, demoNow } from '../data/clock';
 import type { AppState } from '../data/model';
 import type { Route } from '../route';
-import { Avatar } from '../ui/bits';
-import { dayDiff } from '../data/clock';
+import { Avatar, Busy, botMood } from '../ui/bits';
 
-export const NavContext = createContext<{ openNav: () => void }>({ openNav: () => {} });
+export const NavContext = createContext<{ openNav: () => void; openQuick: () => void }>({ openNav: () => {}, openQuick: () => {} });
 
-export function Toolbar({ title, sub, children }: { title: ReactNode; sub?: ReactNode; children?: ReactNode }) {
+/** The one door to the secretary from any page: opens the ⌘K panel. */
+export function AskButton() {
+  const { openQuick } = useContext(NavContext);
+  return (
+    <button className="ask-btn" onClick={openQuick}>
+      <Flower2 size={14} />
+      <span className="hide-narrow">跟紫苑说</span>
+      <kbd className="hide-narrow">⌘K</kbd>
+    </button>
+  );
+}
+
+export function Toolbar({
+  title,
+  sub,
+  children,
+  ask = true,
+  hideTitle = false,
+}: {
+  title: ReactNode;
+  sub?: ReactNode;
+  children?: ReactNode;
+  ask?: boolean;
+  /** For pages that already say who they are in large type (今天). */
+  hideTitle?: boolean;
+}) {
   const { openNav } = useContext(NavContext);
   return (
-    <header className="toolbar">
-      <button className="btn ghost icon menu-btn" onClick={openNav} aria-label="打开侧边栏">
+    <header className={`toolbar${hideTitle ? ' bare' : ''}`}>
+      <button className="icon-btn menu-btn" onClick={openNav} aria-label="打开侧边栏">
         <Menu size={16} />
       </button>
-      <div className="titles">
-        <h1>{title}</h1>
-        {sub && <span className="sub">{sub}</span>}
+      <div className="tb-titles">
+        <h1 className={hideTitle ? 'sr-only' : undefined}>{title}</h1>
+        {sub && <p>{sub}</p>}
       </div>
-      {children}
+      <div className="tb-actions">
+        {children}
+        {ask && <AskButton />}
+      </div>
     </header>
   );
 }
 
-interface SidebarProps {
-  state: AppState;
-  route: Route;
-  onQuickAsk: () => void;
-  onConnection: () => void;
+function Item({ href, icon: Icon, label, current, trail }: { href: string; icon: LucideIcon; label: string; current: boolean; trail?: ReactNode }) {
+  return (
+    <a className="sb-item" href={href} aria-current={current ? 'page' : undefined}>
+      <Icon size={16} strokeWidth={1.9} />
+      <span className="sb-label">{label}</span>
+      {trail}
+    </a>
+  );
 }
 
-export function Sidebar({ state, route, onQuickAsk, onConnection }: SidebarProps) {
+export function Sidebar({ state, route, onConnection }: { state: AppState; route: Route; onConnection: () => void }) {
   const now = demoNow();
-  const todayTodos = state.todos.filter((t) => !t.done && ((t.doAt && dayDiff(t.doAt, now) <= 0) || (t.dueAt && dayDiff(t.dueAt, now) <= 0))).length;
-  const current = (v: string, id?: string) =>
-    route.view === v && (id === undefined || (route.view === 'chat' && route.botId === id)) ? 'page' : undefined;
-  const chief = state.bots.find((b) => b.chief)!;
-  const team = state.bots.filter((b) => !b.chief);
-  const asksFor = (id: string) => state.asks.filter((a) => a.botId === id).length;
+  const today = state.todos.filter((t) => !t.done && ((t.doAt && dayDiff(t.doAt, now) <= 0) || (t.dueAt && dayDiff(t.dueAt, now) <= 0))).length;
+  const is = (v: Route['view']) => route.view === v;
   const c = state.connection;
+  const team = [...state.bots].sort((a, b) => Number(!!b.chief) - Number(!!a.chief));
+  const workBot = route.view === 'work' ? state.cards.find((x) => x.id === route.cardId)?.assignee : undefined;
 
   return (
     <nav className="sidebar" aria-label="导航">
-      <div className="sidebar-head">
+      <div className="sb-head">
         <div className="traffic" aria-hidden="true">
           <i />
           <i />
           <i />
         </div>
       </div>
-      <div className="sidebar-scroll">
-        <button className="search-btn" onClick={onQuickAsk}>
-          <Search size={13} />
-          跟紫苑说，或搜索…
-          <kbd>⌘K</kbd>
-        </button>
-        <a className="side-item" href="#today" aria-current={current('today')}>
-          <Sun size={15} />
-          <span className="label">今天</span>
-        </a>
-        <a className="side-item" href="#todos" aria-current={current('todos')}>
-          <CircleCheck size={15} />
-          <span className="label">待办</span>
-          {todayTodos > 0 && <span className="count">{todayTodos}</span>}
-        </a>
-        <a className="side-item" href="#board" aria-current={current('board') ?? (route.view === 'work' ? 'page' : undefined)}>
-          <SquareKanban size={15} />
-          <span className="label">看板</span>
-          {state.cards.some((c) => c.status === 'blocked') ? (
-            <span className="dot warning" title="有卡在等你" />
-          ) : (
-            <span className="count">{state.cards.filter((c) => c.status === 'running').length} 进行中</span>
-          )}
-        </a>
-        <a className="side-item" href="#calendar" aria-current={current('calendar')}>
-          <CalendarDays size={15} />
-          <span className="label">日程</span>
-        </a>
-        <a className="side-item" href="#reports" aria-current={current('reports')}>
-          <Newspaper size={15} />
-          <span className="label">日报</span>
-        </a>
-        <a className="side-item" href="#confirm" aria-current={current('confirm')}>
-          <Hand size={15} />
-          <span className="label">等你确认</span>
-          {state.asks.length > 0 && <span className="badge">{state.asks.length}</span>}
-        </a>
+      <div className="sb-scroll">
+        <Item href="#today" icon={Sun} label="今天" current={is('today')} />
+        <Item
+          href="#confirm"
+          icon={Hand}
+          label="等你确认"
+          current={is('confirm')}
+          trail={state.asks.length > 0 && <span className="sb-badge">{state.asks.length}</span>}
+        />
+        <Item href="#todos" icon={CircleCheck} label="待办" current={is('todos')} trail={today > 0 && <span className="sb-count">{today}</span>} />
+        <Item href="#calendar" icon={CalendarDays} label="日程" current={is('calendar')} />
+        <Item href="#reports" icon={Newspaper} label="日报" current={is('reports')} />
 
-        <a className="side-item" href="#desktop" aria-current={current('desktop')}>
-          <Monitor size={15} />
-          <span className="label">云桌面</span>
-          {Object.values(state.screens).some((x) => x.needsHuman || x.control === 'you') ? (
-            <span className="dot warning" title="有助手在等你接管" />
-          ) : (
-            <span className="count">{Object.values(state.screens).filter((x) => x.running).length} 在运行</span>
-          )}
-        </a>
+        <div className="sb-group">工作区</div>
+        <Item href="#board" icon={SquareKanban} label="看板" current={is('board')} />
+        <Item href="#desktop" icon={Monitor} label="云桌面" current={is('desktop')} />
 
-        <div className="side-label">秘书</div>
-        <a className="side-item tall" href={`#chat-${chief.id}`} aria-current={current('chat', chief.id)}>
-          <Avatar bot={chief} size={26} showStatus />
-          <span className="label stacked">
-            <span>{chief.name}</span>
-            <span className="note">{chief.statusNote}</span>
-          </span>
-        </a>
-
-        <div className="side-label">助手</div>
-        {team.map((b) => (
-          <a key={b.id} className="side-item" href={`#chat-${b.id}`} aria-current={current('chat', b.id)}>
-            <Avatar bot={b} size={20} showStatus />
-            <span className="label">{b.name}</span>
-            {asksFor(b.id) > 0 && <span className="dot warning" title="有事等你确认" />}
-          </a>
-        ))}
+        <div className="sb-group">助手</div>
+        {team.map((b) => {
+          const mood = botMood(b, state.asks.some((a) => a.botId === b.id));
+          const current = (route.view === 'chat' && route.botId === b.id) || (route.view === 'work' && workBot === b.id);
+          return (
+            <a key={b.id} className="sb-item sb-bot" href={`#chat-${b.id}`} aria-current={current ? 'page' : undefined}>
+              <Avatar bot={b} size={22} />
+              <span className="sb-label">
+                {b.name}
+                {b.chief && <span className="sb-role">总秘书</span>}
+              </span>
+              {mood === 'busy' && <Busy />}
+              {mood === 'warm' && <span className="sb-dot" title="等你" />}
+            </a>
+          );
+        })}
       </div>
-      <div className="sidebar-foot">
-        <button className="conn-btn" onClick={onConnection}>
-          <span className={`dot ${c.state === 'connected' ? 'good' : c.state === 'reconnecting' ? 'warning' : 'critical'}`} />
-          <span className="meta">
-            <span>{c.state === 'connected' ? `已连接 ${c.name}` : '未连接'}</span>
-            <span className="mono">
-              {c.kind === 'cloudflare' ? 'Cloudflare' : c.kind === 'tailscale' ? 'Tailscale' : 'SSH'} · {c.latencyMs}ms · 本机{c.localMac === 'on' ? '已接入' : '未接入'}
-            </span>
-          </span>
-        </button>
-      </div>
+      <button className="sb-foot" onClick={onConnection}>
+        <span className={`conn-dot ${c.state}`} />
+        <span className="sb-label">{c.name}</span>
+        <span className="sb-note">示例数据</span>
+      </button>
     </nav>
   );
 }

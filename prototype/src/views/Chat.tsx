@@ -1,35 +1,33 @@
-import { CircleAlert, CircleCheck, LoaderCircle, MessageSquare, Play, Send, SquareKanban } from 'lucide-react';
+import { ArrowUp, ArrowUpRight, Check, CircleAlert } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import { CardChip, CardStatusPill, cardHref } from '../components/Cards';
+import { CardChip, CardRow, CardState, cardHref, workHref } from '../components/Cards';
 import { AskCard, TodoRow } from '../components/Items';
 import { ScreenMock } from '../components/Screen';
 import { Toolbar } from '../components/Shell';
 import type { AppState, Bot, Chat, ChatItem } from '../data/model';
-import { commentCard, runRoutine, sendMessage } from '../data/store';
+import { runRoutine, sendMessage } from '../data/store';
 import { go } from '../route';
-import { Avatar, BotStatusPill } from '../ui/bits';
+import { Avatar, Busy, botMood } from '../ui/bits';
 import { dayLabel, hm, useNow, when } from '../ui/format';
-import { ControlChip } from './Desktop';
 
 /**
- * One assistant: its Bot Chat (the single forever-conversation Bot Mode keeps
- * per profile, where you talk to it directly) plus a tab per kanban card it
- * has run today (the worker session the dispatcher spawned for that card).
+ * One assistant. 「对话」 is its Bot Chat, the single forever-conversation Bot
+ * Mode keeps per profile. 「工作记录」 lists the worker sessions the kanban
+ * dispatcher ran for its cards, newest first.
  */
-export function ChatView({ state, botId, sessionKey }: { state: AppState; botId: string; sessionKey?: string }) {
+export function ChatView({ state, botId, focusCard }: { state: AppState; botId: string; focusCard?: string }) {
   const now = useNow(5000);
   const bot = state.bots.find((b) => b.id === botId);
   const workers = Object.values(state.chats)
     .filter((c) => c.kind === 'worker' && c.botId === botId)
     .sort((a, b) => (state.cards.find((x) => x.id === b.cardId)?.createdAt ?? 0) - (state.cards.find((x) => x.id === a.cardId)?.createdAt ?? 0));
-  const key = sessionKey && state.chats[sessionKey] ? sessionKey : botId;
-  const chat = state.chats[key];
+  const tab = focusCard ? 'work' : 'talk';
 
   if (!bot) {
     return (
       <>
         <Toolbar title="找不到这个助手" />
-        <div className="view empty">
+        <div className="view empty-state">
           <a href="#today">回到今天</a>
         </div>
       </>
@@ -38,130 +36,142 @@ export function ChatView({ state, botId, sessionKey }: { state: AppState; botId:
 
   return (
     <>
-      <Toolbar title={bot.chief ? `${bot.name} · 总秘书` : bot.name} sub={`${bot.title} · ${bot.model}`}>
-        <BotStatusPill status={bot.status} />
-      </Toolbar>
-      <div className="view" style={{ overflow: 'hidden' }}>
-        <div className="chat-layout">
-          <div className="chat-main">
-            {workers.length > 0 && (
-              <div className="session-tabs" role="tablist" aria-label="会话">
-                <button role="tab" aria-selected={key === botId} onClick={() => go(`chat-${botId}`)}>
-                  <MessageSquare size={13} />
-                  Bot Chat
-                </button>
-                {workers.map((w) => {
-                  const card = state.cards.find((c) => c.id === w.cardId);
-                  return (
-                    <button key={w.key} role="tab" aria-selected={key === w.key} onClick={() => go(`work-${w.cardId!.slice(2)}`)} title={card?.title}>
-                      <SquareKanban size={13} />
-                      <span className="mono">{w.cardId}</span>
-                      {card && <CardStatusPill card={card} />}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-            {chat && <Transcript chat={chat} bot={bot} state={state} now={now} />}
-            {chat?.kind === 'worker' ? <WorkerComposer chat={chat} state={state} /> : <BotComposer bot={bot} />}
+      <Toolbar title={bot.name} sub={bot.title} ask={false}>
+        {workers.length > 0 && (
+          <div className="seg" role="tablist" aria-label="视图">
+            <button role="tab" aria-pressed={tab === 'talk'} onClick={() => go(`chat-${botId}`)}>
+              对话
+            </button>
+            <button role="tab" aria-pressed={tab === 'work'} onClick={() => go(workHref(workers[0].cardId!).slice(1))}>
+              工作记录 <span className="seg-n">{workers.length}</span>
+            </button>
           </div>
-          <BotPanel bot={bot} state={state} now={now} />
+        )}
+      </Toolbar>
+      <div className="view chat">
+        <div className="chat-main">
+          {tab === 'talk' ? (
+            <>
+              <Conversation chat={state.chats[botId]} bot={bot} state={state} now={now} />
+              <Composer bot={bot} />
+            </>
+          ) : (
+            <WorkLog workers={workers} bot={bot} state={state} now={now} focus={focusCard} />
+          )}
         </div>
+        <BotSide bot={bot} state={state} now={now} />
       </div>
     </>
   );
 }
 
-function Transcript({ chat, bot, state, now }: { chat: Chat; bot: Bot; state: AppState; now: number }) {
+type Block = { key: string; at: number } & ({ kind: 'item'; it: ChatItem } | { kind: 'steps'; items: ChatItem[] });
+
+/** Fold consecutive tool steps into one block so a conversation reads as sentences, not logs. */
+function blocks(items: ChatItem[]): Block[] {
+  const out: Block[] = [];
+  for (const it of items) {
+    const last = out[out.length - 1];
+    if (it.role === 'tool' && last?.kind === 'steps') last.items.push(it);
+    else if (it.role === 'tool') out.push({ key: it.id, at: it.at, kind: 'steps', items: [it] });
+    else out.push({ key: it.id, at: it.at, kind: 'item', it });
+  }
+  return out;
+}
+
+function Feed({ items, bot, state, now, heads = true }: { items: ChatItem[]; bot: Bot; state: AppState; now: number; heads?: boolean }) {
+  let day = '';
+  // who spoke last, so a run of the assistant's messages shows its name once
+  let speaker: 'bot' | 'you' | null = null;
+  let lastBotAt = 0;
+  return (
+    <>
+      {blocks(items).map((b) => {
+        const d = dayLabel(b.at, now);
+        const sep = heads && d !== day;
+        day = d;
+        let head = false;
+        if (b.kind === 'item') {
+          const role = b.it.role;
+          if (role === 'assistant') {
+            head = heads && (speaker !== 'bot' || b.at - lastBotAt > 10 * 60_000);
+            speaker = 'bot';
+            lastBotAt = b.at;
+          } else if (role === 'user') speaker = 'you';
+          else speaker = null;
+        }
+        return (
+          <div key={b.key} className="feed-row">
+            {sep && <div className="day">{d}</div>}
+            {b.kind === 'steps' ? <Steps items={b.items} /> : <Item it={b.it} bot={bot} state={state} now={now} head={head} />}
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
+function Conversation({ chat, bot, state, now }: { chat?: Chat; bot: Bot; state: AppState; now: number }) {
   const ref = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
-  const last = chat.items[chat.items.length - 1];
-  const asks = chat.kind === 'bot' ? state.asks.filter((a) => a.botId === bot.id) : state.asks.filter((a) => a.cardId === chat.cardId);
-  const card = chat.cardId ? state.cards.find((c) => c.id === chat.cardId) : undefined;
-
+  const items = chat?.items ?? [];
+  const last = items[items.length - 1];
+  const asks = state.asks.filter((a) => a.botId === bot.id);
   useEffect(() => {
     stick.current = true;
-  }, [chat.key]);
+  }, [bot.id]);
   useEffect(() => {
     const el = ref.current;
     if (el && stick.current) el.scrollTop = el.scrollHeight;
-  }, [chat.key, chat.items.length, last?.text, asks.length]);
-
-  let lastDay = '';
+  }, [bot.id, items.length, last?.text, asks.length]);
   return (
     <div
-      className="transcript"
+      className="convo"
       ref={ref}
       onScroll={(e) => {
         const el = e.currentTarget;
         stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
       }}
     >
-      {card && (
-        <div className="worker-head">
-          <CardChip card={card} state={state} />
-          <span className="faint">这是看板派发器为这张卡启动的工作会话，和 {bot.name} 的 Bot Chat 分开。想补充信息就给卡留评论。</span>
-        </div>
-      )}
-      {chat.items.map((it) => {
-        const d = dayLabel(it.at, now);
-        const sep = d !== lastDay;
-        lastDay = d;
-        return (
-          <div key={it.id} className="row-wrap">
-            {sep && <div className="day-sep">{d}</div>}
-            <Item it={it} bot={bot} state={state} now={now} />
-          </div>
-        );
-      })}
-      {asks.map((a) => (
-        <div key={a.id} className="inline-ask">
-          <AskCard ask={a} state={state} now={now} />
-        </div>
-      ))}
+      <div className="convo-inner">
+        <Feed items={items} bot={bot} state={state} now={now} />
+        {asks.map((a) => (
+          <AskCard key={a.id} ask={a} state={state} now={now} />
+        ))}
+      </div>
     </div>
   );
 }
 
-function Item({ it, bot, state, now }: { it: ChatItem; bot: Bot; state: AppState; now: number }) {
-  if (it.role === 'system') return <div className="sysline">{it.text}</div>;
+function Item({ it, bot, state, now, head }: { it: ChatItem; bot: Bot; state: AppState; now: number; head: boolean }) {
+  if (it.role === 'system') return <div className="sys">{it.text}</div>;
   if (it.role === 'card') {
     const card = state.cards.find((c) => c.id === it.cardId);
-    return card ? (
-      <div className="msg-card">
-        <CardChip card={card} state={state} />
-      </div>
-    ) : null;
+    return card ? <CardChip card={card} state={state} /> : null;
   }
-  if (it.role === 'tool' && it.tool) {
-    const t = it.tool;
+  if (it.role === 'user') {
     return (
-      <div className="tool-line" title={t.tool}>
-        {t.status === 'running' ? (
-          <LoaderCircle size={13} className="spin" color="var(--info)" />
-        ) : t.status === 'error' ? (
-          <CircleAlert size={13} color="var(--crit)" />
-        ) : (
-          <CircleCheck size={13} color="var(--good)" />
-        )}
-        <span>{t.summary}</span>
+      <div className="m-you">
+        <div className="bubble">{it.text}</div>
       </div>
     );
   }
-  const user = it.role === 'user';
   const todos = (it.todoIds ?? []).map((id) => state.todos.find((t) => t.id === id)).filter((t): t is NonNullable<typeof t> => !!t);
   return (
-    <div className={`msg${user ? ' user' : ''}`}>
-      <div className="who">
-        <span>{user ? '你' : bot.name}</span>
-        <span>{hm(it.at)}</span>
-      </div>
-      <div className="bubble">
+    <div className="m-bot">
+      {head && (
+        <div className="m-head">
+          <Avatar bot={bot} size={18} />
+          <b>{bot.name}</b>
+          <span>{hm(it.at)}</span>
+        </div>
+      )}
+      <div className="m-text">
         {it.text}
         {it.streaming && <span className="caret" />}
       </div>
       {todos.length > 0 && !it.streaming && (
-        <div className="msg-todos">
+        <div className="embed">
           {todos.map((t) => (
             <TodoRow key={t.id} t={t} now={now} />
           ))}
@@ -171,7 +181,34 @@ function Item({ it, bot, state, now }: { it: ChatItem; bot: Bot; state: AppState
   );
 }
 
-function BotComposer({ bot }: { bot: Bot }) {
+function Steps({ items }: { items: ChatItem[] }) {
+  const [open, setOpen] = useState(false);
+  const running = items.find((i) => i.tool?.status === 'running');
+  const shown = open ? items : [running ?? items[items.length - 1]];
+  return (
+    <div className="steps">
+      {shown.map((i) => (
+        <div key={i.id} className="step" title={i.tool!.tool}>
+          {i.tool!.status === 'running' ? (
+            <span className="spinner" />
+          ) : i.tool!.status === 'error' ? (
+            <CircleAlert size={13} className="red" />
+          ) : (
+            <Check size={13} strokeWidth={2.4} />
+          )}
+          <span>{i.tool!.summary}</span>
+        </div>
+      ))}
+      {items.length > 1 && (
+        <button className="steps-more" onClick={() => setOpen((x) => !x)}>
+          {open ? '收起' : `共 ${items.length} 步`}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function Composer({ bot }: { bot: Bot }) {
   const [text, setText] = useState('');
   return (
     <form
@@ -183,145 +220,113 @@ function BotComposer({ bot }: { bot: Bot }) {
         setText('');
       }}
     >
-      <input
-        id={`composer-${bot.id}`}
-        className="field"
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        placeholder={bot.chief ? '跟紫苑说；要花时间的事她会建卡交给助手' : `直接跟「${bot.name}」说…`}
-      />
-      <button className="btn primary" type="submit" disabled={!text.trim()}>
-        <Send size={13} />
-        发送
-      </button>
+      <div className="composer-box">
+        <input id={`composer-${bot.id}`} value={text} onChange={(e) => setText(e.target.value)} placeholder={`跟${bot.name}说…`} aria-label={`跟${bot.name}说`} />
+        <button className="send" type="submit" disabled={!text.trim()} aria-label="发送">
+          <ArrowUp size={15} strokeWidth={2.4} />
+        </button>
+      </div>
     </form>
   );
 }
 
-function WorkerComposer({ chat, state }: { chat: Chat; state: AppState }) {
-  const [text, setText] = useState('');
-  const card = state.cards.find((c) => c.id === chat.cardId);
+function WorkLog({ workers, bot, state, now, focus }: { workers: Chat[]; bot: Bot; state: AppState; now: number; focus?: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    ref.current?.querySelector('.wl.focus')?.scrollIntoView({ block: 'start' });
+  }, [focus]);
   return (
-    <form
-      className="composer"
-      onSubmit={(e) => {
-        e.preventDefault();
-        if (!text.trim() || !card) return;
-        commentCard(card.id, text.trim());
-        setText('');
-      }}
-    >
-      <input id={`comment-${chat.key}`} className="field" value={text} onChange={(e) => setText(e.target.value)} placeholder="给这张卡留评论，下次运行时助手会读到" />
-      <button className="btn" type="submit" disabled={!text.trim()}>
-        <MessageSquare size={13} />
-        评论
-      </button>
-    </form>
+    <div className="convo" ref={ref}>
+      <div className="convo-inner">
+        <p className="quiet small">看板把每件事交给{bot.name}时，都会单独开一段工作记录，和你们的对话分开。</p>
+        {workers.map((w) => {
+          const card = state.cards.find((c) => c.id === w.cardId)!;
+          return (
+            <section key={w.key} className={`wl${w.cardId === focus ? ' focus' : ''}`}>
+              <header className="wl-head">
+                <span className="wl-title">{card.title}</span>
+                <CardState card={card} />
+              </header>
+              <p className="wl-meta">
+                {card.createdBy === 'you' ? '你' : state.bots.find((b) => b.id === card.createdBy)?.name ?? '例行任务'}交代的 · {hm(card.createdAt)}
+                <a className="inline-link" href={cardHref(card.id)}>
+                  在看板里打开 <ArrowUpRight size={11} />
+                </a>
+              </p>
+              <div className="wl-body">
+                <Feed items={w.items} bot={bot} state={state} now={now} heads={false} />
+              </div>
+            </section>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
-function BotPanel({ bot, state, now }: { bot: Bot; state: AppState; now: number }) {
+function BotSide({ bot, state, now }: { bot: Bot; state: AppState; now: number }) {
+  const mood = botMood(bot, state.asks.some((a) => a.botId === bot.id));
   const cards = state.cards
     .filter((c) => (bot.chief ? c.createdBy === bot.id : c.assignee === bot.id) && c.status !== 'done')
     .sort((a, b) => b.updatedAt - a.updatedAt);
   const screen = state.screens[bot.id];
   return (
-    <aside className="bot-side">
-      <div className="bot-card-head">
+    <aside className="bside">
+      <div className="bside-head">
         <Avatar bot={bot} size={44} />
         <div>
-          <div className="bn">{bot.name}</div>
-          <div className="faint">{bot.title}</div>
+          <div className="bside-name">{bot.name}</div>
+          <div className="quiet">{bot.title}</div>
         </div>
       </div>
-      <p className="muted" style={{ margin: 0 }}>
-        {bot.description}
-      </p>
-      <div className="now-box">
-        {bot.status === 'working' && <LoaderCircle size={13} className="spin" color="var(--info)" />}
+      <p className="bside-desc">{bot.description}</p>
+      <div className={`bside-now ${mood}`}>
+        {mood === 'busy' ? <Busy /> : <span className="mood-dot" />}
         <span>{bot.statusNote}</span>
       </div>
 
-      {screen && (
-        <a className="side-screen" href={`#desktop-${bot.id}`} aria-label={`打开${bot.name}的云桌面`}>
+      {screen?.running && (
+        <a className="bside-screen" href={`#desktop-${bot.id}`} aria-label={`打开${bot.name}的云桌面`}>
           <ScreenMock screen={screen} />
-          <span className="ss-meta">
-            <span className="grow">云桌面</span>
-            <ControlChip screen={screen} />
+          <span>
+            云桌面 · {screen.control === 'you' ? '你在操作' : screen.needsHuman ? '等你接管' : screen.activity}
           </span>
         </a>
       )}
 
-      <section className="side-sec">
-        <h3>{bot.chief ? '她建的卡' : '手上的卡'}</h3>
-        {cards.length === 0 && <span className="faint">没有进行中的卡</span>}
-        {cards.map((c) => {
-          const a = state.bots.find((b) => b.id === c.assignee);
-          return (
-            <a key={c.id} className="mini-card" href={cardHref(c.id)}>
-              <span className="mc-top">
-                <span className="mono faint">{c.id}</span>
-                <CardStatusPill card={c} />
-              </span>
-              <span>{c.title}</span>
-              {bot.chief && <span className="faint">交给「{a?.name}」</span>}
-            </a>
-          );
-        })}
-        <a className="btn ghost mini" href="#board" style={{ justifySelf: 'start' }}>
-          打开看板
-        </a>
-      </section>
-
-      {bot.chief && (
-        <section className="side-sec">
-          <h3>团队</h3>
-          {state.bots
-            .filter((b) => !b.chief)
-            .map((b) => (
-              <a key={b.id} className="team-row" href={`#chat-${b.id}`}>
-                <Avatar bot={b} size={22} showStatus />
-                <span className="tr-main">
-                  <span>{b.name}</span>
-                  <span className="faint">{b.statusNote}</span>
-                </span>
-              </a>
+      {cards.length > 0 && (
+        <section className="bside-sec">
+          <h4>{bot.chief ? '在跟进' : '在做的事'}</h4>
+          <div className="list tight">
+            {cards.map((c) => (
+              <CardRow key={c.id} card={c} state={state} now={now} />
             ))}
+          </div>
         </section>
       )}
 
-      <section className="side-sec">
-        <h3>例行</h3>
+      <section className="bside-sec">
+        <h4>例行</h4>
         {bot.routines.map((r) => (
           <div key={r.id} className="routine">
-            <div className="rt-top">
-              <span className="rt-name">{r.name}</span>
-              <button className="btn ghost mini" onClick={() => runRoutine(bot.id, r.name)} title="现在运行一次（cron.submit）">
-                <Play size={11} />
-                现在运行
-              </button>
+            <div className="routine-main">
+              <span className="routine-name">{r.name}</span>
+              <span className="quiet">{r.schedule}</span>
+              {r.nextRunAt && <span className="quiet">下次 {when(r.nextRunAt, now)}</span>}
             </div>
-            <div className="faint">{r.schedule}</div>
-            <div className="faint">
-              {r.nextRunAt ? `下次 ${when(r.nextRunAt, now)}` : ''}
-              {r.lastRun ? ` · 上次 ${r.lastRun.note ?? (r.lastRun.ok ? '成功' : '失败')}` : ''}
-            </div>
+            <button className="link-btn" onClick={() => runRoutine(bot.id, r.name)}>
+              现在运行
+            </button>
           </div>
         ))}
       </section>
 
-      <section className="side-sec">
-        <h3>能用的工具</h3>
-        <div className="chips">
-          {bot.tools.map((t) => (
-            <span key={t} className="chip">
-              {t}
-            </span>
-          ))}
-        </div>
-        <div className="faint" style={{ fontSize: 11.5 }}>
-          profile: {bot.id} · {bot.model}
-        </div>
+      <section className="bside-sec">
+        <h4>能做的事</h4>
+        <p className="bside-tools">{bot.tools.join('、')}</p>
+        <p className="tech">
+          {bot.model} · profile {bot.id}
+        </p>
       </section>
     </aside>
   );

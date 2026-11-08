@@ -1,11 +1,11 @@
-import { BellRing, Plus, X } from 'lucide-react';
+import { Plus, X } from 'lucide-react';
 import { useState } from 'react';
+import { TodoRow } from '../components/Items';
+import { Toolbar } from '../components/Shell';
 import { dayDiff } from '../data/clock';
 import type { AppState, Area, Todo } from '../data/model';
 import { addTodo, updateTodo } from '../data/store';
-import { TodoRow } from '../components/Items';
-import { Toolbar } from '../components/Shell';
-import { AREA, AreaChip, Avatar } from '../ui/bits';
+import { AREA, Avatar } from '../ui/bits';
 import { until, useNow, when } from '../ui/format';
 
 type Filter = 'all' | Area;
@@ -47,11 +47,14 @@ export function Todos({ state }: { state: AppState }) {
   const [draft, setDraft] = useState('');
   const list = state.todos.filter((t) => filter === 'all' || t.area === filter);
   const selected = state.todos.find((t) => t.id === sel);
+  const open = state.todos.filter((t) => !t.done);
+  const overdue = open.filter((t) => group(t, now) === 'overdue').length;
+  const today = open.filter((t) => group(t, now) === 'today').length;
 
   return (
     <>
-      <Toolbar title="待办" sub={`${state.todos.filter((t) => !t.done).length} 件未完成 · ${state.todos.filter((t) => t.proposed).length} 件等你确认日期`}>
-        <div className="segmented" role="group" aria-label="按领域筛选">
+      <Toolbar title="待办" sub={`今天 ${today} 件${overdue ? ` · 逾期 ${overdue} 件` : ''}`}>
+        <div className="seg" role="group" aria-label="按领域筛选">
           {(['all', 'study', 'work', 'life'] as Filter[]).map((f) => (
             <button key={f} aria-pressed={filter === f} onClick={() => setFilter(f)}>
               {f === 'all' ? '全部' : AREA[f].label}
@@ -59,11 +62,11 @@ export function Todos({ state }: { state: AppState }) {
           ))}
         </div>
       </Toolbar>
-      <div className="view" style={{ overflow: 'hidden' }}>
-        <div className="split">
-          <div className="split-main">
+      <div className="view split">
+        <div className="split-main">
+          <div className="page narrow">
             <form
-              className="quick-add"
+              className="add-row"
               onSubmit={(e) => {
                 e.preventDefault();
                 if (!draft.trim()) return;
@@ -71,8 +74,9 @@ export function Todos({ state }: { state: AppState }) {
                 setDraft('');
               }}
             >
-              <Plus size={15} />
-              <input id="todo-add" value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="添加待办，回车保存；日期可以之后再定，或者让紫苑帮你排" />
+              <Plus size={16} />
+              <input id="todo-add" value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="新待办" aria-label="新待办" />
+              {draft.trim() && <kbd>↩</kbd>}
             </form>
             {GROUPS.map((g) => {
               const items = list
@@ -81,22 +85,30 @@ export function Todos({ state }: { state: AppState }) {
               if (!items.length) return null;
               const collapsed = g.key === 'done' && !showDone;
               return (
-                <section key={g.key} className={`todo-group g-${g.key}`}>
+                <section key={g.key} className={`tgroup g-${g.key}`}>
                   <h3>
                     {g.key === 'done' ? (
-                      <button className="linkish" onClick={() => setShowDone((x) => !x)}>
+                      <button className="link-btn" onClick={() => setShowDone((x) => !x)}>
                         {g.label} {items.length} · {showDone ? '收起' : '展开'}
                       </button>
                     ) : (
                       <>
-                        {g.label} <span className="faint num">{items.length}</span>
+                        {g.label}
+                        <span>{items.length}</span>
                       </>
                     )}
                   </h3>
                   {!collapsed && (
-                    <div className="todo-list">
+                    <div className="list">
                       {items.map((t) => (
-                        <TodoRow key={t.id} t={t} now={now} selected={t.id === sel} onSelect={() => setSel(t.id)} />
+                        <TodoRow
+                          key={t.id}
+                          t={t}
+                          now={now}
+                          withDay={g.key !== 'today' && g.key !== 'tomorrow'}
+                          selected={t.id === sel}
+                          onSelect={() => setSel(t.id)}
+                        />
                       ))}
                     </div>
                   )}
@@ -104,8 +116,8 @@ export function Todos({ state }: { state: AppState }) {
               );
             })}
           </div>
-          {selected && <TodoInspector t={selected} state={state} now={now} onClose={() => setSel(null)} />}
         </div>
+        {selected && <TodoInspector t={selected} state={state} now={now} onClose={() => setSel(null)} />}
       </div>
     </>
   );
@@ -115,57 +127,54 @@ function TodoInspector({ t, state, now, onClose }: { t: Todo; state: AppState; n
   const fromBot = t.source.kind === 'class' ? 'study' : t.source.kind === 'mail' ? 'mail' : 'shion';
   const bot = state.bots.find((b) => b.id === fromBot);
   return (
-    <aside className="inspector" aria-label="待办详情">
-      <div className="insp-head">
-        <AreaChip area={t.area} />
-        {t.proposed && <span className="pill tone-warning">等你确认日期</span>}
-        <button className="btn ghost icon" style={{ marginLeft: 'auto' }} onClick={onClose} aria-label="关闭">
-          <X size={15} />
+    <aside className="insp" aria-label="待办详情">
+      <div className="insp-bar">
+        <button className="icon-btn" onClick={onClose} aria-label="关闭">
+          <X size={16} />
         </button>
       </div>
       <div className="insp-body">
-        <input id={`title-${t.id}`} className="title-input" value={t.title} onChange={(e) => updateTodo(t.id, { title: e.target.value })} aria-label="标题" />
-        <dl className="props">
-          <dt>执行日期</dt>
+        <input id={`title-${t.id}`} className="insp-title-input" value={t.title} onChange={(e) => updateTodo(t.id, { title: e.target.value })} aria-label="标题" />
+        {t.proposed && <p className="insp-note warm">日期是「{bot?.name}」建议的，改好或直接确认都行。</p>}
+        <dl className="fields">
+          <dt>执行</dt>
           <dd>
             <input id={`do-${t.id}`} type="datetime-local" className="field" value={toLocal(t.doAt)} onChange={(e) => updateTodo(t.id, { doAt: fromLocal(e.target.value) })} />
           </dd>
-          <dt>截止日期</dt>
+          <dt>截止</dt>
           <dd>
             <input id={`due-${t.id}`} type="datetime-local" className="field" value={toLocal(t.dueAt)} onChange={(e) => updateTodo(t.id, { dueAt: fromLocal(e.target.value) })} />
-            {t.dueAt && !t.done && <span className={`faint${t.dueAt < now ? ' over-text' : ''}`}>{until(t.dueAt, now)}</span>}
+            {t.dueAt && !t.done && <span className={t.dueAt < now ? 'red' : 'quiet'}>{until(t.dueAt, now)}</span>}
           </dd>
           <dt>领域</dt>
           <dd>
-            <select id={`area-${t.id}`} className="field" value={t.area} onChange={(e) => updateTodo(t.id, { area: e.target.value as Area })}>
-              <option value="study">学习</option>
-              <option value="work">工作</option>
-              <option value="life">生活</option>
-            </select>
+            <div className="seg sm" role="group" aria-label="领域">
+              {(['study', 'work', 'life'] as Area[]).map((a) => (
+                <button key={a} aria-pressed={t.area === a} onClick={() => updateTodo(t.id, { area: a })}>
+                  {AREA[a].label}
+                </button>
+              ))}
+            </div>
           </dd>
-          <dt>来源</dt>
+          <dt>来自</dt>
           <dd>
-            <a href={`#chat-${fromBot}`} className="chip">
-              <Avatar bot={bot} size={14} />
+            <a href={`#chat-${fromBot}`} className="inline-link">
+              <Avatar bot={bot} size={16} />
               {t.source.label}
             </a>
           </dd>
         </dl>
-        <section className="side-sec">
-          <h3>紫苑怎么催你</h3>
-          <ul className="nudge-plan">
+        <section className="insp-sec">
+          <h4>紫苑会这样提醒你</h4>
+          <ul className="plain">
             {t.doAt && <li>到执行时间（{when(t.doAt, now)}）提醒一次</li>}
             {t.dueAt && <li>截止前 24 小时、3 小时各催一次</li>}
-            <li>没动静的话，晚上 21:00 的催促里再提一次</li>
-            {t.nudges > 0 && (
-              <li className="faint">
-                <BellRing size={11} /> 已经催过 {t.nudges} 次
-              </li>
-            )}
+            <li>还没动的话，晚上 21:00 再提一次</li>
+            {t.nudges > 0 && <li className="quiet">已经催过 {t.nudges} 次</li>}
           </ul>
         </section>
-        <section className="side-sec">
-          <h3>备注</h3>
+        <section className="insp-sec">
+          <h4>备注</h4>
           <textarea id={`notes-${t.id}`} className="field" rows={4} value={t.notes ?? ''} onChange={(e) => updateTodo(t.id, { notes: e.target.value })} placeholder="写点什么，助手处理这件事时会读到" />
         </section>
       </div>
