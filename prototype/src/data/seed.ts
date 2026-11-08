@@ -17,7 +17,7 @@ export const bots: Bot[] = [
     model: 'claude-sonnet-5-5',
     status: 'online',
     statusNote: '在等「课程」整理完录音',
-    tools: ['日程', '待办', '记忆', '委派给助手'],
+    tools: ['iCloud 日历', '提醒事项', '待办', '记忆', '委派给助手'],
     routines: [
       { id: 'r1', name: '早报', schedule: '每天 07:30', cron: '30 7 * * *', nextRunAt: at(1, 7, 30), lastRun: { at: at(0, 7, 30), ok: true } },
       { id: 'r2', name: '待办催促', schedule: '每天 12:00 · 18:00 · 21:00', cron: '0 12,18,21 * * *', nextRunAt: at(0, 12), lastRun: { at: at(-1, 21), ok: true } },
@@ -34,7 +34,7 @@ export const bots: Bot[] = [
     model: 'claude-sonnet-5-5',
     status: 'working',
     statusNote: '正在整理「数据结构与算法 第7回」',
-    tools: ['Notion', '课表', '待办'],
+    tools: ['Notion', '日历（课表）', '待办'],
     routines: [
       { id: 'r4', name: '课前提醒', schedule: '每节课开始前 10 分钟', cron: '按课表生成', nextRunAt: at(0, 12, 50), lastRun: { at: at(0, 8, 50), ok: true } },
       { id: 'r5', name: '课后整理', schedule: '每节课结束后 20 分钟', cron: '按课表生成', nextRunAt: at(0, 14, 50), lastRun: { at: at(0, 10, 50), ok: true, note: '运行中' } },
@@ -66,7 +66,7 @@ export const bots: Bot[] = [
     model: 'claude-sonnet-5-5',
     status: 'blocked',
     statusNote: '等你确认：发给中村老师的回复',
-    tools: ['邮箱', '通讯录', '日历'],
+    tools: ['邮箱（IMAP/SMTP）', '收件箱分拣', '日历'],
     routines: [
       { id: 'r8', name: '收件箱整理', schedule: '每天 08:00 · 13:00 · 19:00', cron: '0 8,13,19 * * *', nextRunAt: at(0, 13), lastRun: { at: at(0, 8), ok: true } },
     ],
@@ -173,7 +173,7 @@ const chats: Chat[] = [
 
 export function seedState(): AppState {
   return {
-    connection: { name: 'tokyo-vps', kind: 'ssh', host: 'me@tokyo-vps:22', state: 'connected', latencyMs: 18, localMac: 'off', activityLog: true },
+    connection: { name: 'tokyo-vps', kind: 'tailscale', host: 'http://tokyo-vps:9119', auth: '会话 token', state: 'connected', latencyMs: 18, localMac: 'off', activityLog: true },
     bots,
     chats: Object.fromEntries(chats.map((c) => [c.botId, c])),
     todos: [

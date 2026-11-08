@@ -133,7 +133,10 @@ export function ConnectionPopover({ state, theme, setTheme, onClose }: { state: 
           <span className="dot good" />
           <div>
             <div>{c.name}（VPS）</div>
-            <div className="faint mono">SSH 隧道 · {c.host}</div>
+            <div className="faint mono">{c.host}</div>
+            <div className="faint">
+              远程网关 · 经 {c.kind === 'tailscale' ? 'Tailscale' : c.kind === 'https' ? 'HTTPS' : 'SSH 隧道'} · {c.auth}登录
+            </div>
           </div>
         </div>
         <div className="conn-row off">

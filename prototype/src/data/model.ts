@@ -173,8 +173,11 @@ export interface Toast {
 
 export interface Connection {
   name: string;
-  kind: 'ssh' | 'url';
+  /** How the remote `hermes serve` is reached; SSH stays available as a fallback. */
+  kind: 'tailscale' | 'https' | 'ssh';
   host: string;
+  /** Dashboard auth provider: session token, username/password or OAuth. */
+  auth: string;
   state: 'connected' | 'reconnecting' | 'offline';
   latencyMs: number;
   localMac: 'off' | 'on';

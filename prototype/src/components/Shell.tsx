@@ -103,7 +103,7 @@ export function Sidebar({ state, route, onQuickAsk, onConnection }: SidebarProps
           <span className="meta">
             <span>{c.state === 'connected' ? `已连接 ${c.name}` : '未连接'}</span>
             <span className="mono">
-              SSH · {c.latencyMs}ms · 本机{c.localMac === 'on' ? '已接入' : '未接入'}
+              {c.kind === 'tailscale' ? 'Tailscale' : c.kind === 'https' ? 'HTTPS' : 'SSH'} · {c.latencyMs}ms · 本机{c.localMac === 'on' ? '已接入' : '未接入'}
             </span>
           </span>
         </button>
