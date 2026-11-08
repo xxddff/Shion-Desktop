@@ -144,7 +144,11 @@ export function addTodo(input: Pick<Todo, 'title' | 'area'> & Partial<Todo>): st
 export function takeOver(botId: string) {
   setState((s) => {
     let next = withScreen(s, botId, { control: 'you', running: true });
-    next = { ...next, asks: next.asks.filter((a) => !(a.kind === 'takeover' && a.botId === botId)) };
+    next = {
+      ...next,
+      asks: next.asks.filter((a) => !(a.kind === 'takeover' && a.botId === botId)),
+      toasts: next.toasts.filter((t) => t.href !== `#desktop-${botId}`),
+    };
     return withItem(next, botId, { role: 'system', text: '你接管了云桌面，助手暂停操作', at: demoNow() });
   });
 }
