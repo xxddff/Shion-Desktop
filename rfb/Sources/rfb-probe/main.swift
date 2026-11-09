@@ -391,7 +391,8 @@ func run() async {
         fail("writing \(out.path): \(describe(error))")
     }
     for line in progress.lock.withLock({ progress.events }) { log(line) }
-    log("updates: \(stats.updates), received \(stats.bytesReceived) bytes, sent \(stats.bytesSent), fences answered \(stats.fencesAnswered), keepalives answered \(stats.keepalivesAnswered)")
+    log("updates: \(stats.updates), received \(stats.bytesReceived) bytes, sent \(stats.bytesSent), fences answered \(stats.fencesAnswered), keepalives answered \(stats.keepalivesAnswered)"
+        + (stats.fencesSkipped > 0 ? ", oversized fences skipped \(stats.fencesSkipped)" : ""))
     for (encoding, count) in stats.rects.sorted(by: { $0.key > $1.key }) {
         log("  \(RFBEncoding(rawValue: encoding)): \(count) rects, \(stats.encodedBytes[encoding] ?? 0) bytes")
     }

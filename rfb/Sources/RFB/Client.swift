@@ -45,6 +45,8 @@ public struct RFBStatistics: Sendable, Equatable {
     /// Wire bytes per encoding, rect headers excluded.
     public var encodedBytes: [Int32: Int] = [:]
     public var fencesAnswered = 0
+    /// Server fences with more than 64 bytes of payload, skipped unanswered (as TigerVNC does).
+    public var fencesSkipped = 0
     /// Keepalive fences of ours the server answered.
     public var keepalivesAnswered = 0
 }
@@ -681,8 +683,14 @@ public actor RFBClient {
         _ = buffer.take(3)
         let flags = FenceFlags(rawValue: buffer.u32())
         let length = Int(buffer.u8())
-        // The Fence extension allows at most 64 bytes (TigerVNC refuses more, too).
-        guard length <= 64 else { throw RFBError.protocolViolation("fence payload of \(length) bytes") }
+        // The Fence extension allows at most 64 bytes. TigerVNC skips a longer fence unanswered
+        // and carries on (CMsgReader::readFence), and so do we: it is at most 255 bytes, and
+        // ending the session over it would drop a connection that otherwise works.
+        guard length <= 64 else {
+            try await discard(length)
+            statistics.fencesSkipped += 1
+            return
+        }
         let payload = try await bytes(length)
         serverSupportsFence = true
         guard flags.contains(.request) else {

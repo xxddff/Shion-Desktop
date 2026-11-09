@@ -122,10 +122,19 @@ import Testing
         await #expect(performing: { try await other.run() }, throws: Self.isViolation)
     }
 
-    @Test func fencePayloadOverSixtyFourBytesIsAProtocolError() async {
+    @Test func fenceOverSixtyFourBytesIsSkippedUnanswered() async throws {
+        // TigerVNC skips such a fence and carries on (CMsgReader::readFence); so do we, instead
+        // of ending a session that otherwise works. The fence and Bell after it prove the stream
+        // is still in step, also when the long payload arrives split across chunks.
         var s = ServerScript.handshake()
-        s.fence([.request], Array(repeating: 7, count: 65))
-        let client = RFBClient(transport: ReplayTransport(s.bytes))
-        await #expect(performing: { try await client.run() }, throws: Self.isViolation)
+        s.fence([.request, .blockBefore], Array(repeating: 7, count: 255))
+        s.fence([.request], [1, 2, 3])
+        s.bytes.append(2)
+        let (client, transport, events) = try await replay(s.bytes, chunkSizes: [1, 7, 100])
+        #expect(transport.sent.filter { $0.first == 248 } == [[248, 0, 0, 0, 0, 0, 0, 0, 3, 1, 2, 3]])
+        #expect(events == [.bell])
+        let stats = await client.statistics
+        #expect(stats.fencesSkipped == 1)
+        #expect(stats.fencesAnswered == 1)
     }
 }

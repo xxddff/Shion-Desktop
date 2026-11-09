@@ -16,7 +16,7 @@ Shion 的「云桌面」要看、要接管 VPS 上助手的 Xfce 桌面。Hermes
 | TigerVNC 扩展 | Fence（应答服务器的请求）、EnableContinuousUpdates、扩展剪贴板（UTF-8 文本） |
 | 输入消息 | KeyEvent、PointerEvent（含滚轮）、ClientCutText（Latin-1 和扩展剪贴板）。格式做对、测好了，还没接界面 |
 | 传输 | `URLSessionWebSocketTransport`（App 用：可带 Access 的请求头，一直挂着一个 receive，服务器主动关闭时能拿到关闭码）、`NWWebSocketTransport`（Network.framework，备用：服务器主动关闭时拿不到关闭码，见「探路发现」第 15 条）、`PlainWebSocketTransport`（自带的 `ws://` 客户端，Linux 测试用）、`SocketTransport`（TCP / Unix socket，直连 Xvnc）、`RecordingTransport` / `ReplayTransport`（录样本、放样本） |
-| 边界 | 服务器给的尺寸都有上限，分配内存之前先查：屏幕每边 ≤ 8192、总像素 ≤ 7680×4320（`maxScreenDimension` / `maxScreenPixels`）；ZRLE 的压缩长度和解压结果按矩形大小封顶；光标每边 ≤ 512 且热点在图里；名字、拒绝理由这类字符串只留前 4 KiB；服务器发来的剪贴板超过 256 KiB 就跳过（边读边丢，不攒在内存里） |
+| 边界 | 服务器给的尺寸都有上限，分配内存之前先查：屏幕每边 ≤ 8192、总像素 ≤ 7680×4320（`maxScreenDimension` / `maxScreenPixels`）；ZRLE 的压缩长度和解压结果按矩形大小封顶；光标每边 ≤ 512 且热点在图里；名字、拒绝理由这类字符串只留前 4 KiB；服务器发来的剪贴板超过 256 KiB 就跳过（边读边丢，不攒在内存里）；超过 64 字节的 Fence 和 TigerVNC 一样跳过、不回，连接照常 |
 | 超时、保活、取消 | 握手 20 秒没完成就断开；运行中每 15 秒发一个 Fence 当 keepalive，15 秒内没回就当连接已死（闲着的桌面什么都不发，没有这个就发现不了）；跑 `handshake` / `run` 的 task 被取消时，按 `closeOnCancel`（默认 1000）关闭连接 |
 | 输入顺序 | `post(_:)` 可以从任何线程调用，按调用顺序发出（每个 NSEvent 一个 `post`，按下、抬起、点击、粘贴不会乱序）；也可以直接调用 async 方法，由调用方自己保证顺序 |
 | 命令行 | `rfb-probe`：连上去、录下字节流、存一张 PNG |
@@ -185,7 +185,7 @@ RFB_TESTBED_PYTHON=~/testbed-venv/bin/python3 swift test
 - **消息**：每种客户端消息的字节、剪贴板大小限制、扩展剪贴板的来回、Fence 应答、连续更新只在服务器支持时打开、握手失败、流水线握手、光标形状。
 - **画面桥**：见上面「怎么保证只发桥认得的消息」。需要 python3。
 - **WebSocket 传输**：对 `replay_server.py` 跑：请求头、被拒的升级（403）、4000 传到调用方、关闭前的画面一帧不少、我们关闭时发 1000。macOS 上测 `URLSessionWebSocketTransport`、`NWWebSocketTransport` 和自带的客户端，Linux 上只测自带的（见下一节）。只有 Network.framework 收 4000 的那一项标成了「已知问题」（第 15 条）；各传输实际报了什么会打印到 stderr。另外：明文 `ws://` 只能带着请求头连回环地址、scheme 不分大小写、Foundation 错误去掉 URL、服务器帧长度最高位为 1 时不崩、服务器不回升级时按时放弃。
-- **边界**：超大的屏幕、DesktopSize、ZRLE 长度、ZRLE 解压炸弹、服务器剪贴板（老式和扩展）、名字和拒绝理由、光标尺寸和热点、超过 64 字节的 Fence，都在分配之前被挡下或跳过。
+- **边界**：超大的屏幕、DesktopSize、ZRLE 长度、ZRLE 解压炸弹、服务器剪贴板（老式和扩展）、名字和拒绝理由、光标尺寸和热点，都在分配之前被挡下或跳过；超过 64 字节的 Fence 跳过、不回，后面的消息照常解。
 - **连接结束**：写的一侧先坏、读的一侧还排着关闭帧时（包括流水线握手刚发出去就失败、桥接着用 4401 关闭），客户端照样读完、报出关闭码，之后不会再自己 abort；一直等不到原因时，宽限期后用 `.abort` 断开，报原来那次发送的错误，不会误交还租约；握手超时、keepalive 超时报 `timedOut`；取消 task 时按 `closeOnCancel` 关闭；超大的粘贴被拒不算连接出错。时间相关的测试在 CPU 被占满的情况下也连跑了十遍。
 - **输入顺序**：`run` 开始前后混着 post 的按键、指针、粘贴，发出去的顺序和 post 的顺序完全一样。
 
