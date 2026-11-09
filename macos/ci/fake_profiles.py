@@ -12,14 +12,25 @@ Shaped like the routes Shion's assistant pages use, with their refusals:
            as hermes_cli/profiles.py delete_profile does), …/soul, …/description, …/model,
            /api/model/options, /api/mcp/servers (+ /{name}, /enabled, /test, /auth),
            /api/mcp/oauth/flows/{id}, /api/mcp/catalog (+ /install), /api/skills (+ /toggle,
-           /lock), /api/tools/toolsets (+ /{name}), /api/config?profile=, /api/config/defaults
+           /lock), /api/tools/toolsets (+ /{name}), /api/config?profile= (mcp_servers merged the way
+           hermes_cli/config.py _deep_merge does), /api/config/defaults, /api/actions/{name}/status
+  socket   profiles.get_asset / set_asset (the avatar), mcp.servers.add / remove / set_api_key
+           (tui_gateway/methods_tools.py), cli.exec (only `hermes profile purge-identity` is played)
+
+Fixtures for the second round: archive-ci is hidden by Bot Mode (ui_meta hidden: true); 通勤 has an
+avatar picture; deleting mail-ci leaves its identity unsettled (settlement_pending) until the third
+purge-identity; the catalog's slow-ci installs in the background; the second read of 通勤's SOUL finds
+it changed by another client.
 
 Stricter than Hermes in one way, on purpose: a per-profile REST route without ?profile= is refused
 here (400), where Hermes would quietly act on the gateway's own profile. Shion must always name the
 profile it means. Secrets (MCP env values, bearer tokens, catalog keys) are never logged. Stdlib only.
 """
+import base64
 import copy
 import json
+import struct
+import zlib
 import re
 import secrets
 import threading
@@ -61,6 +72,8 @@ CATALOG = [
      "command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"], "url": None, "needs_install": False},
     {"name": "fetch", "description": "Fetch a web page as markdown", "transport": "stdio", "auth_type": "none",
      "required_env": [], "command": "uvx", "args": ["mcp-server-fetch"], "url": None, "needs_install": False},
+    {"name": "slow-ci", "description": "Cloned from git before it runs (CI)", "transport": "stdio", "auth_type": "none",
+     "required_env": [], "command": "uvx", "args": ["slow-ci-server"], "url": None, "needs_install": True},
 ]
 DEFAULTS = {
     "approvals": {"mode": "smart", "timeout": 300, "cron_mode": "deny"},
@@ -75,6 +88,11 @@ CONFIGURE_KEYS = {"profile", "name", "ui_meta", "ui_meta_expected_revisions", "s
 
 profiles = {}  # name -> state, in the roster's order
 flows = {}  # MCP OAuth flow id -> its state
+assets = {}  # profile -> its avatar as a data URL
+actions = {}  # background catalog install -> its state
+unsettled = {}  # deleted profile whose identity is not purged yet -> purge attempts
+soul_reads = {}  # profile -> GETs of its SOUL
+UNSETTLED = {"mail-ci"}
 
 
 def profile(name, display_name="", description="", default=False, ui_meta=None, revisions=None, soul=None,
@@ -83,7 +101,7 @@ def profile(name, display_name="", description="", default=False, ui_meta=None, 
             "ui_meta": ui_meta or {}, "revisions": revisions or {}, "soul": DEFAULT_SOUL if soul is None else soul,
             "model": {"provider": "nous", "default": "hermes-4-405b"}, "mcp": {}, "mcp_tokens": set(),
             "disabled_skills": set(), "locked_skills": {"obsidian"}, "toolsets": {"memory", "web"}, "config": {},
-            "plugins": set(plugins)}
+            "plugins": set(plugins), "secrets": set()}
 
 
 def seed():
@@ -93,10 +111,24 @@ def seed():
     study = profile("study", "study", "课程", ui_meta={"hermes-bots": {"title": "课程（CI）", "color": "#4f8a5b"}},
                     revisions={"hermes-bots": 3})
     commute = profile("commute", "通勤（CI）", "通勤")
+    # Bot Mode hid this one: Shion starts it hidden the first time it sees it
+    archive = profile("archive-ci", "archive-ci", "归档",
+                      ui_meta={"hermes-bots": {"title": "归档（CI）", "hidden": True, "color": "#8b5cf6", "shape": "hexagon"}},
+                      revisions={"hermes-bots": 1})
     # Hermes's own default profile (~/.hermes): it cannot be deleted
     default = profile("default", "Hermes（CI）", default=True)
-    for p in (shion, study, commute, default):
+    for p in (shion, study, commute, archive, default):
         profiles[p["name"]] = p
+    assets["commute"] = "data:image/png;base64," + base64.b64encode(tile((79, 138, 91))).decode()
+
+
+def tile(rgb, size=32):
+    """A plain PNG of one colour, for an avatar picture."""
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+    rows = b"".join(b"\x00" + bytes(rgb) * size for _ in range(size))
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
 
 
 seed()
@@ -135,7 +167,7 @@ def roster():
             row = {"name": name, "path": f"/ci/.hermes/profiles/{name}" if not p["is_default"] else "/ci/.hermes",
                    "is_default": p["is_default"], "model": p["model"]["default"] if own else "",
                    "provider": p["model"]["provider"] if own else "", "description": p["description"],
-                   "display_name": p["display_name"], "skill_count": len(SKILLS), "has_avatar": False,
+                   "display_name": p["display_name"], "skill_count": len(SKILLS), "has_avatar": name in assets,
                    "ui_meta_revisions": dict(p["revisions"])}
             if p["ui_meta"]:
                 row["ui_meta"] = copy.deepcopy(p["ui_meta"])
@@ -145,11 +177,24 @@ def roster():
 
 
 def handles_rpc(method):
-    return method in ("profiles.create", "profiles.configure", "profiles.describe")
+    return method in ("profiles.create", "profiles.configure", "profiles.describe") or method in MORE
 
 
 def rpc(conn, method, params, rid):
     """A sidecar profile method reached through the canonical socket's fallback."""
+    if method in MORE:
+        keys, handler = MORE[method]
+        unknown = sorted(set(params) - keys)
+        if unknown:
+            _log(f"    {method} refused: unknown keys {unknown}")
+            return error(conn, rid, 4000, f"invalid params: unknown key(s) {', '.join(unknown)}")
+        with lock:
+            outcome = handler(params)
+        if isinstance(outcome, tuple):
+            code, message = outcome
+            _log(f"    {method} refused: {code} {message}")
+            return error(conn, rid, code, message)
+        return conn.send_json({"jsonrpc": "2.0", "id": rid, "result": outcome})
     allowed = CREATE_KEYS if method == "profiles.create" else CONFIGURE_KEYS
     if method == "profiles.describe":
         allowed = {"profile", "name"}
@@ -177,6 +222,166 @@ def rpc(conn, method, params, rid):
 
 def error(conn, rid, code, message):
     conn.send_json({"jsonrpc": "2.0", "id": rid, "error": {"code": code, "message": message}})
+
+
+def asset_profile(params):
+    """The profile an asset call names (``name``, else ``profile``), or an error."""
+    name = str(params.get("name") or params.get("profile") or "").strip()
+    if not name:
+        return None, (4063, "name required")
+    if name not in profiles:
+        return None, (4064, f"profile '{name}' not found")
+    if str(params.get("asset") or "avatar").strip().lower() != "avatar":
+        return None, (4066, f"unknown asset '{params.get('asset')}' (supported: avatar)")
+    return name, None
+
+
+def get_asset(params):
+    name, problem = asset_profile(params)
+    if problem:
+        return problem
+    data = assets.get(name)
+    if data is None:
+        return {"found": False}
+    blob = base64.b64decode(data.split(",", 1)[1])
+    return {"found": True, "mime": "image/png", "size": len(blob), "data": data}
+
+
+def set_asset(params):
+    """methods_profiles.py profiles.set_asset: a data URL or bare base64 (PNG/JPEG/WebP, at most 2MB),
+    or clear."""
+    name, problem = asset_profile(params)
+    if problem:
+        return problem
+    if params.get("clear") in (True, "true", "1"):
+        removed = 1 if assets.pop(name, None) else 0
+        _log(f"    avatar of {name} cleared")
+        return {"ok": True, "asset": "avatar", "size": 0, "removed": removed}
+    data = str(params.get("data") or "")
+    if not data:
+        return 4067, "data required (data URL or base64)"
+    match = re.match(r"^data:(image/(?:png|jpeg|webp));base64,(.*)$", data, re.DOTALL)
+    try:
+        blob = base64.b64decode(match.group(2) if match else data, validate=True)
+    except Exception:
+        return 4068, "data is not valid base64"
+    if len(blob) > 2_000_000:
+        return 4069, f"asset too large ({len(blob)} bytes; max 2MB)"
+    if not (blob.startswith(b"\x89PNG") or blob.startswith(b"\xff\xd8\xff") or blob[8:12] == b"WEBP"):
+        return 4070, "unsupported image format (PNG/JPEG/WebP only)"
+    assets[name] = "data:image/png;base64," + base64.b64encode(blob).decode()
+    _log(f"    avatar of {name}: {len(blob)} bytes")
+    return {"ok": True, "asset": "avatar", "size": len(blob)}
+
+
+def mcp_profile(params):
+    """The profile an mcp.servers call is scoped to: Shion always names it."""
+    name = str(params.get("profile") or "").strip()
+    if not name:
+        return None, (4000, "stand-in: profile missing — Hermes would act on the connection's own profile")
+    p = profiles.get(name)
+    if p is None:
+        return None, (4064, "profile unavailable")
+    return p, None
+
+
+def env_key(server):
+    """mcp_config._env_key_for_server"""
+    return "MCP_" + re.sub(r"[^A-Za-z0-9_]", "_", server.upper()).strip("_") + "_API_KEY"
+
+
+def mcp_add(params):
+    """methods_tools.py mcp.servers.add: a duplicate is 4090, no url/command 4063; a bearer_token goes
+    to .env and only the header template stays."""
+    p, problem = mcp_profile(params)
+    if problem:
+        return problem
+    name = str(params.get("name") or "").strip()
+    if not name:
+        return 4063, "name required"
+    if name in p["mcp"]:
+        return 4090, f"server '{name}' already exists"
+    config = dict(params.get("config") or {})
+    if not config.get("url") and not config.get("command"):
+        return 4063, "config must specify a 'url' (http) or 'command' (stdio), or a valid 'preset'"
+    if params.get("bearer_token"):
+        p["secrets"].add(env_key(name))
+        config["headers"] = {"Authorization": "Bearer ${" + env_key(name) + "}"}
+    p["mcp"][name] = config
+    _log(f"    mcp.servers.add {name} on {p['name']}: {redact(config)}"
+         f"{' + bearer token to .env as ' + env_key(name) if params.get('bearer_token') else ''}")
+    return {"ok": True, "name": name, "server": summary(name, config)}
+
+
+def mcp_remove(params):
+    p, problem = mcp_profile(params)
+    if problem:
+        return problem
+    name = str(params.get("name") or "").strip()
+    if name not in p["mcp"]:
+        return 4064, f"server '{name}' not found"
+    p["mcp"].pop(name)
+    _log(f"    mcp.servers.remove {name} on {p['name']}")
+    return {"ok": True, "removed": True}
+
+
+def mcp_set_api_key(params):
+    """mcp.servers.set_api_key: the secret to .env, a ${…} reference in config (a Bearer header for
+    http, an env entry for stdio)."""
+    p, problem = mcp_profile(params)
+    if problem:
+        return problem
+    name = str(params.get("name") or "").strip()
+    entry = p["mcp"].get(name)
+    if entry is None:
+        return 4064, f"server '{name}' not found"
+    if not str(params.get("value") or "").strip():
+        return 4002, "value required"
+    variable = str(params.get("env_var") or "").strip() or env_key(name)
+    p["secrets"].add(variable)
+    if entry.get("url"):
+        entry["headers"] = {"Authorization": "Bearer ${" + variable + "}"}
+    else:
+        entry.setdefault("env", {})[variable] = "${" + variable + "}"
+    _log(f"    mcp.servers.set_api_key {name} on {p['name']}: {variable} to .env (value not logged)")
+    return {"ok": True, "name": name, "env_var": variable, "server": summary(name, entry)}
+
+
+def cli_exec(params):
+    """cli.exec: `hermes <argv>` on the server. Only the retry of a delete's identity purge is played;
+    an unsettled name goes through on the third try (Shion's second retry, some fifteen seconds after
+    the delete), as when the gateway answers late, so BotsTests sees the name held back first."""
+    argv = params.get("argv")
+    if not isinstance(argv, list) or not all(isinstance(x, str) for x in argv):
+        return 4003, "argv must be list[str]"
+    if argv[:2] != ["profile", "purge-identity"] or len(argv) != 3:
+        _log(f"    cli.exec {argv}: not played by the stand-in")
+        return {"blocked": False, "code": 2, "output": "stand-in: only `hermes profile purge-identity` is played"}
+    name = argv[2]
+    if name in profiles:
+        return {"blocked": False, "code": 1,
+                "output": f"Error: Profile '{name}' exists; purge-identity only settles the identity of a delete "
+                          "that has already completed."}
+    if name in unsettled:
+        unsettled[name] += 1
+        if unsettled[name] < 3:
+            _log(f"    cli.exec purge-identity {name}: not yet (try {unsettled[name]})")
+            return {"blocked": False, "code": 1,
+                    "output": f"Error: session identity was not purged. Restart or stop the gateway, then run:\n"
+                              f"    hermes profile purge-identity {name}"}
+        unsettled.pop(name)
+    _log(f"    cli.exec purge-identity {name}: purged")
+    return {"blocked": False, "code": 0, "output": f"✓ Session/routing identity purged: {name}"}
+
+
+MORE = {
+    "profiles.get_asset": ({"profile", "name", "asset"}, get_asset),
+    "profiles.set_asset": ({"profile", "name", "asset", "data", "clear"}, set_asset),
+    "mcp.servers.add": ({"profile", "name", "preset", "config", "bearer_token"}, mcp_add),
+    "mcp.servers.remove": ({"profile", "name"}, mcp_remove),
+    "mcp.servers.set_api_key": ({"profile", "name", "value", "env_var"}, mcp_set_api_key),
+    "cli.exec": ({"argv", "timeout", "profile"}, cli_exec),
+}
 
 
 def create(conn, params, rid):
@@ -282,7 +487,7 @@ def configure(conn, params, rid):
 # ---- REST ------------------------------------------------------------------------------------
 
 PREFIXES = ("/api/profiles", "/api/model/options", "/api/mcp/", "/api/skills", "/api/tools/toolsets",
-            "/api/config")
+            "/api/config", "/api/actions/")
 
 
 def handles(path, query):
@@ -359,7 +564,28 @@ def dispatch(method, path, query, body):
         return toolsets_route(method, parts[2:], query, body)
     if parts == ["config"]:
         return config_route(method, query, body)
+    if parts[:1] == ["actions"] and len(parts) == 3 and parts[2] == "status" and method == "GET":
+        return action_status(parts[1])
     return 404, {"detail": "Not Found"}
+
+
+def action_status(name):
+    """actions.py get_action_status: a background catalog install runs for three polls, then ends and
+    its server is in the profile's config."""
+    action = actions.get(name)
+    if action is None:
+        return 404, {"detail": f"Unknown action: {name}"}
+    action["polls"] += 1
+    if action["polls"] < 3:
+        return 200, {"name": name, "running": True, "exit_code": None, "pid": 4242,
+                     "lines": [f"Cloning {action['entry']}…"]}
+    if action["polls"] == 3:
+        p = profiles.get(action["profile"])
+        if p is not None:
+            p["mcp"][action["entry"]] = {"command": "uvx", "args": [action["entry"] + "-server"], "enabled": True}
+        _log(f"    background install of {action['entry']} on {action['profile']} finished")
+    return 200, {"name": name, "running": False, "exit_code": 0, "pid": 4242,
+                 "lines": [f"Cloning {action['entry']}…", "✓ installed"]}
 
 
 def profile_route(method, name, rest, body):
@@ -370,12 +596,23 @@ def profile_route(method, name, rest, body):
         if name not in profiles:
             return 404, {"detail": f"No profile named '{name}'. See your profiles with: hermes profile list"}
         profiles.pop(name)
+        assets.pop(name, None)
+        if name in UNSETTLED:
+            # profiles.py ProfileIdentitySettlementPending: the directory is gone, the identity is not
+            unsettled[name] = 0
+            _log(f"    deleted profile {name}; its identity settlement is pending")
+            return 200, {"ok": True, "path": f"/ci/.hermes/profiles/{name}", "identity_settled": False,
+                         "settlement_pending": True, "retry_command": f"hermes profile purge-identity {name}"}
         _log(f"    deleted profile {name}")
         return 200, {"ok": True, "path": f"/ci/.hermes/profiles/{name}"}
     p, problem = named(name)
     if problem:
         return problem
     if rest == ["soul"] and method == "GET":
+        soul_reads[name] = soul_reads.get(name, 0) + 1
+        if name == "commute" and soul_reads[name] == 2:
+            p["soul"] = "# 通勤（CI）\n\n别处改过的 SOUL。\n"
+            _log("    another client changed commute's SOUL")
         return 200, {"content": p["soul"], "exists": True}
     if rest == ["soul"] and method == "PUT":
         if not isinstance(body.get("content"), str):
@@ -399,7 +636,7 @@ def summary(name, cfg):
     auth = cfg.get("auth") or ("header" if any(k.lower() == "authorization" for k in cfg.get("headers") or {}) else None)
     return {"name": name, "transport": transport, "url": cfg.get("url"), "command": cfg.get("command"),
             "args": list(cfg.get("args") or []), "env": {k: "***" for k in cfg.get("env") or {}}, "auth": auth,
-            "enabled": cfg.get("enabled", True), "tools": None, "source": "config", "plugin": None}
+            "enabled": cfg.get("enabled", True), "tools": cfg.get("tools"), "source": "config", "plugin": None}
 
 
 def mcp_route(method, parts, query, body):
@@ -503,6 +740,12 @@ def mcp_route(method, parts, query, body):
         missing = [e["name"] for e in entry["required_env"] if e["required"] and not (body.get("env") or {}).get(e["name"])]
         if missing:
             return 400, {"detail": f"Missing required environment variable(s): {', '.join(missing)}"}
+        if entry["needs_install"]:
+            # web_routers/mcp.py: a git step runs as a background CLI action, named per entry
+            action = "mcp-install-" + name + "-" + secrets.token_hex(4)
+            actions[action] = {"polls": 0, "profile": p["name"], "entry": name}
+            _log(f"    catalog install of {name} on {p['name']}: background action {action}")
+            return 200, {"ok": True, "name": name, "background": True, "action": action}
         cfg = {"command": entry["command"], "args": list(entry["args"]), "enabled": bool(body.get("enable", True))}
         if declared:
             cfg["env"] = {key: "${" + key + "}" for key in declared}
@@ -560,17 +803,38 @@ def merged(base, over):
     return out
 
 
+def deep_merge(base, over):
+    """hermes_cli/config.py _deep_merge: dict over dict recurses, None over a dict is ignored, anything
+    else replaces (a list included). It never deletes a key."""
+    out = copy.deepcopy(base)
+    for key, value in over.items():
+        over_dict = isinstance(out.get(key), dict)
+        if over_dict and isinstance(value, dict):
+            out[key] = deep_merge(out[key], value)
+        elif not (over_dict and value is None):
+            out[key] = copy.deepcopy(value)
+    return out
+
+
 def config_route(method, query, body):
     p, problem = scoped(query)
     if problem:
         return problem
     if method == "GET":
         raw = query.get("include_defaults", "true").lower() in ("false", "0", "no")
-        return 200, copy.deepcopy(p["config"]) if raw else merged(DEFAULTS, p["config"])
+        whole = copy.deepcopy(p["config"])
+        if p["mcp"]:
+            whole["mcp_servers"] = copy.deepcopy(p["mcp"])
+        return 200, whole if raw else merged(DEFAULTS, whole)
     if method == "PUT":
         if not isinstance(body.get("config"), dict):
             return 422, {"detail": [{"loc": ["body", "config"], "msg": "Field required", "type": "missing"}]}
-        p["config"] = merged(p["config"], body["config"])
+        incoming = dict(body["config"])
+        servers = incoming.pop("mcp_servers", None)
+        if isinstance(servers, dict):
+            p["mcp"] = deep_merge(p["mcp"], servers)
+            _log(f"    mcp_servers of {p['name']}: {json.dumps(p['mcp'], ensure_ascii=False)[:300]}")
+        p["config"] = deep_merge(p["config"], incoming)
         _log(f"    config of {p['name']}: {json.dumps(p['config'], ensure_ascii=False)}")
         return 200, {"ok": True}
     return 404, {"detail": "Not Found"}

@@ -7,10 +7,17 @@ nonisolated struct AssistantPrefs: Codable, Equatable, Sendable {
     var chief: String?
     /// Profiles Shion does not show.
     var hidden: [String]
+    /// Profiles this Mac has met on the server. Choices kept before this list was (nil) count
+    /// every profile then there as met.
+    var seen: [String]?
+    /// Deleted profiles whose names Hermes has not finished cleaning up, with its command for it.
+    var cleaning: [String: String]?
 
-    init(chief: String? = nil, hidden: [String] = []) {
+    init(chief: String? = nil, hidden: [String] = [], seen: [String]? = [], cleaning: [String: String]? = nil) {
         self.chief = chief
         self.hidden = hidden
+        self.seen = seen
+        self.cleaning = cleaning
     }
 }
 
@@ -39,6 +46,8 @@ final class Roster {
     var hiddenBots: [Bot] = []
     /// The main window's 新建助手 sheet is up.
     var composing = false
+    /// Hermes's clean-up of deleted names, run again now and then while connected.
+    @ObservationIgnored var settler: Task<Void, Never>?
     @ObservationIgnored private var server = ""
     @ObservationIgnored private let persist: Bool
     /// Screenshot and test runs keep their choices in memory.
@@ -58,7 +67,38 @@ final class Roster {
         if server != self.server {
             self.server = server
             prefs = read(server)
+            // another server's pictures under the same profile names
+            AvatarPictures.shared.clear()
+            settler?.cancel()
+            settler = nil
         }
+        meet()
+    }
+
+    /// A profile this Mac meets for the first time starts shown or hidden as Bot Mode has it
+    /// (`hidden` in its ui_meta); after that, this Mac's choice holds.
+    private func meet() {
+        let before = prefs.seen
+        var seen = before ?? []
+        for profile in profiles where !seen.contains(profile.name) {
+            seen.append(profile.name)
+            if before != nil, profile.botsMeta["hidden"]?.bool == true, !prefs.hidden.contains(profile.name) {
+                prefs.hidden.append(profile.name)
+            }
+        }
+        guard seen != before ?? [] || before == nil else { return }
+        prefs.seen = seen
+        write()
+    }
+
+    /// Names Hermes is still cleaning up after a delete, with its command for it.
+    var cleaning: [String: String] { prefs.cleaning ?? [:] }
+
+    func setCleaning(_ name: String, command: String?) {
+        var names = prefs.cleaning ?? [:]
+        names[name] = command
+        prefs.cleaning = names.isEmpty ? nil : names
+        write()
     }
 
     /// 总秘书: the profile chosen in Settings while it is still there, else the one named `shion`,
@@ -96,6 +136,7 @@ final class Roster {
             prefs.chief = nil
         }
         prefs.hidden.removeAll { $0 == name }
+        prefs.seen?.removeAll { $0 == name }
         write()
     }
 
