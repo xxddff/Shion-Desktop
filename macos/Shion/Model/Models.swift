@@ -140,6 +140,8 @@ struct ChatItem: Identifiable, Hashable {
     var todoIds: [String] = []
     /// An assistant reply still arriving.
     var streaming = false
+    /// A reply you stopped: what had come before the stop.
+    var stopped = false
 }
 
 enum ReportKind: String, CaseIterable, Identifiable {

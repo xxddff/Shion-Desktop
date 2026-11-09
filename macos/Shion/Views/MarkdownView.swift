@@ -15,6 +15,8 @@ struct MarkdownView: View {
 }
 
 struct MarkdownBlockView: View {
+    /// What the chat's find bar looks for, marked (ChatControls.swift).
+    @Environment(\.findMarks) private var marks
     let block: MarkdownBlock
     /// How deep in lists the block is: the bullet changes with it.
     let depth: Int
@@ -22,12 +24,12 @@ struct MarkdownBlockView: View {
     var body: some View {
         switch block {
         case .paragraph(let text):
-            Text(text)
+            Text(marks.mark(text))
                 .font(.t13)
                 .lineSpacing(3)
                 .fixedSize(horizontal: false, vertical: true)
         case .heading(let level, let text):
-            Text(text)
+            Text(marks.mark(text))
                 .font(level <= 2 ? Font.t15 : Font.t13.weight(.semibold))
                 .padding(.top, level <= 2 ? 4 : 2)
                 .fixedSize(horizontal: false, vertical: true)
@@ -102,11 +104,12 @@ struct MarkdownListView: View {
 
 /// A code block: monospaced, long lines scroll sideways instead of wrapping.
 struct MarkdownCode: View {
+    @Environment(\.findMarks) private var marks
     let code: String
 
     var body: some View {
         ScrollView(.horizontal) {
-            Text(verbatim: code)
+            Text(marks.mark(code))
                 .font(.system(size: 12, design: .monospaced))
                 .lineSpacing(2)
                 .fixedSize()
@@ -124,6 +127,7 @@ struct MarkdownCode: View {
 /// A GitHub table: the header over a line, a fainter line between rows, each column aligned as
 /// the table says. Cells wrap when the table is wider than the reply.
 struct MarkdownTableView: View {
+    @Environment(\.findMarks) private var marks
     let table: MarkdownTable
 
     var body: some View {
@@ -155,7 +159,7 @@ struct MarkdownTableView: View {
     }
 
     private func cell(_ text: AttributedString, _ column: Int, font: Font) -> some View {
-        Text(text)
+        Text(marks.mark(text))
             .font(font)
             .multilineTextAlignment(textAlignment(column))
             .fixedSize(horizontal: false, vertical: true)

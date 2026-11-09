@@ -84,6 +84,26 @@ final class ScreenshotTests: XCTestCase {
         app.terminate()
     }
 
+    /// Settings' 服务器体检, with the screenshot run's made-up results: nothing is dialled.
+    @MainActor
+    func testServerCheck() throws {
+        continueAfterFailure = true
+        for appearance in ["light", "dark"] {
+            let app = launch(route: "today", appearance: appearance, extra: ["-ShionDemoSignIn", "YES"])
+            _ = app.windows.firstMatch.waitForExistence(timeout: 20)
+            app.typeKey(",", modifierFlags: .command)
+            let settings = app.windows.matching(NSPredicate(format: "identifier CONTAINS[c] 'settings'")).firstMatch
+            if settings.waitForExistence(timeout: 5) {
+                settings.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "服务器体检")).firstMatch.click()
+                Thread.sleep(forTimeInterval: 1)
+                keep(settings.screenshot(), name: "settings-check-\(appearance)")
+            } else {
+                XCTFail("No Settings window (\(appearance))")
+            }
+            app.terminate()
+        }
+    }
+
     @MainActor
     private func launch(route: String, appearance: String, extra: [String] = []) -> XCUIApplication {
         let app = XCUIApplication()

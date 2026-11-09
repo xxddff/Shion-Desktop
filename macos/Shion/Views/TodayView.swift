@@ -37,6 +37,7 @@ struct TodayView: View {
                 Mark(size: 22)
                 TextField("跟詩音说：「把实验报告挪到明天」", text: $draft)
                     .textFieldStyle(.plain)
+                    .disabled(store.readOnly)
                     .font(.system(size: 14))
                     .onSubmit {
                         store.send(draft, to: store.chiefId)

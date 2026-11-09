@@ -45,6 +45,7 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import fake_control  # noqa: E402  stop, retry and the server check (ChatControlTests)
 import fake_kanban  # noqa: E402  the kanban plugin's routes (BoardTests)
 import fake_shion  # noqa: E402  the shion plugin's RPCs
 
@@ -574,7 +575,8 @@ class Handler(BaseHTTPRequestHandler):
         display_projection, raw rows otherwise."""
         with lock:
             rows = list(transcripts.setdefault(session_id, []))
-        reply = {"session_id": session_id, "running": False, "prompts": [], "message_count": len(rows)}
+        reply = {"session_id": session_id, "running": False, "prompts": [], "message_count": len(rows),
+                 **fake_control.snapshot_fences(session_id)}
         if params.get("omit_messages") is True:
             return {**reply, "messages": [], "messages_omitted": True}
         shown = [{k: v for k, v in row.items() if k != "row_kind"} for row in rows if row["row_kind"] == "message"]
@@ -615,6 +617,8 @@ class Handler(BaseHTTPRequestHandler):
         method, params, rid = request.get("method", ""), request.get("params") or {}, request.get("id")
         if method != "gateway.ping":
             log(f"  rpc {method} {json.dumps(params, ensure_ascii=False)[:160]}")
+        if fake_control.handles(method, params):
+            return fake_control.handle(self, method, params, rid)
         if method.startswith("plugin.shion."):
             return fake_shion.handle(self, log, method, params, rid)
         result = None
@@ -729,6 +733,7 @@ def main():
     parser.add_argument("--port", type=int, default=8765)
     args = parser.parse_args()
     fake_kanban.setup(log, valid_access)
+    fake_control.setup(log, transcripts, lock)
     server = Server(("127.0.0.1", args.port), Handler)
     log(f"stand-in Hermes on http://127.0.0.1:{args.port}")
     try:

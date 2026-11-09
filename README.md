@@ -184,6 +184,9 @@ kanban:
 - **Bot Chat**：一个助手 = 一个 profile = 唯一一个标题为 `Bot Chat` 的会话。用 `session.list {title, include_hidden: true}` 按标题找，`profiles.list` 也直接给出 `canonical_session`。不存会话 id 指针。
 - **可靠提交**：客户端的 `input_id` 和服务端的 `admission_id` 分开，以回执为准（`prompt.receipt`、`prompt.resolve_unknown`）。
 - **审批、提问**：回复要对准 `prompt_id` 和 `execution_generation`；断线重连后用 `session.events.since` 恢复还没回答的请求。
+- **一次运行的编号和会话的版本**：每轮开始时会话的 `execution_generation` 加一，这一轮的每个事件帧都在 `params` 里带着它（和 `payload` 并列）；每轮结束 `revision` 加一。快照（`session.resume`、`session.create` 的回复）带当前的两个值，每轮结束的 `session.info` 也带（`gateway/session_authority.py` 的 `_publish_pending`：客户端只能从这里知道每轮之后的 `revision`）。
+- **停止**：`session.interrupt {session_id, execution_generation}`（`profile` 只管路由；参数是封闭的，多一个少一个都是 `invalid_params`）。编号不是这一轮的就拒绝（`stale_generation`），对上了就硬停这一轮的 agent（压缩也停，后台委派不停），回复是会话的 handle。停下后这一轮照常结束：`message.complete` 的 `status` 是 `interrupted`（`outcome` 是 `cancelled`），`text` 是已经流出来的部分，什么都没出来时是一句占位（`Operation interrupted: …`），随后是 `running: false` 的 `session.info`。已经出来的部分存成一行助手消息，带 `display_metadata.interrupted`；停在工具调用之后的，收尾的那行也带这个标记（没有文字时是一行隐藏的占位）。
+- **重试**：Hermes 的 `/retry` 是两步，官方桌面端的「重新生成」在 canonical 上也是这样拆的：先 `session.mutate {session_id, request_id, expected_revision, expected_generation, operation: "rewind", payload: {target_message_id}}`，把那条用户消息（`row_id`）和它后面的都收回（要空闲，在跑时是 `session_busy`；`revision` 或编号对不上是 `revision_conflict` / `stale_generation`，拒绝的 `error.data` 里带着新的两个值），回执的 `target_message.content` 是原来打的字；再 `prompt.submit` 一次。canonical 的 `prompt.submit` 没有截断参数（旧接口的 `truncate_before_row_id` 这些会被拒）；`session.branch_stored` 是另开一个会话，Bot Chat 只能有一个，不用。一轮结束时 `message.complete.persisted_turn` 给出这一轮存成的行：`user_row_id` 是提问那行，`submission_id` 是提交时带的那个，所以 Shion 用聊天里那条消息的 id 当 `submission_id`，就知道它存成了哪一行。
 - **不在 canonical 里的**：看板走 `/api/plugins/kanban/*`，例行任务列表走 `/api/cron/jobs`（canonical 里只有 `cron.submit` 立即运行和 `cron.status`）。
 - **类型生成**：`apps/shared/src/gateway-contract.openrpc.json` 可以生成 Swift `Codable` 类型，不用手写。
 
@@ -369,6 +372,22 @@ macOS 上是 SwiftUI 加 AppKit（UIKit 是 iOS 的；Mac Catalyst 做菜单栏�
 
   代价是不能跨块连续选中，只能一块一块地选。包用 XcodeGen 的 `packages` 加在 `macos/project.yml`，版本限在 0.9.x。
 
+### 停止、重试、查找
+
+- **停止**：一轮在跑时（从第一个事件到 `message.complete`，或者服务器说会话在跑，比如在等批准），输入框的发送按钮变成停止，⌘. 也能停。停的是这一轮事件帧上带的那次运行（`session.interrupt`，见上面「Canonical Gateway Protocol 要点」）。已经出来的部分留着，下面标「已停止」；什么都还没出来（停在工具调用里）就是一行「已停止」。重新读对话时按 `display_metadata.interrupted` 认出来，照样标。
+- **重试**：最后一条助手回复下面有「重试」，条件是它回的是你打的一句话（不是看板的通知行）、这一轮已经结束、后面没有你再说的话。点了就照 `/retry` 做：服务器上收回那条消息和它后面的（`session.mutate` rewind，带着最近一次 `session.info` 里的 `revision` 和运行编号；对不上就用拒绝里给的新值再试一次），聊天里也去掉这一段，再把原话发一次。从对话记录读来的消息，`row-<id>` 就是它的行；这次连接里发的，等这一轮的 `persisted_turn` 说；都没有就读最近一页按原文找。
+- **查找**：⌘F（或工具栏的放大镜）在对话上面浮出一个玻璃的查找框，边打边找已经加载的行：消息的原文、工具调用、卡片的标题，不分大小写、全角半角和重音。命中的字标成系统的查找黄，看着的那条整条加深，滚到中间；折起来的工具调用里有命中时自动展开。框里是「第几条 / 共几条」。↑（回车、⌘G）往更早找，↓（⇧⌘G）往后，Esc 关掉。
+- **更早的页**：边打边找只找已经加载的行，不为查找预先取历史：Bot Chat 一直是同一个会话，几个月下来有上千行，全取下来要几十次请求，对话也会变得很长。在最早一条命中上再按 ↑，才往前一页一页地取（每按一次最多 10 页、500 行），直到找到下一条，或者到了第一条消息。
+- **没连上时**：输入框、勾待办、确认日期、新待办、新建卡片、挪卡片、回答批准都不让做（见下面「没连上时显示上次的数据」），停止和重试也只在连着时有。
+
+### 没连上时显示上次的数据
+
+- 连上过一次以后，Shion 把服务器给的数据在这台 Mac 上存一份：助手列表、今天页詩音写的那段话、待办、日报、看板上所有看板的卡片（列、在等什么、交给谁），还有每个对话最近的 50 条。连上后会在后台给每个已有的 Bot Chat 取最近一页，所以没打开过的对话也存得下（Bot Chat 还是只在打开对话时才新建）。
+- 存在 `~/Library/Application Support/dev.shion.Shion/last-data.json`（权限 0600），记着是哪个地址的；不存 service token、会话令牌、登录凭证和密码，它们只在钥匙串里。等你确认的批准和提问不存：只能连着时回答。服务器没有的部分不存（没装 shion 插件就没有待办、日报），没连上时那部分照旧是示例数据。
+- 什么时候存：连上并读完第一遍以后，数据有变化 3 秒后存一次；断线的那一刻、点「断开」之前、退出 Shion 时各存一次。
+- 启动时还没连上、断了线、点了「断开」，窗口里显示的都是这一份，只能看：侧栏底部服务器下面一行写「上次的数据 · 今天 10:52」，设置里的状态写「未连接，现在是上次的数据（…）」。连上并读完第一遍以后换成服务器的。
+- 只有从没连上过这个地址（还有截图模式）才显示示例数据。截图模式不读也不写这个文件，只在内存里留一份，端到端测试用它看断开后的样子。设置里「没连上时」一节写着存了什么、存在哪里，可以清除。
+
 ## 界面原则（SwiftUI 版照这个来）
 
 - **层级靠字号和留白，不靠框。** 只有需要你动手的东西才放进框里：「需要你」托盘、看板卡片、确认卡片、云桌面画面。其余都是标题加列表。
@@ -418,7 +437,7 @@ open Shion.xcodeproj
 - **服务器要开账号密码登录**：在 `~/.hermes/config.yaml` 的 `dashboard.basic_auth` 下设 `username` 和 `password`（或者更好的 `password_hash`），再设 `secret`，然后重启 gateway。`secret` 用 `openssl rand -base64 32` 生成；不设的话每次启动都换一个随机值，gateway 一重启所有登录都失效，Shion 要重新登录。也可以用环境变量 `HERMES_DASHBOARD_BASIC_AUTH_USERNAME`、`_PASSWORD`、`_SECRET`。
 - **还是想用会话令牌**：登录方式选「会话令牌」，填服务器上的 `HERMES_DASHBOARD_SESSION_TOKEN`，点「连接」。
 - **服务器那边**：`/api/ws` 要由 `hermes gateway` 提供，Canonical 协议只在它上面有；单独跑的 `hermes serve` / `hermes dashboard` 说的是旧协议。`HERMES_DASHBOARD_SESSION_TOKEN` 要事先设好，不设的话每次启动都是随机值。经 Cloudflare Tunnel 转到本机端口时，Webapp 的 `public_url` 要填对外的地址，不然 Host 对不上会在握手时就被拒：Hermes 在接受连接之前用 4403 关闭，客户端看到的是 HTTP 403。
-- **连不上时**：Shion 连之前会先用 HTTP 查一遍，设置里会写出是哪一步不对：Cloudflare Access 没放行；服务器没开浏览器登录（`/api/status` 的 `auth_flows` 里没有 `native_pkce`）；登录过期了；服务器没开会话令牌登录（`auth_providers` 里没有 `session-token`）；令牌对不上（`/api/auth/me` 返回 401）；或者 WebSocket 被拒（带 HTTP 状态码）。也可以在终端自己查，这是 Hermes 文档给的检查方法，加上 Access 的两个头：
+- **连不上时**：设置里的「服务器体检」一项一项地查，每项写着现在怎样、不对的话怎么改：Cloudflare Access 放不放行（`/api/status`）；登录凭证有没有效、多久到期（`/api/auth/me`）；`/api/ws` 是不是 `hermes gateway` 的 Canonical 协议，`runtime.describe` 报了哪些能力（Shion 用到 `session-transcript-v1`、`plugin-rpc-v1`、`session-client-v1`）；每个助手的 profile 里有没有 shion 插件（`plugin.shion.info`，`-32601` 就是没装或没启用）；看板插件在不在（`/api/plugins/kanban/boards`）；看板同时进行的上限（`/api/config`）；这台 Mac 允不允许 Shion 发通知（只读，不替你申请）。Shion 连之前也会先用 HTTP 查一遍，设置里会写出是哪一步不对：Cloudflare Access 没放行；服务器没开浏览器登录（`/api/status` 的 `auth_flows` 里没有 `native_pkce`）；登录过期了；服务器没开会话令牌登录（`auth_providers` 里没有 `session-token`）；令牌对不上（`/api/auth/me` 返回 401）；或者 WebSocket 被拒（带 HTTP 状态码）。也可以在终端自己查，这是 Hermes 文档给的检查方法，加上 Access 的两个头：
 
   ```bash
   curl -s https://<地址>/api/status -H "CF-Access-Client-Id: <ID>" -H "CF-Access-Client-Secret: <Secret>" | jq '.auth_required, .auth_providers, .auth_flows'
@@ -439,15 +458,15 @@ open Shion.xcodeproj
 
   设置看 `hermes config show`（或 `~/.hermes/config.yaml` 里的 `dashboard:` 一节）。改了令牌要重启 gateway。
 - **开会话令牌登录**：在运行 `hermes gateway` 的环境里设 `HERMES_DASHBOARD_SESSION_TOKEN`（可以写进 `~/.hermes/.env`；也可以写成 `file:<路径>` 指向一个只放令牌的文件），确认 `dashboard.session_token_auth.enabled` 没设成 `false`，再重启 gateway。令牌用 `python3 -c "import secrets; print(secrets.token_urlsafe(32))"` 生成，至少 32 个字符。它能完全操作这台 Hermes，当密码保管；换了令牌，Shion 里也要换。
-- **现在能用的**：助手列表（每个 profile 一个助手）、每个助手的 Bot Chat（打开时先取最近 50 行，往上滑再一页一页取更早的；发消息、流式回复；工具调用在这一轮回复完成后折成一行，点开能看每一条；回复按 Markdown 显示，表格、列表、代码块都排好，见「对话的显示」）、批准和提问（连上后在后台接上每个助手已有的 Bot Chat，不取历史，所以没打开过的对话里的批准和提问也会到「等你确认」，侧栏也能看到谁在忙），系统通知（批准可以直接在通知里点「允许这一次」或「拒绝」，提问和回复可以直接在通知里回；对话或「等你确认」正开在眼前时不发；Dock 图标上是等你确认的件数）、看板（服务器的卡片、实时更新、拖动换列、新建、详情、评论署登录名、切换看板）、今天页的「助手在做」和对话里的卡片（取自所有看板）、设置里的看板上限（取自服务器）。服务器装了 `shion` 插件（`hermes-plugin/`，装法见那里的 README）时，今天页顶部詩音写的那段话、待办（勾掉、确认日期、新加都写回插件）和日报也来自服务器；助手经插件改了数据，Shion 一秒左右就收到推送，断线时漏掉的推送在重连时和每 5 分钟补一次。没装插件时这几页照旧是示例数据。日程和云桌面还是示例数据。
+- **现在能用的**：助手列表（每个 profile 一个助手）、每个助手的 Bot Chat（打开时先取最近 50 行，往上滑再一页一页取更早的；发消息、流式回复；工具调用在这一轮回复完成后折成一行，点开能看每一条；回复按 Markdown 显示，表格、列表、代码块都排好，见「对话的显示」）、批准和提问（连上后在后台接上每个助手已有的 Bot Chat，所以没打开过的对话里的批准和提问也会到「等你确认」，侧栏也能看到谁在忙；接上之后再给每个取最近一页，留作没连上时看的数据），系统通知（批准可以直接在通知里点「允许这一次」或「拒绝」，提问和回复可以直接在通知里回；对话或「等你确认」正开在眼前时不发；Dock 图标上是等你确认的件数）、看板（服务器的卡片、实时更新、拖动换列、新建、详情、评论署登录名、切换看板）、今天页的「助手在做」和对话里的卡片（取自所有看板）、设置里的看板上限（取自服务器）、停止和重试一轮回复、对话里查找（见「停止、重试、查找」）、没连上时显示上次的数据（见「没连上时显示上次的数据」）、设置里的服务器体检。服务器装了 `shion` 插件（`hermes-plugin/`，装法见那里的 README）时，今天页顶部詩音写的那段话、待办（勾掉、确认日期、新加都写回插件）和日报也来自服务器；助手经插件改了数据，Shion 一秒左右就收到推送，断线时漏掉的推送在重连时和每 5 分钟补一次。没装插件时这几页照旧是示例数据。日程和云桌面还是示例数据。
 - **连接方式**照官方桌面端连远端的做法：`wss://<地址>/api/ws?token=<登录凭证或会话令牌>`，不带子协议，每个请求带 Cloudflare Access 的两个头；连上后等 `gateway.ready`、发 `client.capabilities`，按服务器要求每 15 秒 `gateway.ping`；连上过又断了会自动重连，并重新打开刚才的对话。登录凭证被拒时先续一次再试，续不上才算登录过期。
 
 ### 原生 App 的界面检查
 
 界面靠 CI 截图来看，不在本地开模拟器：
 - **什么时候跑**：只有 `macos/` 或这个工作流改了才跑，也可以在 Actions 里手动触发；同一分支上新的提交会取消还没跑完的那次。
-- **跑什么**：在 `xcode-27` runner（macOS 27、Apple 芯片）上生成工程、编译，再跑 `ShionUITests`：每个页面用启动参数直接打开（`-ShionSnapshot YES -ShionRoute today -ShionAppearance dark`），等界面稳定后截窗口（对话截詩音和课程的两段：折起来的工具调用，排好的表格、列表、代码块、引用和任务列表）；另外点开菜单栏面板截整个屏幕，按 ⌘, 截设置窗口（还有已登录和会话令牌两种设置）。
-- **浏览器登录和看板的端到端测试**：runner 上没有真的 Cloudflare 和 Hermes，`macos/ci/fake_hermes.py` 两个都演：Access 按严格 service token 认证来（带 token 的请求只看 token、不发 cookie，错的 token 直接 403；不带 token 的浏览器转去另一个域名上的 Access 登录页，登录后靠 cookie 放行）；登录页自己填用户名密码提交；检查 PKCE、回调地址和 state；发登录凭证；`/api/ws` 说 JSON-RPC。替身还照 Hermes 的接口检查参数：`session.resume`、`session.transcript`、`session.create` 不认识的键一律 `invalid_params`，`source` 和 `client` 也照规则查。`SignInTests` 在设置里填好地址，点「用浏览器登录…」，等登录完、连上、助手列表换成服务器的；先到「等你确认」：没打开过的课程的对话发来一个批准，点「允许这一次」，替身记下回答；再看今天、待办、日报是不是插件里的（替身里的插件在 `macos/ci/fake_shion.py`）：勾掉一条待办，等课程经插件加的那条推过来；再打开詩音的对话（135 行，先只来最近 50 行；照 Hermes 的样子，压缩行和存它的那条消息共用 `row_id`，工具行没有 `row_id`），发一句、等回复，往上滑到第一条，看压缩行、第一条都在，后面那轮的两次工具调用折成了一行；打开通勤的对话（新建）；最后看设置里的看板上限是不是服务器的值。每一步截一张（`signin-*.png`）。替身还演看板插件（`macos/ci/fake_kanban.py`：两块看板，`/workflow` 的移动规则、400 和 409 的拒绝、做完后把子卡升到就绪、`/events` 的 WebSocket，调了 `/dispatch` 会在记录里标出来）；`BoardTests` 登录后打开看板，看服务器的卡和每种「在等什么」，点开卡住的卡看评论和运行记录，留一条言（替身记下作者，要显示成「你」）并让它继续，把一张卡拖到「完成」（拖不动就用右键菜单），新建一张；再到詩音的对话里说「派一张卡」，替身照 Hermes 的样子演她调 `kanban_create`（开始时带参数，结束时结果里有卡的编号），几秒后课程做完，替身发看板的通知行，再让詩音接着说一句：对话里要先出现那张卡，再变成「完成」，通知行也显示成卡；在设置里断开再连上，对话从服务器重新读一遍（对话记录只留调用、不留结果），两张卡都还在、都是「完成」；然后换到另一块看板，再看今天页的「助手在做」列出两块看板上在做的卡；最后回到詩音的对话说「列一下这周的作业」，替身照 Hermes 的样子演一轮：三次工具调用（中间隔一会儿，跑着的时候能看到），再一段一段地回一张表：表格的格子要单独显示出来（不是带竖线的原文），回复完成后三次调用折成一行，点开能看到每一条（`board-*.png`）。两个测试各用一个新起的替身，课程的批准、它加的待办这类只发一次的事不会被前一个测试用掉。替身的请求记录（`fake_hermes-SignInTests.log`、`fake_hermes-BoardTests.log`）也在附件里。这一步失败只报警告，截图和安装包照样出。
+- **跑什么**：在 `xcode-27` runner（macOS 27、Apple 芯片）上生成工程、编译，再跑 `ShionUITests`：每个页面用启动参数直接打开（`-ShionSnapshot YES -ShionRoute today -ShionAppearance dark`），等界面稳定后截窗口（对话截詩音和课程的两段：折起来的工具调用，排好的表格、列表、代码块、引用和任务列表）；另外点开菜单栏面板截整个屏幕，按 ⌘, 截设置窗口（还有已登录和会话令牌两种设置，和用编出来的结果画的服务器体检页 `settings-check-*.png`，不连任何地址）。
+- **浏览器登录和看板的端到端测试**：runner 上没有真的 Cloudflare 和 Hermes，`macos/ci/fake_hermes.py` 两个都演：Access 按严格 service token 认证来（带 token 的请求只看 token、不发 cookie，错的 token 直接 403；不带 token 的浏览器转去另一个域名上的 Access 登录页，登录后靠 cookie 放行）；登录页自己填用户名密码提交；检查 PKCE、回调地址和 state；发登录凭证；`/api/ws` 说 JSON-RPC。替身还照 Hermes 的接口检查参数：`session.resume`、`session.transcript`、`session.create` 不认识的键一律 `invalid_params`，`source` 和 `client` 也照规则查。`SignInTests` 在设置里填好地址，点「用浏览器登录…」，等登录完、连上、助手列表换成服务器的；先到「等你确认」：没打开过的课程的对话发来一个批准，点「允许这一次」，替身记下回答；再看今天、待办、日报是不是插件里的（替身里的插件在 `macos/ci/fake_shion.py`）：勾掉一条待办，等课程经插件加的那条推过来；再打开詩音的对话（135 行，先只来最近 50 行；照 Hermes 的样子，压缩行和存它的那条消息共用 `row_id`，工具行没有 `row_id`），发一句、等回复，往上滑到第一条，看压缩行、第一条都在，后面那轮的两次工具调用折成了一行；打开通勤的对话（新建）；最后看设置里的看板上限是不是服务器的值。每一步截一张（`signin-*.png`）。替身还演看板插件（`macos/ci/fake_kanban.py`：两块看板，`/workflow` 的移动规则、400 和 409 的拒绝、做完后把子卡升到就绪、`/events` 的 WebSocket，调了 `/dispatch` 会在记录里标出来）；`BoardTests` 登录后打开看板，看服务器的卡和每种「在等什么」，点开卡住的卡看评论和运行记录，留一条言（替身记下作者，要显示成「你」）并让它继续，把一张卡拖到「完成」（拖不动就用右键菜单），新建一张；再到詩音的对话里说「派一张卡」，替身照 Hermes 的样子演她调 `kanban_create`（开始时带参数，结束时结果里有卡的编号），几秒后课程做完，替身发看板的通知行，再让詩音接着说一句：对话里要先出现那张卡，再变成「完成」，通知行也显示成卡；在设置里断开再连上，对话从服务器重新读一遍（对话记录只留调用、不留结果），两张卡都还在、都是「完成」；然后换到另一块看板，再看今天页的「助手在做」列出两块看板上在做的卡；最后回到詩音的对话说「列一下这周的作业」，替身照 Hermes 的样子演一轮：三次工具调用（中间隔一会儿，跑着的时候能看到），再一段一段地回一张表：表格的格子要单独显示出来（不是带竖线的原文），回复完成后三次调用折成一行，点开能看到每一条（`board-*.png`）。替身还演停止、重试和服务器体检要的那几处（`macos/ci/fake_control.py`：每轮的事件帧带运行编号，快照和每轮结束的 `session.info` 带编号和 `revision`；`session.interrupt` 编号不对就 `stale_generation`；`session.mutate` 的 rewind 照 Hermes 查 `revision`、编号、空闲和目标行；通勤的 profile 里没有 shion 插件）；`ChatControlTests` 登录后先看服务器体检的每一项，再在詩音的对话里说「讲一个长故事」（替身每 0.3 秒回一句，回半分钟），按 ⌘. 停下，看已经出来的部分标着「已停止」，点「重试」：替身收回那一轮，同样的话这次很快回完；然后 ⌘F 找「第 12」（都在最近一页上），回车跳到更早的一条，再找「第 3 条」（在两页以前），按 ↑ 一页一页往前取，直到它出现；最后在设置里断开，窗口还是服务器的数据：对话还在、侧栏写着「上次的数据」、输入框和待办的勾都不能用（`chatctl-*.png`）。三个测试各用一个新起的替身，课程的批准、它加的待办这类只发一次的事不会被前一个测试用掉。替身的请求记录（`fake_hermes-SignInTests.log`、`fake_hermes-BoardTests.log`、`fake_hermes-ChatControlTests.log`）也在附件里。这一步失败只报警告，截图和安装包照样出。
 - **截图模式**：日期固定在 2026 年 11 月 9 日（周一）10:52，外观对整个 App 生效（菜单栏面板也跟着变），呼吸点不动。动画停下来 App 才算空闲，XCTest 不用干等，一次运行从 4.3 分钟降到 2.3 分钟。
 - **runner 的屏幕**：1024×768、1 倍，所以窗口截出来是 1024×674，比默认窗口小，正好看窄窗口下的布局。
 - **看哪里**：截图打包成这次运行的 `shots` 附件（保留 14 天），文件名是「页面-外观.png」。编译失败时，最后一步会列出错误；编译警告（xcodebuild 的警告不会自己变成注解）由「Compiler warnings」一步列成这次运行的注解，所以一次运行没有注解，就是没有警告。
