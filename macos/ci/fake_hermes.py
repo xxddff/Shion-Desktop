@@ -20,6 +20,8 @@ hermes_cli/dashboard_auth and the Canonical Gateway Protocol:
   GET  /api/ws?token=…         JSON-RPC 2.0 over WebSocket: gateway.ready, runtime.describe,
                                profiles, Bot Chats (詩音's is long and paged with
                                session.transcript; 课程's is created on first open)
+  /api/plugins/kanban/…        the kanban plugin: boards, cards, moves, comments and the
+                               /events socket (fake_kanban.py)
 
 Like Hermes's contracts (extra="forbid"), session.resume and session.transcript refuse keys
 they do not know, so a client's wrong parameter fails here as it would on a real server.
@@ -39,6 +41,8 @@ import threading
 import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+import fake_kanban  # the kanban plugin's routes (BoardTests)
 
 ACCESS_ID, ACCESS_SECRET = "ci-client", "ci-secret"
 USER, PASSWORD = "ci-user", "ci-pass"
@@ -275,6 +279,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.answer(401, {"detail": "Unauthorized"})
         if url.path == "/api/ws":
             return self.socket(query)
+        if url.path.startswith(fake_kanban.PREFIX):
+            return fake_kanban.route(self, "GET", url, query, {})
         self.answer(404, {"detail": "Not Found"})
 
     def do_POST(self):
@@ -298,7 +304,11 @@ class Handler(BaseHTTPRequestHandler):
             if not known:
                 return self.answer(401, {"error": "session_expired", "detail": "start a new sign-in"})
             return self.answer(200, mint_pair())
+        if url.path.startswith(fake_kanban.PREFIX):
+            return fake_kanban.route(self, self.command, url, dict(urllib.parse.parse_qsl(url.query)), body)
         self.answer(404, {"detail": "Not Found"})
+
+    do_PATCH = do_DELETE = do_POST
 
     def authorize(self, query):
         problems = []
@@ -548,6 +558,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=8765)
     args = parser.parse_args()
+    fake_kanban.setup(log, valid_access)
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     server.daemon_threads = True
     log(f"stand-in Hermes on http://127.0.0.1:{args.port}")

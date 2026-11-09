@@ -40,6 +40,8 @@ final class AppStore {
     private(set) var olderErrors: [String: String] = [:]
     /// The server's board limits, read after connecting.
     private(set) var boardLimits: BoardLimits?
+    /// The server's kanban board, live while connected.
+    let board = BoardStore()
     /// What `runtime.describe` says the server can do (`session-transcript-v1`, …).
     @ObservationIgnored private var serverCapabilities: Set<String> = []
     /// bot id → how many of its rows came before the attach that is waiting for its first page
@@ -187,6 +189,7 @@ extension AppStore {
         await describeRuntime()
         await loadProfiles()
         await loadBoardLimits()
+        board.start(serverSettings, credential: gateway.credential)
     }
 
     /// `GET /api/config` (the configured values) and the server's memory (`/api/status`), which
@@ -325,6 +328,7 @@ extension AppStore {
 
     private func leaveLive() {
         boardLimits = nil
+        board.stop()
         guard live else { return }
         live = false
         bots = demoBots

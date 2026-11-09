@@ -91,11 +91,12 @@ jobs:
                -destination 'platform=macOS' \
                -derivedDataPath build/DerivedData \
                -only-testing:ShionUITests/SignInTests \
+               -only-testing:ShionUITests/BoardTests \
                -resultBundlePath build/SignIn.xcresult \
                -quiet 2>&1 | tee build/signin.log; then
             echo "Browser sign-in: passed"
           else
-            echo "::warning title=Browser sign-in::the end-to-end sign-in test failed; see the signin-* screenshots and fake_hermes.log in the shots artifact"
+            echo "::warning title=Browser sign-in::the end-to-end sign-in or board test failed; see the signin-* and board-* screenshots and fake_hermes.log in the shots artifact"
             grep -nE 'error:|failed|Failing' build/signin.log | head -40 || true
             exit 1
           fi
