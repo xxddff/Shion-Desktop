@@ -32,6 +32,19 @@ final class ServerCheck {
     private(set) var items = ServerCheck.fresh
     private(set) var running = false
 
+    /// The line over the checks: how many need putting right, once they are done.
+    var summary: String {
+        if running || items.contains(where: { $0.level == .checking }) { return "检查中…" }
+        let fails = items.filter { $0.level == .fail }.count
+        let warns = items.filter { $0.level == .warn }.count
+        switch (fails, warns) {
+        case (0, 0): return "都正常"
+        case (_, 0): return "\(fails) 项要处理"
+        case (0, _): return "\(warns) 项要留意"
+        default: return "\(fails) 项要处理 · \(warns) 项要留意"
+        }
+    }
+
     static let titles: [(id: String, title: String)] = [
         ("access", "Cloudflare Access"), ("login", "登录凭证"), ("protocol", "Canonical 协议"),
         ("capabilities", "服务器能力"), ("plugin", "shion 插件"), ("timezone", "时区数据"), ("kanban", "看板插件"),

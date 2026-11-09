@@ -24,11 +24,13 @@ struct StopButton: View {
     }
 }
 
-/// Under a reply: 已停止 when you stopped it, and 重试 under the chat's last reply.
+/// Under a reply: 已停止 when you stopped it, and 重试 under the chat's last reply. A turn whose
+/// tools may run again asks first (AppStore.retryRisk).
 struct ReplyFooter: View {
     @Environment(AppStore.self) private var store
     let item: ChatItem
     let botId: String
+    @State private var risk: RetryRisk?
 
     var body: some View {
         let retry = !item.streaming && store.retryTarget(botId) == item.id
@@ -42,7 +44,11 @@ struct ReplyFooter: View {
                 }
                 if retry {
                     Button {
-                        store.retryReply(botId)
+                        if let risk = store.retryRisk(botId), risk.asks {
+                            self.risk = risk
+                        } else {
+                            store.retryReply(botId)
+                        }
                     } label: {
                         Label("重试", systemImage: "arrow.clockwise")
                     }
@@ -52,30 +58,76 @@ struct ReplyFooter: View {
             }
             .font(.t12)
             .foregroundStyle(.secondary)
+            .alert("重试这一轮？", isPresented: Binding { risk != nil } set: { if !$0 { risk = nil } }, presenting: risk) { _ in
+                Button("重试") {
+                    store.retryReply(botId)
+                }
+                .accessibilityIdentifier("retry-confirm")
+                Button("取消", role: .cancel) {}
+                    .accessibilityIdentifier("retry-cancel")
+            } message: { risk in
+                Text(risk.message)
+            }
         }
     }
 }
 
 /// A line in a chat that is no one's message: Shion's note, a stop before any words, or why Hermes
-/// ended a turn with an error, set apart. 重试 goes under the line that ends the last turn.
+/// ended a turn with an error, set apart: what went wrong, what to do, and Hermes's own words
+/// under 详情. 重试 goes under the line that ends the last turn.
 struct TurnNote: View {
     let item: ChatItem
     let botId: String
+    @State private var details = false
 
     var body: some View {
-        if item.failed {
+        if let failure = item.failure {
             VStack(alignment: .leading, spacing: 6) {
                 Label {
                     FoundText(item.text)
-                        .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                 } icon: {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .foregroundStyle(Palette.alert)
                 }
                 .font(.t12)
-                ReplyFooter(item: item, botId: botId)
-                    .padding(.leading, 22)
+                VStack(alignment: .leading, spacing: 4) {
+                    if let advice = failure.advice {
+                        Text(advice)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("failure-advice")
+                    }
+                    if let detail = failure.detail {
+                        Button {
+                            details.toggle()
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: details ? "chevron.down" : "chevron.right")
+                                    .font(.system(size: 9, weight: .semibold))
+                                    .accessibilityHidden(true)
+                                Text("详情")
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("failure-details")
+                        if details {
+                            Text(detail)
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .padding(8)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(Palette.fill, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                                .accessibilityIdentifier("failure-detail")
+                        }
+                    }
+                    ReplyFooter(item: item, botId: botId)
+                }
+                .font(.t12)
+                .padding(.leading, 22)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 12)

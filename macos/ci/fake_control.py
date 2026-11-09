@@ -29,8 +29,10 @@ Shaped like Hermes main (2026-11-09):
   error_surface} (agent/conversation_loop.py _close_durable_failed_turn).
 
 The scripted turns: 「讲一个长故事」 streams a sentence every 0.3 s for half a minute, so there is time
-to stop it; 「出个错看看」 fails as a provider's rate limit does after its retries. Once either's row
-has been rewound, the same words get a short reply (the retry). Which profiles have the shion
+to stop it; 「出个错看看」 fails as a provider's rate limit does after its retries (its `text` ends with
+Hermes's notice after a blank line, as gateway/run_turn.py adds it); 「查一下明天的天气」 calls one
+tool (web_search) before it answers, so its retry has something that would run again. Once a
+turn's row has been rewound, the same words get a different reply (the retry). Which profiles have the shion
 plugin is fake_profiles.py's (詩音's only), so the server check has a failure to show.
 """
 import itertools
@@ -50,6 +52,10 @@ FAIL_COPY = ("OpenRouter rate-limited every one of 3 attempts — it looks tempo
 FAILED_TURN_NOTICE = "Your request was not processed. Send it again if you still want me to carry it out."
 FAIL_SURFACE = {"layer": "provider", "code": "rate_limit", "retryable": True, "provider": "openrouter",
                 "model": "anthropic/claude-sonnet-4.5", "provider_label": "OpenRouter"}
+TOOLED = "查一下明天的天气"
+TOOLED_CALL = ("web_search", "明天 吉祥寺 天气")
+TOOLED_REPLY = "明天晴，最高 18 度。"
+TOOLED_RETRIED = "（重试）明天晴，最高 18 度，傍晚起风。"
 MUTATE_KEYS = {"session_id", "request_id", "expected_revision", "operation", "payload"}
 
 state = {"log": print, "transcripts": None, "lock": threading.Lock()}
@@ -78,7 +84,7 @@ def handles(method, params):
     if method in ("session.interrupt", "session.mutate"):
         return True
     text = str(params.get("text", ""))
-    return method == "prompt.submit" and (STORY in text or FAIL in text)
+    return method == "prompt.submit" and (STORY in text or FAIL in text or TOOLED in text)
 
 
 def handle(conn, method, params, rid):
@@ -88,6 +94,8 @@ def handle(conn, method, params, rid):
         return mutate(conn, params, rid)
     if FAIL in str(params.get("text", "")):
         return fail(conn, params, rid)
+    if TOOLED in str(params.get("text", "")):
+        return tooled(conn, params, rid)
     return story(conn, params, rid)
 
 
@@ -232,10 +240,65 @@ def run_fail(conn, session_id, turn, retried):
             complete = {"text": FAIL_RETRIED, "content": FAIL_RETRIED, "outcome": "completed", "status": "complete"}
             turned["final_assistant_row_id"] = answer
         else:
-            complete = {"text": FAIL_COPY, "content": FAIL_COPY, "outcome": "failed", "status": "error",
+            said = f"{FAIL_COPY}\n\n{FAILED_TURN_NOTICE}"
+            complete = {"text": said, "content": said, "outcome": "failed", "status": "error",
                         "error_surface": FAIL_SURFACE}
         complete.update(admission_id=f"adm-{generation}", persisted_turn=turned)
         event(conn, "message.complete", session_id, complete, generation)
+        idle_info(conn, session_id)
+    except OSError:
+        running.pop(session_id, None)
+
+
+def tooled(conn, params, rid):
+    session_id, text = params.get("session_id"), params.get("text", "")
+    conn.send_json({"jsonrpc": "2.0", "id": rid, "result": {"status": "queued", "admission_id": f"adm-{rid}"}})
+    with state["lock"]:
+        current = fence(session_id)
+        current["generation"] += 1
+        user_row = next(row_ids)
+        state["transcripts"].setdefault(session_id, []).append(
+            {"row_id": user_row, "row_kind": "message", "role": "user", "text": text, "timestamp": time.time()})
+        turn = {"generation": current["generation"], "stop": threading.Event(), "user_row": user_row,
+                "submission": params.get("submission_id")}
+        running[session_id] = turn
+        retried = text in rewound
+    threading.Thread(target=run_tooled, args=(conn, session_id, turn, retried), daemon=True).start()
+
+
+def run_tooled(conn, session_id, turn, retried):
+    """詩音 looks the weather up (one web_search), then answers; once rewound, the same again."""
+    generation = turn["generation"]
+    name, context = TOOLED_CALL
+    call = f"call-ci-weather-{generation}"
+    reply = TOOLED_RETRIED if retried else TOOLED_REPLY
+    try:
+        event(conn, "session.info", session_id, {"running": True, "execution_generation": generation}, generation)
+        event(conn, "message.start", session_id, {}, generation)
+        time.sleep(0.3)
+        event(conn, "tool.start", session_id, {"tool_id": call, "name": name, "context": context,
+                                               "args": {"query": context}}, generation)
+        time.sleep(0.3)
+        event(conn, "tool.complete", session_id, {"tool_id": call, "name": name, "result": "{\"ok\": true}"},
+              generation)
+        time.sleep(0.3)
+        event(conn, "message.delta", session_id, {"text": reply}, generation)
+        answer = next(row_ids)
+        with state["lock"]:
+            rows = state["transcripts"].setdefault(session_id, [])
+            rows.append({"row_kind": "message", "role": "tool", "name": name, "context": context,
+                         "tool_call_id": call, "timestamp": time.time()})
+            rows.append({"row_id": answer, "row_kind": "message", "role": "assistant", "text": reply,
+                         "timestamp": time.time()})
+            running.pop(session_id, None)
+            fence(session_id)["revision"] += 1
+        state["log"](f"  -> weather turn on {session_id}: a {name} call, {'again after a rewind' if retried else 'first time'}")
+        event(conn, "message.complete", session_id, {
+            "text": reply, "content": reply, "outcome": "completed", "status": "complete",
+            "admission_id": f"adm-{generation}",
+            "persisted_turn": {"row_ids": [turn["user_row"], answer], "complete": True,
+                               "user_row_id": turn["user_row"], "user_row_ids": [turn["user_row"]],
+                               "final_assistant_row_id": answer, "submission_id": turn["submission"]}}, generation)
         idle_info(conn, session_id)
     except OSError:
         running.pop(session_id, None)

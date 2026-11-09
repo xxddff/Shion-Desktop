@@ -39,6 +39,21 @@ final class ChatControl {
     }
 }
 
+/// What retrying a turn could do again (AppStore.retryRisk): the tools it called, by the names its
+/// folded line shows, and whether Hermes said some of its actions may already have run.
+struct RetryRisk: Equatable {
+    var tools: [String]
+    var actionsMayHaveRun: Bool
+
+    /// 重试 asks first.
+    var asks: Bool { !tools.isEmpty || actionsMayHaveRun }
+
+    var message: String {
+        let done = tools.isEmpty ? "Hermes 说这一轮有些操作可能已经执行了。" : "这一轮用过：\(tools.joined(separator: "、"))。"
+        return "\(done)\n重试会让助手从头再做一遍，这些可能会再做一次。"
+    }
+}
+
 /// Why a stop or a retry did not go through, in words.
 nonisolated enum ControlError: LocalizedError {
     case unknownRun
@@ -160,7 +175,7 @@ extension AppStore {
     // MARK: a failed turn
 
     /// Hermes ended the turn with an error (`message.complete`, status error). What had come stays
-    /// as it came, and a line says why (failureLine); 重试 goes under it when Hermes says trying
+    /// as it came, and a line says why (TurnFailure); 重试 goes under it when Hermes says trying
     /// again may help (`error_surface.retryable`).
     func failReply(_ botId: String, _ payload: JSONValue, reply id: String?) {
         var streamed = ""
@@ -171,26 +186,14 @@ extension AppStore {
                 chats[botId]?.remove(at: index)
             }
         }
-        chats[botId, default: []].append(ChatItem(
-            id: UUID().uuidString, role: .system, at: Date(), text: Self.failureLine(payload, streamed: streamed),
-            failed: true, retryable: payload["error_surface"]?["retryable"]?.bool == true))
+        let failure = TurnFailure.live(payload, streamed: streamed)
+        chats[botId, default: []].append(ChatItem(id: UUID().uuidString, role: .system, at: Date(),
+                                                  text: failure.line, failure: failure))
     }
 
-    /// Why a turn failed, in Hermes's words. `error_surface` is a descriptor ({layer, code,
-    /// retryable}), not words. The TUI gateway's frames carry the message in `error`; the session
-    /// gateway Shion talks to sends none, and its `text` is then Hermes's own copy of the failure
-    /// (what it would have replied), unless `partial` says it is the reply's streamed part. Last
-    /// comes `failure_reason`, a code such as rate_limit.
+    /// The line a failed turn gets, for its notification.
     nonisolated static func failureLine(_ payload: JSONValue, streamed: String) -> String {
-        func said(_ value: JSONValue?) -> String? {
-            let text = value?.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            return text.isEmpty ? nil : text
-        }
-        let copy = said(payload["text"]).flatMap { text in
-            payload["partial"]?.bool == true || text == streamed.trimmingCharacters(in: .whitespacesAndNewlines)
-                ? nil : text
-        }
-        return "这一轮出错了：\(said(payload["error"]) ?? copy ?? said(payload["failure_reason"]) ?? "没有说明")"
+        TurnFailure.live(payload, streamed: streamed).line
     }
 
     /// The row Hermes closes a failed turn with in the transcript (`display_kind` failed_turn: its
@@ -198,11 +201,8 @@ extension AppStore {
     /// live failure gets.
     static func failedTurn(_ row: JSONValue, id: String, at: Date, body: String) -> ChatItem? {
         guard row["display_kind"]?.string == "failed_turn" else { return nil }
-        let metadata = row["display_metadata"]
-        let error = metadata?["error"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let why = error.isEmpty ? body.trimmingCharacters(in: .whitespacesAndNewlines) : error
-        return ChatItem(id: id, role: .system, at: at, text: "这一轮出错了：\(why.isEmpty ? "没有说明" : why)",
-                        failed: true, retryable: metadata?["error_surface"]?["retryable"]?.bool == true)
+        let failure = TurnFailure.stored(row, body: body)
+        return ChatItem(id: id, role: .system, at: at, text: failure.line, failure: failure)
     }
 
     // MARK: retry
@@ -215,7 +215,7 @@ extension AppStore {
         guard live, !readOnly, sessions[botId] != nil, !turnRunning(botId), !control.retrying.contains(botId),
               let items = chats[botId],
               let end = items.lastIndex(where: { Self.endsTurn($0) }),
-              !items[end].failed || items[end].retryable,
+              items[end].failure?.retryable ?? true,
               let prompt = items[..<end].lastIndex(where: { Self.startsTurn($0) }),
               items[prompt].role == .user,
               !items[(end + 1)...].contains(where: { Self.startsTurn($0) })
@@ -232,9 +232,30 @@ extension AppStore {
     private static func endsTurn(_ item: ChatItem) -> Bool {
         switch item.role {
         case .assistant: !item.streaming
-        case .system: item.stopped || item.failed
+        case .system: item.stopped || item.failure != nil
         default: false
         }
+    }
+
+    /// What 重试 would do again: the turn starts over from your words, and rewinding the chat
+    /// does not undo what its tools did (a card made, a todo written, a message sent). So a turn
+    /// that called tools, or that Hermes says may have run some actions (its notice for a turn
+    /// that called tools), asks first. Nil when there is nothing to retry.
+    func retryRisk(_ botId: String) -> RetryRisk? {
+        guard let target = retryTarget(botId), let items = chats[botId],
+              let end = items.firstIndex(where: { $0.id == target }),
+              let prompt = items[..<end].lastIndex(where: { $0.role == .user })
+        else { return nil }
+        var tools: [String] = []
+        for item in items[(prompt + 1)...] {
+            // as the folded line names the calls (ChatLines.swift), and the cards the chat made
+            let name = item.role == .tool ? item.toolName
+                : item.role == .card && item.text.isEmpty ? item.cardTitle.map { "建卡片「\($0)」" } : nil
+            if let name, !tools.contains(name) {
+                tools.append(name)
+            }
+        }
+        return RetryRisk(tools: tools, actionsMayHaveRun: items[end].failure?.actionsMayHaveRun ?? false)
     }
 
     /// Asks the last prompt again, as Hermes's `/retry` does: the prompt's row and everything after

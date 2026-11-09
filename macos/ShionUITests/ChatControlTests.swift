@@ -6,7 +6,8 @@ import XCTest
 /// does, then: Settings' 服务器体检 against the stand-in (only 詩音's profile has the shion plugin); in
 /// 詩音's chat a long reply stopped with ⌘. (session.interrupt for the turn's run) and kept as
 /// 已停止; 重试 on it (a fenced rewind, then the same words again); a turn the stand-in fails as a
-/// provider's rate limit does, explained in Hermes's words and retried; ⌘F over the loaded rows,
+/// provider's rate limit does, explained in Chinese with Hermes's words under 详情, and retried; a
+/// turn that called a tool, whose 重试 asks first (取消, then 重试); ⌘F over the loaded rows,
 /// and back into older pages for a hit not loaded yet; then 断开, and the window keeps the server's
 /// data, read-only. A picture at each step (chatctl-*.png).
 final class ChatControlTests: XCTestCase {
@@ -104,20 +105,31 @@ final class ChatControlTests: XCTestCase {
                           app.textViews.matching(NSPredicate(format: "value == %@", "讲一个长故事")).count)
         XCTAssertLessThanOrEqual(prompts, 1, "the prompt shows \(prompts) times after 重试")
 
-        // a turn Hermes ends with an error (a provider's rate limit): the line says why in Hermes's
-        // words, and 重试 is under it because Hermes says trying again may help
+        // a turn Hermes ends with an error (a provider's rate limit): the line says what went wrong
+        // and what to do in Shion's words, Hermes's own under 详情, its notice not in English; 重试
+        // is under it, as Hermes says trying again may help, and asks nothing: no tool was called
         composer.click()
         composer.typeText("出个错看看")
         element("send", in: app).click()
         let failure = element("turn-failed", in: app)
         let explained = failure.waitForExistence(timeout: 15)
-            && waitForText("这一轮出错了：OpenRouter rate-limited every one of 3 attempts", in: app, timeout: 5)
-        keep(app.windows.firstMatch.screenshot(), "chatctl-4b-failed")
+            && waitForText("这一轮出错了：OpenRouter 那边请求太多了", in: app, timeout: 5)
         XCTAssertTrue(explained, "the failed turn does not say why")
+        XCTAssertTrue(waitForText("等一会儿再试。", in: app, timeout: 2), "no advice under the error")
         XCTAssertFalse(waitForText("没有说明", in: app, timeout: 1), "the failed turn says 没有说明")
+        let details = element("failure-details", in: app)
+        if details.waitForExistence(timeout: 3) {
+            details.click()
+            XCTAssertTrue(waitForText("rate-limited every one of 3 attempts", in: app, timeout: 3), "详情 does not show Hermes's words")
+        } else {
+            XCTFail("no 详情 under the error")
+        }
+        XCTAssertFalse(waitForText("Your request was not processed", in: app, timeout: 1), "Hermes's notice shows in English")
+        keep(app.windows.firstMatch.screenshot(), "chatctl-4b-failed")
         let again = element("retry", in: app)
         if again.waitForExistence(timeout: 5) {
             again.click()
+            XCTAssertNil(question(in: app, timeout: 1), "重试 asked first although the turn called no tool")
             XCTAssertTrue(waitForText("（重试）这次没出错。", in: app, timeout: 15), "重试 on the failed turn did not reply")
             XCTAssertFalse(element("turn-failed", in: app).exists, "the error is still there after 重试")
             let asked = max(app.staticTexts.matching(NSPredicate(format: "label == %@", "出个错看看")).count,
@@ -125,6 +137,41 @@ final class ChatControlTests: XCTestCase {
             XCTAssertLessThanOrEqual(asked, 1, "the failed prompt shows \(asked) times after 重试")
         } else {
             XCTFail("no 重试 under a failure Hermes says can be retried")
+        }
+
+        // a turn that called a tool: 重试 asks first, as the tool would run again; 取消 leaves the
+        // chat as it was, 重试 in the question goes ahead
+        composer.click()
+        composer.typeText("查一下明天的天气")
+        element("send", in: app).click()
+        XCTAssertTrue(waitForText("明天晴，最高 18 度", in: app, timeout: 15), "the weather turn did not reply")
+        let retryTool = element("retry", in: app)
+        if retryTool.waitForExistence(timeout: 5) {
+            retryTool.click()
+            if let ask = question(in: app, timeout: 5) {
+                keep(app.windows.firstMatch.screenshot(), "chatctl-4c-confirm")
+                let says = ask.staticTexts.allElementsBoundByIndex.map { "\($0.label) \(($0.value as? String) ?? "")" }
+                    .joined(separator: " ")
+                XCTAssertTrue(says.contains("web_search") && says.contains("可能会再做一次"), "the question does not name the tool: \(says)")
+                button("retry-cancel", "取消", in: ask).click()
+                XCTAssertTrue(waitUntil(timeout: 3) { !ask.exists }, "取消 did not close the question")
+                XCTAssertFalse(waitForText("（重试）明天晴", in: app, timeout: 2), "取消 retried all the same")
+                XCTAssertTrue(waitForText("明天晴，最高 18 度", in: app, timeout: 2), "取消 changed the chat")
+                element("retry", in: app).click()
+                if let ask = question(in: app, timeout: 5) {
+                    button("retry-confirm", "重试", in: ask).click()
+                    XCTAssertTrue(waitForText("（重试）明天晴，最高 18 度，傍晚起风", in: app, timeout: 15), "the confirmed 重试 did not reply")
+                    let asked = max(app.staticTexts.matching(NSPredicate(format: "label == %@", "查一下明天的天气")).count,
+                                    app.textViews.matching(NSPredicate(format: "value == %@", "查一下明天的天气")).count)
+                    XCTAssertLessThanOrEqual(asked, 1, "the weather prompt shows \(asked) times after 重试")
+                } else {
+                    XCTFail("重试 did not ask the second time")
+                }
+            } else {
+                XCTFail("重试 on a turn that called a tool did not ask first")
+            }
+        } else {
+            XCTFail("no 重试 under the weather reply")
         }
 
         // ⌘F over the rows loaded: 第 120 to 129 条 are on the newest page
@@ -174,7 +221,7 @@ final class ChatControlTests: XCTestCase {
         // opened again, the chat starts at its newest row
         element("nav-today", in: app).click()
         element("bot-shion", in: app).click()
-        let kept = waitForText("（重试）故事讲完了", in: app, timeout: 5)
+        let kept = waitForText("（重试）明天晴，最高 18 度，傍晚起风", in: app, timeout: 5)
         let note = waitForText("上次的数据 · ", in: app, timeout: 5)
         keep(app.windows.firstMatch.screenshot(), "chatctl-8-offline-chat")
         XCTAssertTrue(kept, "the chat went back to the demo after 断开")
@@ -245,6 +292,28 @@ final class ChatControlTests: XCTestCase {
         let found = element(identifier, in: root)
         XCTAssertTrue(found.waitForExistence(timeout: 3), "no \(identifier)")
         XCTAssertTrue(says(found).hasSuffix(text), "\(identifier): \(says(found))")
+    }
+
+    /// The question over the window (an alert sheet), if one comes up within `timeout`. Its buttons
+    /// are looked up in it, not among the window's: the chat's own 重试 has the same name, and so do
+    /// the Touch Bar's buttons.
+    @MainActor
+    private func question(in app: XCUIApplication, timeout: TimeInterval) -> XCUIElement? {
+        let places = [app.windows.sheets.firstMatch, app.sheets.firstMatch, app.windows.dialogs.firstMatch,
+                      app.dialogs.firstMatch]
+        var found: XCUIElement?
+        _ = waitUntil(timeout: timeout) {
+            found = places.first { $0.exists }
+            return found != nil
+        }
+        return found
+    }
+
+    /// A button in `container`, by its identifier if the alert kept it, else by its name.
+    @MainActor
+    private func button(_ identifier: String, _ name: String, in container: XCUIElement) -> XCUIElement {
+        let byIdentifier = container.buttons[identifier]
+        return byIdentifier.exists ? byIdentifier : container.buttons[name]
     }
 
     /// The find bar's "3/10" as (3, 10).

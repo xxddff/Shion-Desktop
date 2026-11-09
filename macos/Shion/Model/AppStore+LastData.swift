@@ -67,7 +67,7 @@ nonisolated struct StoredItem: Codable, Sendable {
     var cardTitle: String?
     var cardAssignee: String?
     var stopped: Bool?
-    var failed: Bool?
+    var failure: TurnFailure?
 }
 
 nonisolated struct StoredTodo: Codable, Sendable {
@@ -138,6 +138,10 @@ extension AppStore {
             MainActor.assumeIsolated {
                 self?.saveLastData(now: true)
             }
+        }
+        // the failed turn's screenshot (DemoData+Failure.swift)
+        if LaunchOptions.current.snapshot, UserDefaults.standard.bool(forKey: "ShionFailureDemo") {
+            chats[chiefId, default: []] += DemoData(now: demoClock).failedTurn
         }
     }
 
@@ -335,7 +339,7 @@ extension StoredItem {
         }
         self.init(id: item.id, role: name, at: item.at, text: item.text, cardId: item.cardId,
                   cardTitle: item.cardTitle, cardAssignee: item.cardAssignee, stopped: item.stopped ? true : nil,
-                  failed: item.failed ? true : nil)
+                  failure: item.failure)
     }
 
     var item: ChatItem? {
@@ -349,7 +353,7 @@ extension StoredItem {
         }
         guard let kind else { return nil }
         return ChatItem(id: id, role: kind, at: at, text: text, cardId: cardId, cardTitle: cardTitle,
-                        cardAssignee: cardAssignee, stopped: stopped ?? false, failed: failed ?? false)
+                        cardAssignee: cardAssignee, stopped: stopped ?? false, failure: failure)
     }
 }
 
