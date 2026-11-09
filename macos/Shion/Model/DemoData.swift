@@ -112,6 +112,60 @@ struct DemoData {
                 ChatItem(id: "s8", role: .card, at: at(0, 10, 32), cardId: "c7a1"),
                 ChatItem(id: "s9", role: .card, at: at(0, 10, 32), cardId: "c7b2"),
                 ChatItem(id: "s10", role: .assistant, at: at(0, 10, 50), text: "小测原定 10:45 开始，已经过了 5 分钟。15 分钟就能做完，现在开始吧？", todoIds: ["td2"]),
+                // a finished turn: its tool calls fold into one line above the reply
+                ChatItem(id: "s11", role: .user, at: at(0, 10, 51), text: "这周还有哪些作业？列个表"),
+                ChatItem(id: "s12", role: .tool, at: at(0, 10, 51), text: "calendar_events · 本周的截止日期"),
+                ChatItem(id: "s13", role: .tool, at: at(0, 10, 51), text: "notion_search · 作业"),
+                ChatItem(id: "s14", role: .tool, at: at(0, 10, 51), text: "web_extract · moodle.example/course/ds"),
+                ChatItem(id: "s15", role: .assistant, at: at(0, 10, 52), text: """
+                    这周要交的有 3 项，按截止时间排：
+
+                    | 作业 | 截止 | 进度 |
+                    | :-- | :-: | --: |
+                    | 机器学习 课前小测 | 今天 12:50 | 0% |
+                    | 实验报告 第3章 | 周三 17:00 | 60% |
+                    | 数据结构 作业4 | 周五 23:59 | 0% |
+
+                    作业4 要做两件事：
+                    1. 实现 `push` 和 `pop`
+                    2. 写测试，至少覆盖：
+                       - 空堆
+                       - 重复的元素
+
+                    ```python
+                    heap.push(3)
+                    assert heap.pop() == 3
+                    ```
+                    """),
+            ],
+            // 课程's notes on the lecture: headings, lists in lists, a quote, task boxes, a rule
+            "study": [
+                ChatItem(id: "k1", role: .user, at: at(0, 10, 47), text: "第7回讲了什么？先给我个提纲"),
+                ChatItem(id: "k2", role: .tool, at: at(0, 10, 47), text: "read_file · 第7回录音转写.txt"),
+                ChatItem(id: "k3", role: .tool, at: at(0, 10, 48), text: "notion_search · 数据结构与算法 第6回"),
+                ChatItem(id: "k4", role: .assistant, at: at(0, 10, 49), text: """
+                    ## 第7回：堆与优先队列
+
+                    **堆**是一棵完全二叉树，每个父节点都不大于它的子节点（*最小堆*）。
+
+                    ### 要点
+                    1. 插入：放到最后一个位置，再**上浮**
+                    2. 删除最小值：
+                       - 把最后一个元素换到根
+                       - 再**下沉**，和较小的子节点交换
+                    3. 建堆是 O(n)，不是 ~~O(n log n)~~
+
+                    > 老师说期末一定会考建堆的复杂度。
+
+                    ### 我在做的
+                    - [x] 读完录音
+                    - [ ] 列出要做的事
+                    - [ ] 下载课件，存进 Notion
+
+                    ---
+
+                    第6回的笔记在 [Notion](https://www.notion.so) 里，可以先对照着看。
+                    """),
             ],
             "commute": [
                 ChatItem(id: "m1", role: .system, at: at(0, 7, 50), text: "出门提醒 · 07:50"),

@@ -169,7 +169,49 @@ final class BoardTests: XCTestCase {
         keep(window.screenshot(), "board-11-today")
         XCTAssertTrue(both, "助手在做 does not list the cards running on both boards")
         XCTAssertFalse(waitForText("整理「数据结构与算法 第7回」录音", in: app, timeout: 0.5), "demo cards on 今天")
+
+        // back in 詩音's chat, a turn of three tool calls and then a reply with a table: the calls
+        // show while the turn runs and fold into one line once the reply is in, which a click
+        // opens; the table is laid out, so a cell is a text of its own, not a line with pipes
+        element("bot-shion", in: app).click()
+        XCTAssertTrue(composer.waitForExistence(timeout: 10), "詩音's chat did not open again")
+        Thread.sleep(forTimeInterval: 1)
+        composer.click()
+        composer.typeText("列一下这周的作业（CI）")
+        element("send", in: app).click()
+        let running = waitForText("web_search · 这周的作业（CI）", in: app, timeout: 8)
+        keep(window.screenshot(), "board-12-chat-tools-running")
+        print("a tool call showed while the turn ran: \(running)")
+        let cell = waitUntil(timeout: 15) { self.exactText("周三 17:00（CI）", in: app) != nil }
+        let folded = waitUntil(timeout: 10) {
+            self.labelled("用了 3 个工具", in: app) && self.findText("read_file · syllabus（CI）", in: app) == nil
+        }
+        keep(window.screenshot(), "board-13-chat-folded")
+        XCTAssertTrue(cell, "the reply's table is not laid out: no text is just 周三 17:00（CI）")
+        XCTAssertTrue(element("markdown-table", in: app).exists, "no table in the reply")
+        XCTAssertTrue(folded, "the turn's tool calls did not fold into one line once the reply was in")
+        let run = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "用了 3 个工具")).firstMatch
+        XCTAssertTrue(run.waitForExistence(timeout: 3), "no button for the folded tool calls")
+        run.click()
+        let opened = waitForText("read_file · syllabus（CI）", in: app, timeout: 5)
+        keep(window.screenshot(), "board-14-chat-tools-opened")
+        XCTAssertTrue(opened, "the folded tool calls did not open on a click")
         app.terminate()
+    }
+
+    /// Anything labelled with `text`, a button among them.
+    @MainActor
+    private func labelled(_ text: String, in app: XCUIApplication) -> Bool {
+        app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", text)).firstMatch.exists
+    }
+
+    /// A text element showing just `text`, plain or selectable: a table's cell, where Markdown
+    /// left as written would be one text with the pipes in it.
+    @MainActor
+    private func exactText(_ text: String, in app: XCUIApplication) -> XCUIElement? {
+        let exact = NSPredicate(format: "label == %@ OR value == %@", text, text)
+        return [app.staticTexts.matching(exact).firstMatch, app.textViews.matching(exact).firstMatch]
+            .first { $0.exists }
     }
 
     @MainActor
