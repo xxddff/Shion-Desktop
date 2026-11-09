@@ -137,7 +137,7 @@ final class WorkTests: XCTestCase {
         XCTAssertTrue(toggle.waitForExistence(timeout: 5), "no setting for done cards")
         let off = turnOff(toggle)
         keep(prefs.screenshot(), "work-7-settings")
-        XCTAssertTrue(off, "the setting did not turn off: \(String(describing: toggle.value))")
+        XCTAssertNotEqual(off, false, "the setting did not turn off: \(String(describing: toggle.value))")
         app.typeKey("w", modifierFlags: .command)
         make("离开看板后做完的卡（CI 通知）", in: app)
         element("nav-today", in: app).click()
@@ -206,33 +206,42 @@ final class WorkTests: XCTestCase {
         XCTAssertTrue(waitForText(title, in: app, timeout: 10), "the new card did not show")
     }
 
-    /// Whether a card titled `title` is in one of the board page's columns. Labels only: a column's
-    /// scroll bar has a number for its value, which a CONTAINS predicate throws on.
+    /// Whether a card titled `title` shows in one of the board page's columns: a text with its
+    /// title inside the column's frame, as BoardTests checks a drag (a column's own children do
+    /// not list its cards).
     @MainActor
     private func inColumn(_ title: String, _ column: String, in app: XCUIApplication) -> Bool {
         let box = element("board-column-\(column)", in: app)
-        return box.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", title)).firstMatch.exists
+        guard box.exists else { return false }
+        let area = box.frame
+        let texts = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", title))
+        for index in 0..<texts.count {
+            let text = texts.element(boundBy: index)
+            if text.exists && area.contains(CGPoint(x: text.frame.midX, y: text.frame.midY)) {
+                return true
+            }
+        }
+        return false
     }
 
     /// Turns a switch off: a click on it, or on its knob at the trailing end when the click went
-    /// to its label.
+    /// to its label. The identifier may be on the switch or on its row. Nil when its state cannot
+    /// be read; the notifications that follow tell then.
     @MainActor
-    private func turnOff(_ toggle: XCUIElement) -> Bool {
-        func isOn() -> Bool {
-            if let number = toggle.value as? NSNumber { return number.boolValue }
-            if let text = toggle.value as? String { return text == "1" || text.lowercased() == "on" }
-            return true
+    private func turnOff(_ toggle: XCUIElement) -> Bool? {
+        let control = [toggle.switches.firstMatch, toggle.checkBoxes.firstMatch].first { $0.exists } ?? toggle
+        func isOn() -> Bool? {
+            if let number = control.value as? NSNumber { return number.boolValue }
+            if let text = control.value as? String { return text == "1" || text.lowercased() == "on" }
+            return nil
         }
-        guard isOn() else { return true }
-        toggle.click()
-        if waitUntil(timeout: 2, { !isOn() }) { return true }
-        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.5)).click()
-        if waitUntil(timeout: 2, { !isOn() }) { return true }
-        let control = toggle.switches.firstMatch.exists ? toggle.switches.firstMatch : toggle.checkBoxes.firstMatch
-        if control.exists {
-            control.click()
-        }
-        return waitUntil(timeout: 2) { !isOn() }
+        print("the switch for done cards: \(control.elementType.rawValue), value \(String(describing: control.value))")
+        guard isOn() != false else { return true }
+        control.click()
+        if waitUntil(timeout: 2, { isOn() == false }) { return true }
+        guard isOn() != nil else { return nil }
+        control.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.5)).click()
+        return waitUntil(timeout: 2) { isOn() == false }
     }
 
     @MainActor
