@@ -88,7 +88,9 @@ public final class URLSessionWebSocketTransport: NSObject, RFBTransport, URLSess
         switch code {
         case .normal: task.cancel(with: .normalClosure, reason: nil)
         case .goingAway: task.cancel(with: .goingAway, reason: nil)
-        case .abort: task.cancel()  // no close code of ours; prefer NWWebSocketTransport for a hard drop
+        // No close code of ours. Unverified: whether URLSession still sends a close frame here,
+        // which would make the bridge hand the lease back (README, "还没验证").
+        case .abort: task.cancel()
         }
         session.finishTasksAndInvalidate()
     }

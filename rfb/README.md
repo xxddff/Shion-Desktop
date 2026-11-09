@@ -97,7 +97,7 @@ task.cancel()
 - **光标**：接管时调 `setCursorShapeUpdates(true)`，交还时调 `false`。
 - **连接意外断了，先看租约再决定怎么办。** 关闭码 4000 能直接说明「别人接管了」，`URLSessionWebSocketTransport` 在 macOS 上能拿到它（第 15 条）。但有时候没有关闭码：网络本身断了，或者收的一侧正好因为积压超过 8 MiB 而暂停。这时看 gateway 连接上最新的 `display.lease` 事件（或调 `display.status`）：持有者是别人（`viewer_hash` 不是自己的），就是被挤掉了，回到只看；还是自己，就是画面连接断了，重新接上，控制权还在。
 - **`viewer_id` 只在发它的那条 gateway 连接上有效。** Hermes 按 `/api/ws` 连接记着自己发过哪些 id（`tui_gateway/methods_display.py` 的 `_mint_viewer_id` / `_foreign_viewer_id`），`display.observe` 只认这条连接发过的 id，`display.lease.acquire` / `release` 也不认别的连接发的 id。所以：只断了画面连接、gateway 连接还在时，带原来的 `viewer_id` 调 `display.observe`，拿到同一个 id，租约还在你手里；gateway 连接也断了的话，旧 id 不再有用，重连后 `display.observe` 拿新 id，在新连接上再 `display.lease.acquire` 一次（最后接管的人赢）。
-- **关闭方式**：`close(.normal)`（1000）和 `.goingAway`（1001）都会让桥交还租约；`.abort` 直接断开、不发关闭帧，桥当成网络断开，租约留在你手里。客户端自己的超时都用 `.abort`：发送失败后最多再读 2 秒（`sendFailureGrace`），等不到关闭原因就这样断开；握手超时、keepalive 超时也一样。这些情况 `run` 抛 `RFBError.timedOut` 或原来那次发送的错误，不会误交还租约。
+- **关闭方式**：`close(.normal)`（1000）和 `.goingAway`（1001）都会让桥交还租约；`.abort` 直接断开、不发关闭帧，桥当成网络断开，租约留在你手里（自带的 ws:// 客户端直接关 socket，Network.framework 用 `forceCancel()`；URLSession 只能用 `task.cancel()`，它会不会仍然发关闭帧、把租约交还，还没验证，见「还没验证」）。客户端自己的超时都用 `.abort`：发送失败后最多再读 2 秒（`sendFailureGrace`），等不到关闭原因就这样断开；握手超时、keepalive 超时也一样。这些情况 `run` 抛 `RFBError.timedOut` 或原来那次发送的错误，不会误交还租约。
 - **错误里没有秘密。** 传输层抛的错误只有 `RFBConnectionClosed`（关闭码和理由）、`WebSocketTransportError`（只有 domain 和 code）、`RFBError`、`RFBSocketError`（最多有主机和端口）。Foundation 自己的错误把整个 URL（带 ticket）写在描述里，所以从不原样往外抛。
 - **只看时窗口不可见**：直接 `close(.normal)`，只留缩略图。`setContinuousUpdates(false)` 只是改成一问一答，连接开着，服务器仍当有人在看。
 
