@@ -60,7 +60,9 @@ final class QuickAskTests: XCTestCase {
         XCTAssertTrue(global, "⌥Space with Finder in front did not bring up the window")
         if global {
             XCTAssertEqual(bar.value as? String, "hotkey", "the window came up, but not by the global shortcut")
-            finder.typeKey(" ", modifierFlags: .option)
+            // pressed where the keys now are, the window's field: typing at Finder could hand the
+            // keyboard back to Finder first, and then the shortcut brings the window back instead
+            field.typeKey(" ", modifierFlags: .option)
             let away = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: field)
             XCTAssertEqual(XCTWaiter().wait(for: [away], timeout: 5), .completed, "pressing ⌥Space again did not put it away")
         } else {
