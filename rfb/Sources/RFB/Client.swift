@@ -424,6 +424,24 @@ public actor RFBClient {
         try await send(.keyEvent(down: down, keysym: keysym))
     }
 
+    /// Presses and releases `keysym` while holding `modifiers` (keysyms, pressed in order and
+    /// released in reverse), e.g. `sendKeyPress(0x76, modifiers: [Keysym.controlLeft])` for Ctrl+V.
+    public func sendKeyPress(_ keysym: UInt32, modifiers: [UInt32] = []) async throws {
+        for m in modifiers { try await sendKey(m, down: true) }
+        try await sendKey(keysym, down: true)
+        try await sendKey(keysym, down: false)
+        for m in modifiers.reversed() { try await sendKey(m, down: false) }
+    }
+
+    /// Types `text` where the remote cursor is: puts it on the remote clipboard, then presses
+    /// Ctrl+V. How ⌘V and committed input-method text reach the screen. The remote program asks
+    /// Xvnc for the text when it handles Ctrl+V, so keep the connection open until it has.
+    /// (In a terminal, Ctrl+V does not paste; that needs Ctrl+Shift+V.)
+    public func paste(_ text: String, shortcut: [UInt32] = [Keysym.controlLeft]) async throws {
+        try await sendClipboard(text)
+        try await sendKeyPress(0x76, modifiers: shortcut)  // "v"
+    }
+
     /// `x`, `y` in framebuffer pixels; clamped to the screen.
     public func sendPointer(x: Int, y: Int, buttons: PointerButtons) async throws {
         let px = UInt16(clamping: min(max(x, 0), max(framebuffer.width - 1, 0)))

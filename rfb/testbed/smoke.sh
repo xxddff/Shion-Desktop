@@ -3,8 +3,9 @@
 #   1. without the Access header the upgrade is refused (HTTP 403);
 #   2. a watcher gets a picture, and its paste never reaches the screen;
 #   3. a ticket works once: the second use is closed with 4401;
-#   4. the lease holder's UTF-8 paste arrives in X intact.
-#   rfb/testbed/smoke.sh        (builds rfb-probe first)
+#   4. the lease holder's UTF-8 paste arrives in X intact;
+#   5. (when a Chrome or Chromium is installed) typing by clipboard + Ctrl+V lands in a text box.
+#   rfb/testbed/smoke.sh        (builds rfb-probe first; RFB_TESTBED_CHROME=/path/to/chrome to pick one)
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PKG="$(cd "$HERE/.." && pwd)"
@@ -58,4 +59,27 @@ wait $P || fail "holder probe failed"
 # A normal close (1000) by the holder hands the lease back, as on Hermes.
 curl -fs "$API/lease" | grep -q '"holder": "agent"' || fail "lease not handed back on close"
 cat "$WORK/p4.log"
+
+CHROME="${RFB_TESTBED_CHROME:-$(command -v google-chrome chromium chromium-browser 2>/dev/null | head -1 || true)}"
+if [[ -n "$CHROME" ]]; then
+  echo "== 5. clipboard + Ctrl+V types into a browser text box ($(basename "$CHROME"))"
+  X "$CHROME" --no-sandbox --disable-gpu --no-first-run --user-data-dir="$WORK/chrome" \
+    --window-position=0,0 --window-size=1000,700 --app="file://$HERE/input.html" >"$WORK/chrome.log" 2>&1 &
+  CH=$!
+  for _ in $(seq 1 100); do X xdotool search --name '^empty$' >/dev/null 2>&1 && break; sleep 0.2; done
+  X xdotool mousemove 300 200 click 1   # focus the text box (no window manager here)
+  curl -fs "$API/lease/acquire?viewer_id=typist" >/dev/null
+  TEXT=$'你好，云桌面\nクラウド 👋 ok'
+  "$PROBE" "$("$HERE/observe.sh" typist)" -H 'CF-Access-Client-Id: @env:CF_ID' --out "$WORK/p5" --seconds 3 --type "$TEXT" 2>"$WORK/p5.log" \
+    || fail "typing probe failed"
+  GOT=""
+  for _ in $(seq 1 25); do
+    GOT=$(X xdotool search --name '^T:' getwindowname 2>/dev/null | head -1 || true)
+    [[ -n "$GOT" ]] && break; sleep 0.2
+  done
+  kill $CH 2>/dev/null || true
+  [[ "$GOT" == "T:${TEXT//$'\n'/⏎}" ]] || fail "typed text differs: $(printf %q "$GOT")"
+else
+  echo "== 5. skipped: no Chrome or Chromium (set RFB_TESTBED_CHROME)"
+fi
 echo "OK"

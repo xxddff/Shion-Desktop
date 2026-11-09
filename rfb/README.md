@@ -81,8 +81,8 @@ await client.close(.normal)
 ```
 
 - **事件回调在客户端的 actor 上同步执行**，回调返回之前帧缓冲不会再变。显示层应在回调里把脏矩形拷走，不要把 `Framebuffer` 存起来：它是写时复制的值类型，存着它会让下一次更新整块复制一次。
-- **输入**（`sendKey`、`sendPointer`、`sendScroll`、`sendClipboard`）可以在 `run` 运行时从任何地方调用。没拿到租约时，桥会把它们直接丢掉，不报错。
-- **剪贴板**：`sendClipboard(text)` 先宣告有文字（Notify），等 Xvnc 来要（Request）时再把 UTF-8 文字交过去（Provide）。所以「放进剪贴板 + 发 Ctrl+V」时，连接要一直开着，远端程序粘贴的那一刻 Xvnc 才来取。超过 256 KiB 直接抛 `RFBError.refusedToSend`，不会发出去让桥断开。
+- **输入**（`sendKey`、`sendKeyPress`、`sendPointer`、`sendScroll`、`sendClipboard`、`paste`）可以在 `run` 运行时从任何地方调用。没拿到租约时，桥会把它们直接丢掉，不报错。`Keysym` 里有常用键的 keysym 和字符到 keysym 的换算。
+- **剪贴板**：`sendClipboard(text)` 先宣告有文字（Notify），等 Xvnc 来要（Request）时再把 UTF-8 文字交过去（Provide）。`paste(text)` 是「放进剪贴板 + 按 Ctrl+V」，⌘V 和输入法确认的文字都走它。远端程序处理 Ctrl+V 的那一刻 Xvnc 才来取文字，所以连接要一直开着。超过 256 KiB 直接抛 `RFBError.refusedToSend`，不会发出去让桥断开。
 - **光标**：接管时调 `setCursorShapeUpdates(true)`，交还时调 `false`。
 - **只看时窗口不可见**：直接 `close(.normal)`，只留缩略图。`setContinuousUpdates(false)` 只是改成一问一答，连接开着，服务器仍当有人在看。
 
@@ -117,6 +117,7 @@ swift run rfb-probe <url> [选项]
 - `--seconds N` / `--updates N`：看多久、收多少帧后停。
 - `--no-continuous`、`--no-pipeline`、`--no-extended-desktop-size`、`--encodings zrle,copyrect,raw`：对比用。
 - `--paste 文本`：拿到画面后把文字放进远端剪贴板（要持有租约）。
+- `--type 文本`：拿到画面后用「剪贴板 + Ctrl+V」把文字打到远端光标处（要持有租约）。
 - `--cursor-after 秒数`、`--move-pointer X,Y`：试接管时的光标行为。
 
 在自己的 Mac 上对真的服务器跑一次（**还没在真服务器上试过**）：
@@ -147,7 +148,7 @@ swift run --package-path rfb rfb-probe "$(rfb/testbed/observe.sh)" --seconds 5
 - `observe.sh [viewer_id]` 相当于 `display.observe`，打印一个带新 ticket 的 `ws://` 地址。
 - 租约：`curl 'http://127.0.0.1:8765/lease/acquire?viewer_id=me'`、`/lease/release`、`/lease`。拿 `observe.sh me` 的地址连上，就是持有租约的人。
 - 环境变量：`RFB_TESTBED_DISPLAY`（默认 `:21`）、`RFB_TESTBED_PORT`（8765）、`RFB_TESTBED_GEOMETRY`（1440x900，和 Hermes 默认一样）、`RFB_TESTBED_SCENE=static`（画面不会自己变，录样本用）、`RFB_TESTBED_REQUIRE_HEADER=CF-Access-Client-Id`（不带这个头就 403，像 Cloudflare Access）、`RFB_TESTBED_LATENCY_MS=150`（加一个往返延迟，模拟远的 Cloudflare 线路）。
-- `smoke.sh`：端到端检查，CI 也跑它。不带 Access 头会被拒（403）；只看的人能看到画面，粘贴进不去；同一张 ticket 第二次用被 4401 关掉；持有租约的人粘贴的中文、日文、emoji 原样到了 X 的剪贴板；用 1000 关闭后租约交还。
+- `smoke.sh`：端到端检查，CI 也跑它。不带 Access 头会被拒（403）；只看的人能看到画面，粘贴进不去；同一张 ticket 第二次用被 4401 关掉；持有租约的人粘贴的中文、日文、emoji 原样到了 X 的剪贴板；用 1000 关闭后租约交还。装了 Chrome 或 Chromium 时（GitHub 的 Ubuntu runner 上有）再加一步：用「剪贴板 + Ctrl+V」往浏览器的文本框里打一段中文、日文、emoji，从窗口标题读回来对比。
 - `record-sample.sh 名字 脚本 [rfb-probe 选项]`：录测试样本。起一个静止的桌面，`rfb-probe` 连上去录字节流，同时用脚本挪窗口、滚终端、换背景、改分辨率，最后用 `xwd` 抓真实的屏幕。
 - `replay_server.py`：不需要 Xvnc，把录好的样本经 WebSocket 放出去，然后用 4000 关闭或者等客户端关。macOS 上没有 Xvnc，传输层的测试靠它。
 
@@ -188,7 +189,7 @@ export PATH=$PWD/swift-6.4.2-RELEASE-ubuntu24.04/usr/bin:$PATH
 都在 testbed 上实测过（Xvnc 1.13.1，Ubuntu 24.04；Hermes 服务器上的 TigerVNC 版本取决于 VPS 的发行版）。标了「和 README 不同」的，是和仓库根目录 README 里写的不一样的地方。
 
 1. **远端的剪贴板拿不回来。和 README 不同。** Hermes 用 `-SendCutText=0` 启动 Xvnc（怕只看的人拿到持有者复制的东西），服务器根本不往外发剪贴板，接管时也不发。实测：远端 `xclip` 放进剪贴板，持有租约的连接也收不到任何东西。所以 README 里「⌘C 反过来，远端复制完把内容取回 Mac」现在做不到。可选的路：请 Hermes 改成只给持有者发（Xvnc 做不到按连接区分，要桥解析服务器发来的字节流，把 ServerCutText 只转给持有者）；或者加一个 gateway 方法读远端剪贴板。往远端粘贴不受影响。
-2. **扩展剪贴板只能「先宣告、等对方要」。** Xvnc 宣告的能力是：只支持文本；动作 request / peek / notify / provide；文本的「不请自来的最大长度」是 0。所以不能直接把文字推过去，要先发 Notify，等远端程序粘贴、Xvnc 发 Request 时再 Provide。中文、日文、emoji、换行原样到达（`smoke.sh` 第 4 步）。只看时桥会丢掉我们发的所有 ClientCutText，包括连接时的能力声明，所以每次粘贴前再发一次能力声明。
+2. **扩展剪贴板只能「先宣告、等对方要」。** Xvnc 宣告的能力是：只支持文本；动作 request / peek / notify / provide；文本的「不请自来的最大长度」是 0。所以不能直接把文字推过去，要先发 Notify，等远端程序粘贴、Xvnc 发 Request 时再 Provide。中文、日文、emoji、换行原样到达（`smoke.sh` 第 4 步）。「剪贴板 + Ctrl+V」打进 Chrome 的文本框也一字不差（第 5 步），README 里输入法的做法走得通。只看时桥会丢掉我们发的所有 ClientCutText，包括连接时的能力声明，所以每次粘贴前再发一次能力声明。
 3. **Fence 必须应答；不声明 Fence 就没有连续更新。** 声明了 Fence，Xvnc 一连上就发一个 Fence 请求，之后大约每帧两个，用来量往返时间、做拥塞控制。实测 12 秒：不声明 Fence 时 Xvnc 不发 EndOfContinuousUpdates，只能一问一答（35 帧）；声明了却不应答，1.2 秒、5 帧之后画面就停了；正常应答，连续更新一直在走（37 帧）。所以两个都用：声明 Fence 并照规矩应答（只回 BlockBefore / BlockAfter，不支持 SyncNext，和 noVNC 一样），收到第一个 EndOfContinuousUpdates 后打开连续更新，分辨率变了就按新尺寸重发一次。
 4. **连续更新在远的线路上明显更好。** 给桥加 150 ms 往返延迟，在 Chrome 里滚动同样的距离：连续更新收到 47 帧，一问一答只有 24 帧。一问一答每帧至少要等一个往返。
 5. **握手可以一次发完，首帧快一倍多。** RFB 3.8 + None 的握手是一来一回好几趟，150 ms 往返时首帧要 686 ms。我们的应答是固定的（3.8、None、共享、像素格式、编码列表），Xvnc 又是按字节流读的，所以连上就一次发出去，首帧降到 310 ms。经过 Hermes 的过滤器没问题（它本来就按字节流解析握手的 14 个字节）。服务器要是想要别的版本或认证，照样握手失败。可以用 `pipelineHandshake = false` 关掉。

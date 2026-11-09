@@ -236,6 +236,34 @@ struct ServerScript {
         }
     }
 
+    @Test func keysyms() {
+        #expect(Keysym.forCharacter("a") == 0x61)
+        #expect(Keysym.forCharacter("é") == 0xE9)
+        #expect(Keysym.forCharacter("\n") == Keysym.return)
+        #expect(Keysym.forCharacter("\t") == Keysym.tab)
+        #expect(Keysym.forCharacter("€") == 0x0100_20AC)
+        #expect(Keysym.forCharacter("云") == 0x0100_4E91)
+        #expect(Keysym.function(1) == 0xFFBE && Keysym.function(12) == 0xFFC9)
+    }
+
+    @Test func pasteIsClipboardThenControlV() async throws {
+        var s = ServerScript.handshake()
+        // The server's clipboard caps, as Xvnc sends them, so the extended clipboard is used.
+        s.bytes += [3, 0, 0, 0]; s.bytes.put(Int32(-8)); s.bytes += [0x1F, 0, 0, 1, 0, 0, 0, 0]
+        let transport = ReplayTransport(s.bytes)
+        let client = RFBClient(transport: transport)
+        do { try await client.run() } catch RFBError.endOfStream {}
+        let before = transport.sent.count
+        try await client.paste("云桌面")
+        let sent = Array(transport.sent[before...])
+        #expect(sent[0] == (try ClientMessage.extendedClipboard(RFBClient.clientClipboardCaps).encoded()))
+        #expect(sent[1] == (try ClientMessage.extendedClipboard(.notify(.text)).encoded()))
+        #expect(Array(sent[2...]) == [
+            [4, 1, 0, 0, 0, 0, 0xFF, 0xE3], [4, 1, 0, 0, 0, 0, 0, 0x76],
+            [4, 0, 0, 0, 0, 0, 0, 0x76], [4, 0, 0, 0, 0, 0, 0xFF, 0xE3],
+        ])
+    }
+
     @Test func pointerIsClampedToTheScreen() async throws {
         let transport = ReplayTransport(ServerScript.handshake(width: 100, height: 50).bytes)
         let client = RFBClient(transport: transport)

@@ -28,6 +28,7 @@ usage: rfb-probe <url> [options]
   --transport auto|urlsession|plain
                                auto: the small built-in client for ws:// on Linux, URLSession otherwise
   --paste TEXT                 after the first picture, put TEXT on the remote clipboard (needs the lease)
+  --type TEXT                  after the first picture, type TEXT at the remote cursor: clipboard + Ctrl+V (needs the lease)
   --cursor-after SECONDS       after that long, ask for the pointer shape (Cursor pseudo-encoding), as at takeover
   --move-pointer X,Y           then move the pointer there (only reaches Xvnc while holding the lease)
 
@@ -49,6 +50,7 @@ struct Arguments {
     var encodings: [RFBEncoding]?
     var transport = "auto"
     var paste: String?
+    var type: String?
     var cursorAfter: Double?
     var movePointer: (Int, Int)?
     var gateway: String?
@@ -105,6 +107,7 @@ func parseArguments() -> Arguments {
             }
         case "--transport": a.transport = value(arg)
         case "--paste": a.paste = value(arg)
+        case "--type": a.type = value(arg)
         case "--move-pointer":
             let xy = value(arg).split(separator: ",").compactMap { Int($0) }
             guard xy.count == 2 else { fail("--move-pointer takes X,Y") }
@@ -304,10 +307,16 @@ func run() async {
     while true {
         try? await Task.sleep(nanoseconds: 100_000_000)
         let (first, updates) = progress.lock.withLock { (progress.firstPicture, progress.updates) }
-        if let paste = args.paste, first != nil, !pasted {
+        if first != nil, !pasted {
             pasted = true
-            do { try await client.sendClipboard(paste); log("pasted \(paste.utf8.count) bytes to the remote clipboard") }
-            catch { log("paste failed: \(error)") }
+            if let paste = args.paste {
+                do { try await client.sendClipboard(paste); log("pasted \(paste.utf8.count) bytes to the remote clipboard") }
+                catch { log("paste failed: \(error)") }
+            }
+            if let text = args.type {
+                do { try await client.paste(text); log("typed \(text.utf8.count) bytes with clipboard + Ctrl+V") }
+                catch { log("typing failed: \(error)") }
+            }
         }
         if let after = args.cursorAfter, let first, !cursorAsked, Date().timeIntervalSince(first) >= after {
             cursorAsked = true
