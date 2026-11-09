@@ -2,6 +2,8 @@ name: macOS app
 
 # Builds the app on macOS 27 / Xcode 27 and takes a screenshot of every page, light and dark.
 # macOS runner minutes are limited: this only runs when the app or this file changes.
+# A downloadable Release build (Shion.dmg) is made on manual runs, or when the commit message
+# contains [package].
 on:
   push:
     branches: [claude/macos-app]
@@ -87,6 +89,32 @@ jobs:
           path: macos/build/shots
           retention-days: 14
           if-no-files-found: ignore
+
+      - name: Package a Release build
+        if: success() && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[package]'))
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project Shion.xcodeproj \
+            -scheme Shion \
+            -configuration Release \
+            -destination 'generic/platform=macOS' \
+            -derivedDataPath build/Release \
+            CURRENT_PROJECT_VERSION=${{ github.run_number }} \
+            -quiet 2>&1 | tee build/package.log
+          mkdir -p build/dmg
+          cp -R build/Release/Build/Products/Release/Shion.app build/dmg/
+          ln -s /Applications build/dmg/Applications
+          hdiutil create -volname Shion -srcfolder build/dmg -ov -format UDZO build/Shion.dmg
+          ls -la build/Shion.dmg
+
+      - name: Upload the Release build
+        if: success() && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[package]'))
+        uses: actions/upload-artifact@v4
+        with:
+          name: Shion-macOS-${{ github.run_number }}
+          path: macos/build/Shion.dmg
+          retention-days: 30
 
       - name: Show errors
         if: failure()
