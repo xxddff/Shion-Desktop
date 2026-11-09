@@ -172,6 +172,8 @@ final class QuickAskTests: XCTestCase {
     @MainActor
     func testShortcutTaken() throws {
         continueAfterFailure = false
+        // the other test, stopped early, may have left Shion up and holding the key
+        XCUIApplication().terminate()
         // the system's hot keys go through the window server, which an app is connected to
         _ = NSApplication.shared
         var held: EventHotKeyRef?
