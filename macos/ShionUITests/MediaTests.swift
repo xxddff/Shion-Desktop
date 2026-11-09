@@ -13,7 +13,9 @@ import XCTest
 /// step (`media-*.png`).
 final class MediaTests: XCTestCase {
     private let server = "http://127.0.0.1:8765"
-    /// The runner's /tmp, which the app reads too (not another app's container).
+    /// The files the test pastes. The stand-in makes them (PASTED_FILES in ci/fake_media.py): this
+    /// runner is sandboxed and cannot write outside its own container, which Shion would have to
+    /// ask to read.
     private let folder = URL(fileURLWithPath: "/tmp/shion-media-ci", isDirectory: true)
 
     @MainActor
@@ -58,7 +60,7 @@ final class MediaTests: XCTestCase {
 
         // 2. three files: a small one goes to file.attach as bytes, a 3 MB one is staged on the
         // Webapp first, and the third fails once and goes on a click
-        try putFiles([("ci-报告（CI）.pdf", 40_000), ("ci-大文件（CI）.pdf", 3 * 1024 * 1024), ("ci-重试（CI）.txt", 1_200)])
+        putFiles(["ci-报告（CI）.pdf", "ci-大文件（CI）.pdf", "ci-重试（CI）.txt"])
         composer.click()
         composer.typeKey("v", modifierFlags: .command)
         let files = app.descendants(matching: .any).matching(identifier: "draft-file")
@@ -171,19 +173,12 @@ final class MediaTests: XCTestCase {
         XCTAssertTrue(board.setData(data as Data, forType: NSPasteboard.PasteboardType("public.jpeg")))
     }
 
+    /// Files as Finder copies them: their addresses.
     @MainActor
-    private func putFiles(_ files: [(name: String, size: Int)]) throws {
-        try? FileManager.default.removeItem(at: folder)
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        var urls: [NSURL] = []
-        for file in files {
-            let url = folder.appendingPathComponent(file.name)
-            try Data(repeating: UInt8(ascii: "x"), count: file.size).write(to: url)
-            urls.append(url as NSURL)
-        }
+    private func putFiles(_ names: [String]) {
         let board = NSPasteboard.general
         _ = board.clearContents()
-        XCTAssertTrue(board.writeObjects(urls))
+        XCTAssertTrue(board.writeObjects(names.map { folder.appendingPathComponent($0) as NSURL }))
     }
 
     // MARK: helpers

@@ -81,7 +81,8 @@ struct AttachmentTray: View {
 }
 
 /// One attachment: a ring while it goes up, red with the reason on hover when it cannot (a click
-/// tries again when trying again can help), and a × to take it out.
+/// tries again when trying again can help), and a × to take it out. To accessibility it is one
+/// element, its name and where it is, with 移除 (and 再试一次) as its actions.
 struct DraftChip: View {
     @Environment(AppStore.self) private var store
     let botId: String
@@ -89,6 +90,12 @@ struct DraftChip: View {
 
     var body: some View {
         face
+            // alongside the thumbnail's own tap, which would otherwise take the click
+            .simultaneousGesture(TapGesture().onEnded { _ in
+                if retryable {
+                    store.retryDraft(draft.id, in: botId)
+                }
+            })
             .overlay { stageOverlay }
             .overlay(alignment: .topTrailing) {
                 Button {
@@ -101,19 +108,23 @@ struct DraftChip: View {
                 }
                 .buttonStyle(.plain)
                 .offset(x: 6, y: -6)
-                .accessibilityLabel("移除\(draft.name)")
-                .accessibilityIdentifier("draft-remove")
             }
             .help(helpText)
-            .onTapGesture {
-                if case .failed(_, retry: true) = draft.stage {
-                    store.retryDraft(draft.id, in: botId)
-                }
-            }
-            .accessibilityElement(children: .contain)
+            .accessibilityElement(children: .ignore)
             .accessibilityLabel(draft.name)
             .accessibilityValue(stateText)
             .accessibilityIdentifier(draft.kind == .image ? "draft-picture" : "draft-file")
+            .accessibilityActions {
+                if retryable {
+                    Button("再试一次") { store.retryDraft(draft.id, in: botId) }
+                }
+                Button("移除") { store.removeDraft(draft.id, from: botId) }
+            }
+    }
+
+    private var retryable: Bool {
+        if case .failed(_, retry: true) = draft.stage { return true }
+        return false
     }
 
     @ViewBuilder
@@ -292,12 +303,15 @@ struct ChatAttachments: ViewModifier {
         if let words = board.string(forType: .string), !(words.hasPrefix("http") && !words.contains(where: \.isWhitespace)) {
             return false
         }
-        let types = [NSPasteboard.PasteboardType.png, .tiff, NSPasteboard.PasteboardType("public.jpeg"),
-                     NSPasteboard.PasteboardType("public.heic")]
-        for type in types {
-            if let data = board.data(forType: type) {
-                store.attach(pictureData: data, name: "粘贴的图片", to: botId)
-                return true
+        // the picture as it was put there, not a copy the pasteboard converts on the way
+        let preferred = ["public.jpeg", "public.png", "public.heic", "org.webmproject.webp", "com.compuserve.gif", "public.tiff"]
+        for item in board.pasteboardItems ?? [] {
+            let types = Set(item.types.map(\.rawValue))
+            for type in preferred where types.contains(type) {
+                if let data = item.data(forType: NSPasteboard.PasteboardType(type)) {
+                    store.attach(pictureData: data, name: "粘贴的图片", to: botId)
+                    return true
+                }
             }
         }
         return false

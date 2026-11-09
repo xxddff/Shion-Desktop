@@ -235,6 +235,18 @@ struct MediaPicture: View {
                 .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Palette.line.opacity(0.5)))
                 .contentShape(Rectangle())
                 .onTapGesture { open?() }
+                .contextMenu {
+                    // the chat's pictures; one still in the composer is your own file already
+                    if open != nil {
+                        Button("拷贝图片") { copyPicture() }
+                        Button("存到「下载」") {
+                            Task { try? await store.saveFile(media, botId: botId, open: false) }
+                        }
+                        Button("在访达中显示") {
+                            Task { try? await store.revealFile(media, botId: botId) }
+                        }
+                    }
+                }
                 .accessibilityElement(children: .ignore)
                 .accessibilityAddTraits(.isImage)
                 .accessibilityLabel(media.caption ?? AppStore.displayName(media.name))
@@ -243,24 +255,25 @@ struct MediaPicture: View {
                 .accessibilityIdentifier(identifier)
         case .waiting?:
             VStack(spacing: 6) {
-                Image(systemName: "photo")
-                    .font(.system(size: 18))
-                    .foregroundStyle(.secondary)
-                    .accessibilityHidden(true)
-                Text(media.url?.host ?? "")
-                    .font(.t12)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                VStack(spacing: 6) {
+                    Image(systemName: "photo")
+                        .font(.system(size: 18))
+                        .foregroundStyle(.secondary)
+                    Text(media.url?.host ?? "")
+                        .font(.t12)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(media.caption ?? "网上的图片")
+                .accessibilityValue("点了才显示")
+                .accessibilityIdentifier("web-picture")
                 Button("显示图片") { asked = true }
                     .controlSize(.small)
                     .accessibilityIdentifier("show-web-picture")
             }
             .frame(width: placeholder.width, height: placeholder.height)
             .background(Palette.fill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .accessibilityElement(children: .contain)
-            .accessibilityLabel(media.caption ?? "网上的图片")
-            .accessibilityValue("点了才显示")
-            .accessibilityIdentifier("web-picture")
         case .gone?:
             if !quietWhenGone {
                 block("图片已过期", value: "已过期")
@@ -273,6 +286,15 @@ struct MediaPicture: View {
             }
         case nil:
             block(nil, value: "加载中")
+        }
+    }
+
+    /// The Mac's copy, whole, not the one drawn here.
+    private func copyPicture() {
+        Task {
+            guard let url = await store.previewURL(media, botId: botId), let image = NSImage(contentsOf: url) else { return }
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.writeObjects([image])
         }
     }
 

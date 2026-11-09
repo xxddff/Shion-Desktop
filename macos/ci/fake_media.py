@@ -64,12 +64,22 @@ _valid = lambda token: False  # noqa: E731
 # second copy of them
 _transcripts, _transcript_lock = {}, threading.Lock()
 failed_once = set()  # files whose first file.attach was refused
+# The files MediaTests pastes (names and sizes as MediaTests.swift expects them). The stand-in
+# makes them: the UI test runner is sandboxed and cannot write outside its own container, and
+# Shion would have to ask before reading another app's container. /tmp needs neither.
+PASTED = "/tmp/shion-media-ci"
+PASTED_FILES = (("ci-报告（CI）.pdf", 40_000), ("ci-大文件（CI）.pdf", 3 * 1024 * 1024), ("ci-重试（CI）.txt", 1_200))
 
 
 def setup(log, valid_access, transcripts, transcript_lock):
     global _log, _valid, _transcripts, _transcript_lock
     _log, _valid = log, valid_access
     _transcripts, _transcript_lock = transcripts, transcript_lock
+    shutil.rmtree(PASTED, ignore_errors=True)
+    os.makedirs(PASTED)
+    for name, size in PASTED_FILES:
+        with open(os.path.join(PASTED, name), "wb") as handle:
+            handle.write(b"x" * size)
 
 
 # ---- paths ---------------------------------------------------------------------------------
@@ -601,3 +611,4 @@ def media_turn(conn, session_id, profile, text):
 
 def cleanup():
     shutil.rmtree(STORE, ignore_errors=True)
+    shutil.rmtree(PASTED, ignore_errors=True)
