@@ -116,7 +116,7 @@ struct AskButton: View {
 
     var body: some View {
         Button {
-            store.route = .chat("shion")
+            store.route = .chat(store.chiefId)
         } label: {
             HStack(spacing: 6) {
                 Mark(size: 16)

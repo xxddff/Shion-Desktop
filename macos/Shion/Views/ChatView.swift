@@ -22,9 +22,17 @@ struct ChatView: View {
         }
         .defaultScrollAnchor(.bottom)
         .overlay {
-            if items.isEmpty {
+            if let error = store.chatErrors[botId] {
+                ContentUnavailableView("打不开这个对话", systemImage: "exclamationmark.bubble", description: Text(error))
+            } else if store.openingChats.contains(botId) {
+                ProgressView()
+            } else if items.isEmpty {
                 ContentUnavailableView("还没有对话", systemImage: "bubble.left.and.bubble.right")
             }
+        }
+        // opens the Bot Chat on the server once connected, and again after reconnecting
+        .task(id: "\(botId)|\(store.live)|\(store.gateway.phase == .online)") {
+            await store.openChat(botId)
         }
         .safeAreaInset(edge: .bottom) {
             Composer(placeholder: "跟\(bot?.name ?? "")说…", text: $draft) {
@@ -78,6 +86,11 @@ struct ChatRow: View {
             }
         case .assistant:
             AssistantMessage(item: item, bot: bot, showHead: showHead)
+        case .tool:
+            Label(item.text, systemImage: "wrench.adjustable")
+                .font(.t12)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
         }
     }
 }
@@ -98,11 +111,15 @@ struct AssistantMessage: View {
                     Text(Fmt.hm(item.at)).font(.t12).foregroundStyle(.secondary)
                 }
             }
-            Text(item.text)
-                .font(.t13)
-                .lineSpacing(3)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
+            if item.text.isEmpty && item.streaming {
+                BusyDots()
+            } else {
+                Text(item.streaming ? item.text + " ▍" : item.text)
+                    .font(.t13)
+                    .lineSpacing(3)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if !todos.isEmpty {
                 VStack(spacing: 0) {
                     ForEach(todos) { todo in

@@ -25,6 +25,7 @@ struct RootView: View {
 }
 
 struct DetailView: View {
+    @Environment(AppStore.self) private var store
     let route: Route
 
     var body: some View {
@@ -36,7 +37,7 @@ struct DetailView: View {
         case .reports: ReportsView().askToolbar()
         case .board: BoardView().askToolbar()
         case .desktop: DesktopView().askToolbar()
-        case .chat(let id): ChatView(botId: id).askToolbar(id != "shion").id(id)
+        case .chat(let id): ChatView(botId: id).askToolbar(id != store.chiefId).id(id)
         }
     }
 }
@@ -103,15 +104,26 @@ struct BotRow: View {
     }
 }
 
+/// The server this window talks to, and whether the data is real yet. Opens Settings.
 struct ConnectionFooter: View {
+    @Environment(AppStore.self) private var store
+
     var body: some View {
-        HStack(spacing: 6) {
-            Circle().fill(Color.green).frame(width: 7, height: 7)
-            Text("tokyo-vps").font(.t12)
-            Spacer()
-            Text("示例数据").font(.t11).foregroundStyle(.tertiary)
+        SettingsLink {
+            HStack(spacing: 6) {
+                Circle().fill(ConnectionState.color(store.gateway.phase)).frame(width: 7, height: 7)
+                Text(store.serverSettings.host.isEmpty ? "未连接服务器" : store.serverSettings.host)
+                    .font(.t12)
+                    .lineLimit(1)
+                Spacer()
+                if !store.live {
+                    Text("示例数据").font(.t11).foregroundStyle(.tertiary)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .contentShape(Rectangle())
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .buttonStyle(.plain)
     }
 }

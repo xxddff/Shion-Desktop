@@ -38,9 +38,9 @@ struct TodayView: View {
                     .textFieldStyle(.plain)
                     .font(.system(size: 14))
                     .onSubmit {
-                        store.send(draft, to: "shion")
+                        store.send(draft, to: store.chiefId)
                         draft = ""
-                        store.route = .chat("shion")
+                        store.route = .chat(store.chiefId)
                     }
             }
             .padding(.horizontal, 12)

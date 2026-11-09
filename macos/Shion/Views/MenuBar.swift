@@ -81,7 +81,7 @@ struct MenuBarPanel: View {
             }
 
             Button {
-                store.route = .chat("shion")
+                store.route = .chat(store.chiefId)
                 NSApp.activate()
             } label: {
                 HStack(spacing: 8) {

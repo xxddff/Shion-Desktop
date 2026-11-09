@@ -94,6 +94,13 @@ enum AskKind {
     case approval, clarify, takeover
 }
 
+/// What answering an ask from the server needs: which session, which run of it.
+struct RemotePrompt: Hashable {
+    let sessionId: String
+    let generation: Int
+    let isClarify: Bool
+}
+
 struct AskOption: Identifiable, Hashable {
     let value: String
     let label: String
@@ -112,10 +119,12 @@ struct Ask: Identifiable, Hashable {
     var detail: String?
     var preview: String?
     var options: [AskOption]
+    /// Set for approvals and questions that came from the Hermes server.
+    var remote: RemotePrompt?
 }
 
 enum ChatRole {
-    case user, assistant, system, card
+    case user, assistant, system, card, tool
 }
 
 struct ChatItem: Identifiable, Hashable {
@@ -125,6 +134,8 @@ struct ChatItem: Identifiable, Hashable {
     var text = ""
     var cardId: String?
     var todoIds: [String] = []
+    /// An assistant reply still arriving.
+    var streaming = false
 }
 
 enum ReportKind: String, CaseIterable, Identifiable {
