@@ -45,6 +45,8 @@ final class AppStore {
     private(set) var boardLimits: BoardLimits?
     /// The server's kanban board, live while connected.
     let board = BoardStore()
+    /// The server's profiles, and who leads and who is hidden on this Mac (AppStore+Bots.swift).
+    let roster = Roster(persist: !LaunchOptions.current.snapshot)
     /// What `runtime.describe` says the server can do (`session-transcript-v1`, …).
     @ObservationIgnored var serverCapabilities: Set<String> = []
     /// Today, todos and reports come from the server's `shion` plugin (AppStore+Plugin.swift).
@@ -102,7 +104,8 @@ final class AppStore {
         }
     }
 
-    func bot(_ id: String) -> Bot? { bots.first { $0.id == id } }
+    /// An assistant by id; one hidden in Settings too, for the name on what it left behind.
+    func bot(_ id: String) -> Bot? { bots.first { $0.id == id } ?? roster.hiddenBots.first { $0.id == id } }
     func card(_ id: String) -> Card? { cards.first { $0.id == id } }
     func todo(_ id: String) -> Todo? { todos.first { $0.id == id } }
 
@@ -345,36 +348,15 @@ extension AppStore {
         }
     }
 
-    /// One assistant per profile; the profile named `shion` (else the default one) leads.
+    /// One assistant per profile, named as Bot Mode names it (its ui_meta title, then the profile's
+    /// display name); 总秘书 leads, and the ones hidden in Settings are left out (AppStore+Bots.swift).
     private func enterLive(with rows: [JSONValue]) {
         if !live {
             demoBots = bots
             demoChats = chats
             demoAsks = asks
         }
-        let names = rows.compactMap { $0["name"]?.string }
-        let defaultRow = rows.first(where: { $0["is_default"]?.bool == true })
-        let chiefName = names.contains("shion") ? "shion" : (defaultRow?["name"]?.string ?? names.first ?? "")
-        var liveBots: [Bot] = []
-        for (index, row) in rows.enumerated() {
-            guard let name = row["name"]?.string else { continue }
-            // the name Bot Mode shows: its ui_meta title, then the profile's display name
-            let display = [row["ui_meta"]?["hermes-bots"]?["title"]?.string, row["display_name"]?.string]
-                .compactMap { $0 }
-                .first { !$0.isEmpty } ?? name
-            let description = row["description"]?.string ?? ""
-            let chief = name == chiefName
-            liveBots.append(Bot(
-                id: name,
-                name: display,
-                title: chief ? "总秘书" : (description.isEmpty ? name : description),
-                chief: chief,
-                hue: chief ? Palette.accent : Palette.hues[index % Palette.hues.count],
-                status: .idle,
-                statusNote: ""
-            ))
-        }
-        bots = liveBots.filter { $0.chief } + liveBots.filter { !$0.chief }
+        bots = assistants(from: rows)
         chats = [:]
         asks = []
         sessions = [:]
