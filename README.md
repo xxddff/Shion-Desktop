@@ -4,7 +4,7 @@ macOS 上的私人秘书。你主要和总秘书「詩音」打交道，她带�
 
 背后跑的是部署在 VPS 上的 [Hermes Agent](https://github.com/NousResearch/hermes-agent)，Shion 通过 Canonical Gateway Protocol 连接它，完全取代官方桌面端的 Bot Mode。
 
-> 现阶段：`prototype/` 是 UI 原型（React，示例数据，可交互），用来对齐界面和流程。正式的 App 不套浏览器，倾向用 SwiftUI 写（备选 MyGo）。
+> 现阶段：`prototype/` 是 UI 原型（React，示例数据，可交互），用来对齐界面和流程。正式的 App 用 SwiftUI + AppKit 写，不套浏览器，最低支持 macOS 26。
 
 ## 已经定下来的
 
@@ -13,7 +13,8 @@ macOS 上的私人秘书。你主要和总秘书「詩音」打交道，她带�
 | 和官方 Hermes Desktop 的关系 | 完全取代它的 Bot Mode |
 | 组织方式 | 一个总秘书带一组助手；每个助手的 Bot Chat 也能单独访问 |
 | Hermes 跑在哪 | 远端 VPS；以后可能也接入这台 Mac，让助手在本机做事（暂不实现） |
-| 技术栈 | 原型不限；正式版不套浏览器，候选 SwiftUI 或 [MyGo](https://github.com/egoist/mygo)（Go，自绘原生 UI），倾向 SwiftUI，见下文 |
+| 技术栈 | 原型不限；正式版用 SwiftUI + AppKit，不套浏览器；[MyGo](https://github.com/egoist/mygo)（Go，自绘原生 UI）留作以后跨平台的备选，见下文 |
+| 最低系统 | macOS 26，直接用新系统的能力（Liquid Glass、Spotlight 里的动作、本机模型等），不写旧系统的兼容分支 |
 | 连接方式 | 沿用现在的 Cloudflare Tunnel + Cloudflare Access，用 service token 过认证（官方桌面端也用同样的方式：给连接加额外请求头） |
 | 云桌面 | VPS 上的 Hermes 开了 Bot Screen（每个助手一块桌面），Shion 里要能看画面、接管、交还 |
 | 委派方式 | 看板为主：詩音建卡交给助手，助手在单独的工作会话里完成；一问一答的小事才用助手之间的直接消息 |
@@ -148,20 +149,57 @@ Shion 里的位置：
 
 协议（官方桌面端的做法）：
 - `display.status`、`display.thumbnail`（预览图，几秒刷新一次）、`display.start` / `display.stop`；
-- `display.observe` 换一张 30 秒、一次性的 ticket，再用它开 WebSocket `/api/display/ws?ticket=…`，里面跑的是 RFB（VNC）画面流；
-- 接管、交还用 `display.lease.acquire` / `display.lease.release`。断线时控制权留在你手里，直到你回来交还；两个人同时看时，最后接管的人拿到控制权。
+- `display.observe` 换一张 30 秒、一次性的 ticket 和一个 `viewer_id`，再用 ticket 开 WebSocket `/api/display/ws?display_ticket=…`，里面跑的是 RFB（VNC）画面流；
+- 接管、交还用 `display.lease.acquire` / `display.lease.release`，都带上这个 `viewer_id`，它只在发它的那条 gateway 连接上有效。断线时控制权留在你手里，直到你回来交还；两个人同时看时，最后接管的人拿到控制权，前一个人的画面连接会被桥用 4000 关掉；
+- **画面桥本身就是闸门**：它逐条解析客户端发来的 RFB 消息，不是租约持有者发的键盘、鼠标、剪贴板消息直接丢掉，只看模式不靠客户端自觉。
 
-**还没验证的风险**
+### 画面客户端（建议：自己写一个精简的 RFB 客户端）
+
+缩略图和侧栏预览一直用 `display.thumbnail` 的图片，不连 VNC；只有打开大画面时才连 RFB。
+
+**为什么自己写。** 服务端只有一种：Hermes 画面桥后面的 TigerVNC（Xvnc，`-SecurityTypes None`、`-AlwaysShared`），握手是固定的，要支持的编码也就几种。传输是 WebSocket，`URLSessionWebSocketTask` 能直接带上 Access 的两个头。点画面接管、点外面交还、租约、交还快捷键、下面说的粘贴输入，这些用现成的库也得自己加。
+
+不选的几条路：
+- **RoyalVNCKit**：MIT 许可，自带处理键鼠的 macOS 画面视图，但 2026-10-05 已归档只读，而且只走 TCP。用它等于 fork 过来自己维护，还要换掉传输层。它的解码和键位表可以参考，按 MIT 的要求保留版权声明。
+- **libvncclient、TigerVNC 自带的 viewer**：都是 GPL，也一样要自己接 WebSocket。
+- **noVNC**：官方桌面端用的就是它，但它是网页，和"不套浏览器"冲突；网页里的 WebSocket 带不了 service token 的请求头，还得先拿到 Access 的 cookie 塞进 WebView。只在自己的客户端做好之前，用 SwiftUI 的 `WebView` 跑它过渡。
+
+分几步做：
+
+| 阶段 | 内容 | 估计 |
+| --- | --- | --- |
+| 探路 | 命令行小程序：`display.observe` 拿 ticket，带 Access 头连上画面 WebSocket，走完 RFB 3.8 握手，把收到的数据存下来当测试样本 | 1–2 天 |
+| 只看 | 编码 Raw、CopyRect、ZRLE（用系统自带的 zlib），伪编码 DesktopSize；画到 IOSurface 上交给 `CALayer` 显示，按窗口等比缩放 | 约 1 周 |
+| 接管 | 租约；鼠标、滚轮（坐标换算回远端）；键盘（字符换成 X keysym，功能键按键码映射）；Cursor 伪编码；TigerVNC 的扩展剪贴板（UTF-8） | 约 1 周 |
+| 以后 | 带宽不够再加 Tight + JPEG（JPEG 用系统的 ImageIO 解）；断线后自动重连 | — |
+
+键盘和中文、日文输入：
+- **⌘ 当成 Ctrl 发过去**，⌘C、⌘V、⌘L、⌘T 在远端浏览器里照 Mac 的习惯用；⌘Tab、⌘Q 仍然归 Mac。
+- **⌘V 先同步剪贴板**：把 Mac 剪贴板里的文字用剪贴板消息放进远端，再发 Ctrl+V。⌘C 反过来，远端复制完把内容取回 Mac。只在你接管期间同步，助手自己复制的东西不会进你的剪贴板。
+- **中文、日文走粘贴，不走按键。** 接管条上放一个「打字」框：用 Mac 的输入法打完，回车，照 ⌘V 的办法粘过去。TigerVNC 1.10 起剪贴板支持完整的 Unicode；按 Unicode keysym 逐字发的话，Xvnc 要临时给每个字分配键位，有人遇到过分配失败后键盘没反应（[TigerVNC #93](https://github.com/TigerVNC/tigervnc/issues/93)）。英文、数字和快捷键照常按键发。
+- 密码也一样：从 Mac 的密码管理器复制，⌘V 粘过去。
+
+和画面桥打交道的规矩（依据 Hermes 的 `hermes_cli/web_routers/display.py` 和 `tools/bot_desktop/rfb_filter.py`）：
+- 只发桥认得的消息：SetPixelFormat、SetEncodings、FramebufferUpdateRequest、KeyEvent、PointerEvent、ClientCutText（含扩展剪贴板），以及 TigerVNC 的 EnableContinuousUpdates、Fence。发别的，桥分不清消息边界，会直接断开。剪贴板一次最多 256 KB。
+- 不发 SetDesktopSize：它会连助手的屏幕分辨率一起改掉。窗口大小只影响本地缩放。
+- 只看时不开 Cursor 伪编码，让服务器把助手的光标画进画面，看得到它在点哪；你接管后再打开，光标在本机画，不跟着网络卡。
+- 离开画面时用 1000 正常关闭 WebSocket，桥会顺带交还；网络断了不算，控制权还在你手里。被别人接管时桥用 4000 关掉连接，换一张新 ticket 回到只看。
+- 只断了画面连接时，带上原来的 `viewer_id` 再调 `display.observe`，租约还在；gateway 连接也断了的话，旧 id 就不认了，重连后用新 id 再接管一次。
+- 只看时画面不在眼前（窗口最小化或被挡住、切到别的页面）就断开，只留缩略图。连着的时候桥会当作有人在看，云桌面不会闲置自动停。
+- ticket 一次性有效，不写进日志。
+
+## 还没验证的风险
+
 1. 第三方客户端能用哪个 `source`（官方桌面端用 `gui`）。要在我们的 VPS 上看 `runtime.describe`。
 2. 远端经 `hermes serve` 时，canonical 方法和插件 RPC 是否都能用。
 3. 官方 Bot Mode 把头像、分组等存在 profile 的 `ui_meta` 里。Shion 要读写同样的键，才能和命令行、手机端保持一致。
 4. **云桌面相关的方法不在 canonical 方法表里。** `display.*` 属于通用方法表，官方桌面端在远程连接上能用。要验证 Shion 经 Cloudflare 连上后，同一条连接能不能调到它们。
-5. **Swift 里要有 RFB（VNC）客户端。** RoyalVNCKit（MIT 许可，自带处理键鼠的 macOS 画面视图，支持 Tight、ZRLE 等编码）已在 2026-10-05 归档，变成只读，用它就得 fork 过来自己维护，还要给它加一个 WebSocket 传输层。另一条路是自己写一个精简客户端：Hermes 的画面桥已经做了鉴权，安全类型用 None 即可；编码做 ZRLE、CopyRect、Raw，再加光标和分辨率变化这两个伪编码，就能连上 TigerVNC。中文、日文输入要在 Mac 这边用输入法打完字，再按 Unicode keysym 发过去，需要实测。实在赶时间，就用一个只显示云桌面的 WKWebView 加 noVNC 作过渡，但它带不了 service token 的请求头，得先拿到 Access 的 cookie 塞进去。
+5. **RFB 客户端是整个项目最大的一块**，做法见上面「画面客户端」。探路时要确认：VPS 上的 TigerVNC 支持扩展剪贴板（中文、日文粘贴靠它）；中途开关 Cursor 伪编码，Xvnc 会立刻生效；ZRLE 走 Cloudflare 这条线带宽够不够，不够就提前做 Tight + JPEG。
 6. **Apple 提醒事项经云端读写不一定可靠。** iCloud 日历走 CalDAV 没问题；但按 BusyMac、2Do 的说明，iOS 13 / macOS Catalina 之后升级过的提醒事项列表不再走 CalDAV，有的 MCP 声称能读写，说法不一。先用实际要用的工具测一遍；不行的话，就由 Mac 上的 Shion 用 EventKit 读写提醒事项（这正好是"接入本机"的第一个用途），或者以 `shion` 插件里的待办为准，只往提醒事项单向同步。
 
-## 技术栈：SwiftUI 还是 MyGo
+## 技术栈：SwiftUI + AppKit
 
-两者都不套浏览器（MyGo 的原生 UI 模式），差别在于对 macOS 系统能力的覆盖：
+和 MyGo 比（两者都不套浏览器，MyGo 指它的原生 UI 模式），差别在于对 macOS 系统能力的覆盖：
 
 | | SwiftUI | MyGo（native UI） |
 | --- | --- | --- |
@@ -171,15 +209,30 @@ Shion 里的位置：
 | 跨平台 | 只有 macOS | macOS、Windows、Linux |
 | 协议客户端 | 从 OpenRPC 生成 Swift 类型 | 从 OpenRPC 生成 Go 类型 |
 
-只做 macOS、又要深度用系统能力的话，选 SwiftUI。以后想出 Windows、Linux 版或者更想写 Go，就选 MyGo。
+只做 macOS、又要深度用系统能力，所以选 SwiftUI。以后真要出 Windows、Linux 版，再考虑 MyGo。
+
+### 最低 macOS 26：用上的新能力
+
+不写旧系统的兼容分支，也不准备两套外观。之后的系统新加的东西，要用时再单独判断可用性。
+
+| 能力 | 用在哪 |
+| --- | --- |
+| Liquid Glass：`.glassEffect`、`GlassEffectContainer`、`.buttonStyle(.glass)` / `.glassProminent` | 只给浮在内容上面的控件：输入框、⌘K 面板、云桌面的接管条、菜单栏弹出面板（规则见「界面原则」）。侧栏和工具栏系统自己会换成玻璃 |
+| `ToolbarSpacer` | 工具栏按钮分组，「跟詩音说」单独一组 |
+| Spotlight 里直接执行 App 的动作（App Intents） | 不打开窗口就能「问詩音」「记一条待办」「打开某个助手」；待办和任务卡做成 `IndexedEntity`，在 Spotlight 里搜得到 |
+| 控制中心和菜单栏里的控件（`ControlWidget`） | 「跟詩音说」「暂停催促一小时」 |
+| 桌面小组件（WidgetKit） | 下一件事、通勤延误、等你确认的数量 |
+| Foundation Models（本机模型） | 只用在两处，其余照旧交给 VPS 上的助手：连不上 VPS 时，把 ⌥Space 里的一句话先记成待办草稿，连上后再交给詩音；以后要记窗口标题时，在本机先归成学习、工作、生活，标题本身不上传。要开着 Apple 智能的 Apple 芯片 Mac，用不了就跳过 |
+| Swift 6.2：默认主线程隔离、`@Observable` 和 `Observations`、`Span` | 界面状态在主线程；Gateway 连接和 RFB 解码各放在自己的 actor 里；`Observations` 把状态变化接成异步序列，用来刷新小组件；RFB 解码用 `Span` / `RawSpan` 读写字节，不用 unsafe 指针 |
+| SwiftUI `WebView` / `WebPage` | 只在 RFB 客户端做好之前，用来跑 noVNC 过渡 |
 
 ### 原型到 SwiftUI 的对照
 
-macOS 上是 SwiftUI 加 AppKit（UIKit 是 iOS 的；Mac Catalyst 做菜单栏常驻、浮动面板都要绕路，不考虑）。建议最低支持 macOS 14，用得上 `@Observable`、`.inspector`、`.defaultScrollAnchor`、符号动画；在 macOS 26 及以上自动换成 Liquid Glass 外观。
+macOS 上是 SwiftUI 加 AppKit（UIKit 是 iOS 的；Mac Catalyst 做菜单栏常驻、浮动面板都要绕路，不考虑）。
 
 | 原型里的部分 | 原生实现 | 难度 |
 | --- | --- | --- |
-| 窗口、侧栏毛玻璃、工具栏、红绿灯 | `NavigationSplitView` + `.toolbar`，侧栏自带毛玻璃 | 低 |
+| 窗口、侧栏、工具栏、红绿灯 | `NavigationSplitView` + `.toolbar`；侧栏和工具栏在 macOS 26 上自动是 Liquid Glass | 低 |
 | 页面切换、深链接（`#card-…`） | 侧栏选中状态 + 自定义 URL scheme 和 `.onOpenURL`，通知点进来直接到卡片 | 低 |
 | 待办、等你确认、日报列表 | `List` / `LazyVStack`，`.contextMenu`，`.onHover` 显示「现在运行」 | 低 |
 | 任务详情、待办详情 | `.inspector` | 低 |
@@ -188,26 +241,27 @@ macOS 上是 SwiftUI 加 AppKit（UIKit 是 iOS 的；Mac Catalyst 做菜单栏�
 | 屏幕时间图表 | Swift Charts（`BarMark`） | 低 |
 | 流式回复、呼吸点 | `Text` 增量更新；`ellipsis` 符号加 `.symbolEffect` | 低 |
 | 助手回复里的 Markdown | 系统自带只支持行内样式，列表、代码块要用第三方渲染库或自己写 | 中 |
-| 跨多条消息选中复制 | SwiftUI 只能在单个 `Text` 里选中；要连续选中得换成 `NSTextView` | 中 |
+| 复制消息 | 每条消息 `.textSelection(.enabled)`，再加一个「复制」按钮；不做跨多条消息的连续选中 | 低 |
 | 菜单栏常驻和弹出面板 | `MenuBarExtra` + `.menuBarExtraStyle(.window)`；橙色数字角标要画成图片 | 低 |
 | 可直接回复的系统通知 | `UNUserNotificationCenter` + `UNTextInputNotificationAction` | 低 |
 | ⌥Space 全局唤出 | 系统没有 SwiftUI 接口；用 Carbon 的 `RegisterEventHotKey`（不需要辅助功能权限），或 KeyboardShortcuts 这类封装库 | 中 |
-| ⌘K 浮动输入框（像 Spotlight） | AppKit `NSPanel`（不激活主窗口）里放 SwiftUI | 中 |
+| ⌘K 浮动输入框（像 Spotlight） | AppKit `NSPanel`（不激活主窗口）里放 SwiftUI，背景用 `.glassEffect` | 中 |
 | 应用使用记录 | `NSWorkspace` 的前台应用通知，不需要权限；只记应用名和时长；要窗口标题才需要屏幕录制或辅助功能权限 | 低 |
-| 本机提醒事项（以后） | EventKit，macOS 14 起申请完整访问权限 | 低 |
+| 本机提醒事项（以后） | EventKit，申请提醒事项的完整访问权限 | 低 |
 | 开机启动、常驻 | `SMAppService`；关掉窗口后留在菜单栏 | 低 |
 | 凭证 | 钥匙串 | 低 |
 | Gateway 连接 | `URLSessionWebSocketTask`（可以带 Access 和 Hermes 的请求头）+ 自己写的 JSON-RPC 层，类型从 OpenRPC 生成 | 中 |
-| 云桌面画面 | 见上面风险 5：RFB 客户端是整个项目里最大的一块 | 高 |
+| 云桌面画面 | 见上面「画面客户端」：自己写精简的 RFB 客户端，画面是 AppKit 的 `NSView`，接管条浮在上面用玻璃 | 高 |
 | 点画面接管、点外面交还 | 画面视图成为第一响应者；`NSEvent.addLocalMonitorForEvents` 只看本 App 里的点击，所以切到别的 App 不会交还 | 中 |
 
 ## 界面原则（SwiftUI 版照这个来）
 
 - **层级靠字号和留白，不靠框。** 只有需要你动手的东西才放进框里：「需要你」托盘、看板卡片、确认卡片、云桌面画面。其余都是标题加列表。
 - **颜色只表达三件事。** 紫色（詩音的主题色）表示选中和主操作；暖橙表示在等你；红色表示逾期、"此刻"、你在操作云桌面。领域和助手的颜色只出现在小圆点、头像和日程色条上。
+- **玻璃只给浮在内容上面的控件**：输入框、⌘K 面板、云桌面的接管条、菜单栏弹出面板；同一处的几个玻璃控件放进一个 `GlassEffectContainer`。列表、看板卡片、确认卡片这些内容层不用玻璃，玻璃上也不叠玻璃。只有主操作按钮用 `.glassProminent` 染成紫色。
 - **字号五档**：11（角标）、12（次要信息）、13（正文）、15（小节标题）、20（详情标题），外加今天页 30 号的日期。
 - **界面里不出现编号和协议词。** 任务卡编号、profile、模型名只放在详情底部的技术信息里。工具步骤默认折叠成一行。
-- **动的东西只有两种**：助手在做事时的三个呼吸点，和流式输出的光标。
+- **动的东西只有两种**：助手在做事时的三个呼吸点，和流式输出的光标。系统控件自带的反馈（按下玻璃按钮、弹出层出现）照常保留，但不自己另加动画。
 - **一个入口找詩音**：今天页的输入框；其他页面右上角的「跟詩音说」按钮（⌘K）；在 Mac 任何地方按 ⌥Space。
 - **詩音的标记**：一个写着「詩」的圆形标记，和她的头像同一个样子；出现这个标记的地方就是在跟她说话。菜单栏里用单色描边版，符合 macOS 菜单栏模板图标的习惯。
 
@@ -228,7 +282,7 @@ npm run dev        # http://localhost:1420
 ## 路线图
 
 1. **对齐界面**（现在）：用原型把信息结构和关键流程定下来。
-2. **协议探路**：一个命令行小程序，经 Cloudflare Tunnel 用 Access service token 连上 VPS，跑通握手、`profiles.list`、打开 Bot Chat、流式消息、回答审批，同时验证上面三个风险。
+2. **协议探路**：一个命令行小程序，经 Cloudflare Tunnel 用 Access service token 连上 VPS，跑通握手、`profiles.list`、打开 Bot Chat、流式消息、回答审批，同时验证风险 1–4，再走一遍风险 5 的探路（画面 WebSocket 的 RFB 握手）。
 3. **SwiftUI 骨架**：`NavigationSplitView` 主窗口、Bot Chat、等你确认、可回复的系统通知、`MenuBarExtra`、全局快捷键；云桌面先做缩略图和接管、交还，再做实时画面。
 4. **`shion` 插件和助手团队**：插件提供待办、今天汇总、日报、应用记录；把詩音和各助手的 profile、SOUL、例行任务做成一套可一键部署的模板。
 5. **今天 / 待办 / 日程 / 日报** 接真实数据，加上 Mac 应用使用记录。
