@@ -36,6 +36,7 @@ import os
 import hashlib
 import json
 import secrets
+import socketserver
 import struct
 import sys
 import threading
@@ -155,6 +156,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, *args):
         pass
+
+    def setup(self):
+        super().setup()
+        # a WebSocket's frames come from more than one thread (replies, timers, pushes): one at a time.
+        # Every connection gets it, since /api/ws and the kanban /events socket both send frames.
+        self.write_lock = threading.Lock()
 
     def handle(self):
         # a client that hangs up between requests is not news
@@ -374,7 +381,6 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.flush()
         log("  ws: open")
-        self.write_lock = threading.Lock()
         self.close_connection = True
         self.event("gateway.ready", None, {"session_authority": True, "heartbeat": True})
         try:
@@ -595,13 +601,22 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"jsonrpc": "2.0", "id": rid, "result": result})
 
 
+class Server(ThreadingHTTPServer):
+    daemon_threads = True
+
+    def server_bind(self):
+        # HTTPServer looks its own address up in DNS (socket.getfqdn), which took half a minute on a
+        # runner; the name is only used in log lines
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=8765)
     args = parser.parse_args()
     fake_kanban.setup(log, valid_access)
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
-    server.daemon_threads = True
+    server = Server(("127.0.0.1", args.port), Handler)
     log(f"stand-in Hermes on http://127.0.0.1:{args.port}")
     try:
         server.serve_forever()

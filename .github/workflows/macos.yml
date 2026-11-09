@@ -86,7 +86,7 @@ jobs:
             python3 -u ci/fake_hermes.py --port 8765 > "build/fake_hermes-$test.log" 2>&1 &
             standin=$!
             for attempt in 1 2 3 4 5 6 7 8 9 10; do
-              curl -fsS -o /dev/null -H 'CF-Access-Client-Id: ci-client' -H 'CF-Access-Client-Secret: ci-secret' \
+              curl -fsS --max-time 2 -o /dev/null -H 'CF-Access-Client-Id: ci-client' -H 'CF-Access-Client-Secret: ci-secret' \
                 http://127.0.0.1:8765/api/status && break
               sleep 1
             done
@@ -175,11 +175,22 @@ jobs:
             -derivedDataPath build/Release \
             CURRENT_PROJECT_VERSION=${{ github.run_number }} \
             -quiet 2>&1 | tee build/package.log
-          mkdir -p build/dmg
-          cp -R build/Release/Build/Products/Release/Shion.app build/dmg/
-          ln -s /Applications build/dmg/Applications
-          hdiutil create -volname Shion -srcfolder build/dmg -ov -format UDZO build/Shion.dmg
+          mkdir -p build/dmg/Shion
+          cp -R build/Release/Build/Products/Release/Shion.app build/dmg/Shion/
+          ln -s /Applications build/dmg/Shion/Applications
+          # hdiutil is deprecated on macOS 27; diskutil image (macOS 26 and later) makes the same image
+          if ! diskutil image create from build/dmg/Shion build/Shion.dmg --format UDZO --volumeName Shion; then
+            diskutil image create from --help 2>&1 | head -40 || true
+            echo "::warning title=Package::diskutil image create failed, so the image came from the deprecated hdiutil"
+            hdiutil create -volname Shion -srcfolder build/dmg/Shion -ov -format UDZO build/Shion.dmg
+          fi
           ls -la build/Shion.dmg
+          # the image holds the app and a link to /Applications, not a copy of it
+          size=$(stat -f %z build/Shion.dmg)
+          if [ "$size" -gt 100000000 ]; then
+            echo "::error title=Package::Shion.dmg is $size bytes; the /Applications link was copied instead of kept"
+            exit 1
+          fi
 
       - name: Upload the Release build
         if: success() && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[package]'))
@@ -188,6 +199,20 @@ jobs:
           name: Shion-macOS-${{ github.run_number }}
           path: macos/build/Shion.dmg
           retention-days: 30
+
+      # xcodebuild's warnings do not become annotations by themselves: list them, so a run with any
+      # shows them on its page
+      - name: Compiler warnings
+        if: always()
+        run: |
+          warnings=$(cat build/xcodebuild.log build/package.log 2>/dev/null | grep -E '^/.*: warning: ' | sort -u || true)
+          if [ -z "$warnings" ]; then
+            echo "no compiler warnings"
+          else
+            while IFS= read -r line; do
+              echo "::warning title=Compiler::${line#"$PWD/"}"
+            done <<< "$warnings"
+          fi
 
       - name: Show errors
         if: failure()

@@ -25,17 +25,28 @@ struct MenuBarLabel: View {
 }
 
 enum MenuBarIcon {
-    static let image: NSImage = {
-        let mark = Text("詩")
-            .font(.system(size: 9.5, weight: .bold))
-            .frame(width: 16, height: 16)
-            .overlay(Circle().strokeBorder(lineWidth: 1.2))
-        let renderer = ImageRenderer(content: mark)
+    /// A template image, so the menu bar tints it.
+    static let image: NSImage = render()
+
+    /// Rendered from a view of this module: an opaque `some View` built inline here made the
+    /// compiler warn that its conformance might be isolated elsewhere (#IsolatedConformances).
+    private static func render() -> NSImage {
+        let renderer = ImageRenderer(content: MenuBarMark())
         renderer.scale = 2
         let image = renderer.nsImage ?? NSImage(size: NSSize(width: 16, height: 16))
         image.isTemplate = true
         return image
-    }()
+    }
+}
+
+/// 「詩」 in a ring.
+private struct MenuBarMark: View {
+    var body: some View {
+        Text("詩")
+            .font(.system(size: 9.5, weight: .bold))
+            .frame(width: 16, height: 16)
+            .overlay(Circle().strokeBorder(lineWidth: 1.2))
+    }
 }
 
 /// The menu bar panel: the focus check first (it is about right now), then what is next, the ride
