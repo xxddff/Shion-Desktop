@@ -40,7 +40,8 @@ enum BoardWork {
         detail.runs.filter { run in
             guard (run.profile ?? card.assignee) == profile, let begin = run.startedAt else { return false }
             guard let end = run.endedAt else { return true }
-            return end >= start && (end > begin || run.outcome == "spawn_failed")
+            // Hermes keeps whole seconds
+            return end >= start && (end.timeIntervalSince(begin) >= 1 || run.outcome == "spawn_failed")
         }
     }
 
@@ -128,6 +129,17 @@ struct CardAsk: Equatable {
     let at: Date?
     /// It stopped on the same thing again after you let it go on, and Hermes moved it to triage.
     let again: Bool
+
+    /// Why it stopped, the way the board says it.
+    var words: String {
+        if again {
+            return reason.map { "又卡在同一处：\($0)" } ?? "又卡在同一处了"
+        }
+        if kind == "capability" {
+            return reason.map { "缺少能力：\($0)" } ?? "缺少它需要的能力"
+        }
+        return reason ?? "卡住了，等你"
+    }
 }
 
 /// A card's change, for a notification: it waits on you, it is handed to you to check, it is done.

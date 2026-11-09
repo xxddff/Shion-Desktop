@@ -8,7 +8,7 @@ struct TodayView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 34) {
                 hero
-                if !store.asks.isEmpty {
+                if store.confirmCount > 0 {
                     needsYou
                 }
                 agenda
@@ -79,11 +79,13 @@ struct TodayView: View {
         return parts.joined()
     }
 
+    /// Three at most: approvals and questions, then the board cards waiting on your answer.
     private var needsYou: some View {
         let asks = Array(store.asks.prefix(3))
+        let cards = Array(store.cardAsks.prefix(3 - asks.count))
         return VStack(alignment: .leading, spacing: 10) {
             HStack {
-                SectionTitle(title: "需要你", count: store.asks.count)
+                SectionTitle(title: "需要你", count: store.confirmCount)
                 Spacer()
                 Button("全部") { store.route = .confirm }
                     .buttonStyle(.link)
@@ -92,7 +94,13 @@ struct TodayView: View {
                 VStack(spacing: 0) {
                     ForEach(asks) { ask in
                         AskRow(ask: ask)
-                        if ask.id != asks.last?.id {
+                        if ask.id != asks.last?.id || !cards.isEmpty {
+                            Divider()
+                        }
+                    }
+                    ForEach(cards) { card in
+                        CardAskRow(ask: card)
+                        if card.id != cards.last?.id {
                             Divider()
                         }
                     }

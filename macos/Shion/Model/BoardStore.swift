@@ -85,6 +85,8 @@ final class BoardStore {
     @ObservationIgnored private var readAgain = false
     @ObservationIgnored private var readingElsewhere: Int?
     @ObservationIgnored private var readElsewhereAgain = false
+    /// The other boards' counts as the last read of them found them.
+    @ObservationIgnored private var readCounts: [String: [String: Int]] = [:]
 
     private static let notifyDoneKey = "BoardNotifyDone"
 
@@ -159,6 +161,7 @@ final class BoardStore {
         focusElsewhere = nil
         moments = [:]
         elsewhereSigns = [:]
+        readCounts = [:]
         watcher?.cancel()
         watcher = nil
         revealing = nil
@@ -232,15 +235,11 @@ final class BoardStore {
                 guard let self, token == self.generation, let client = self.client else { return }
                 guard let listing = try? await client.get("/boards"), token == self.generation else { continue }
                 let fresh = (listing["boards"]?.array ?? []).compactMap { KanbanBoardInfo($0) }
-                let shown = self.slug
-                func others(_ list: [KanbanBoardInfo]) -> [String: [String: Int]] {
-                    Dictionary(list.filter { $0.slug != shown }.map { ($0.slug, $0.counts) }, uniquingKeysWith: { a, _ in a })
-                }
-                let moved = others(fresh) != others(self.boards)
                 if fresh != self.boards {
                     self.boards = fresh
                 }
-                if moved {
+                // against what the last read of them saw: a read of this board updates the counts too
+                if self.otherCounts(fresh) != self.readCounts {
                     await self.readElsewhere(token)
                 }
             }
@@ -329,12 +328,19 @@ final class BoardStore {
         }
     }
 
+    /// The counts of the boards not shown, by board.
+    private func otherCounts(_ list: [KanbanBoardInfo]) -> [String: [String: Int]] {
+        Dictionary(list.filter { $0.slug != slug }.map { ($0.slug, $0.counts) }, uniquingKeysWith: { first, _ in first })
+    }
+
     private func readOthers(_ token: Int) async {
         guard let client, token == generation else { return }
         let start = BoardWork.today(serverNow)
+        var counts = otherCounts(boards)
         var cards: [String: [KanbanTask]] = [:]
         var kept: [String: KanbanDetail] = [:]
         var signs: [String: String] = [:]
+        var read: Set<String> = []
         for info in boards where info.slug != slug {
             guard info.counts.values.contains(where: { $0 > 0 }) else {
                 // nothing on it: whatever comes later is news
@@ -343,10 +349,22 @@ final class BoardStore {
                 }
                 continue
             }
-            guard let reply = try? await client.get("/board", board: info.slug) else { continue }
+            guard let reply = try? await client.get("/board", board: info.slug) else {
+                // not read this time: what was read of it stays, and it is read again soon
+                guard token == generation else { return }
+                counts[info.slug] = nil
+                let held = elsewhere[info.slug] ?? []
+                cards[info.slug] = held
+                for task in held {
+                    kept[task.id] = elsewhereDetails[task.id]
+                    signs[task.id] = elsewhereSigns[task.id]
+                }
+                continue
+            }
             guard token == generation else { return }
             let found = Self.tasks(in: reply)
             cards[info.slug] = found
+            read.insert(info.slug)
             for task in found where wantsDetail(task, since: start) || focusElsewhere == CardRef(board: info.slug, id: task.id) {
                 let sign = BoardWork.signature(task)
                 if let held = elsewhereDetails[task.id], elsewhereSigns[task.id] == sign {
@@ -364,8 +382,9 @@ final class BoardStore {
         elsewhere = cards
         elsewhereDetails = kept
         elsewhereSigns = signs
-        for (board, found) in cards {
-            notice(board, found) { kept[$0] }
+        readCounts = counts
+        for board in read {
+            notice(board, cards[board] ?? []) { kept[$0] }
         }
     }
 

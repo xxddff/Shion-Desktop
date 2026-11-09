@@ -75,17 +75,7 @@ struct CardAskView: View {
         .accessibilityIdentifier("card-ask-\(ask.cardId)")
     }
 
-    /// Why it stopped, the way the board says it.
-    private var reason: String {
-        let text = ask.ask.reason
-        if ask.ask.again {
-            return text.map { "又卡在同一处：\($0)" } ?? "又卡在同一处了"
-        }
-        if ask.ask.kind == "capability" {
-            return text.map { "缺少能力：\($0)" } ?? "缺少它需要的能力"
-        }
-        return text ?? "卡住了，等你"
-    }
+    private var reason: String { ask.ask.words }
 
     /// The card's board, when the server has more than one.
     private var boardName: String? {
@@ -108,5 +98,31 @@ struct CardAskView: View {
             }
             sending = false
         }
+    }
+}
+
+/// A card waiting on your answer in 今天's 「需要你」: one line, and the way to 等你确认, where the
+/// answer is written.
+struct CardAskRow: View {
+    @Environment(AppStore.self) private var store
+    let ask: BoardAsk
+
+    var body: some View {
+        let bot = ask.assignee.flatMap { store.bot($0) }
+        HStack(spacing: 10) {
+            Avatar(bot: bot, size: 24)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(ask.title).font(.t13.weight(.medium)).lineLimit(1)
+                Text("\(bot?.name ?? ask.assignee ?? "") · \(ask.ask.words)")
+                    .font(.t12)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            Button("去回复") { store.route = .confirm }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+        }
+        .padding(.vertical, 8)
     }
 }
