@@ -117,6 +117,7 @@ final class LocalDataTests: XCTestCase {
         } else {
             XCTFail("no 专注 calendar in Settings")
         }
+        select("服务器", in: local)
         app.typeKey("w", modifierFlags: .command)
         element("nav-today", in: app).click()
         let gone = !waitForText("CI：实验报告 第3章", in: app, timeout: 2)
@@ -137,16 +138,23 @@ final class LocalDataTests: XCTestCase {
         guard settings.waitForExistence(timeout: 5) else { return nil }
         let mine = element(identifier, in: settings)
         if !mine.waitForExistence(timeout: 1) {
-            let tabs = [settings.toolbarButtons["这台 Mac"], settings.toolbars.buttons["这台 Mac"], settings.buttons["这台 Mac"],
-                        settings.radioButtons["这台 Mac"]]
-            if let tab = tabs.first(where: { $0.exists }) {
-                tab.click()
-            } else {
-                let any = settings.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "这台 Mac")).firstMatch
-                if any.waitForExistence(timeout: 3) { any.click() }
-            }
+            select("这台 Mac", in: settings)
         }
         return mine.waitForExistence(timeout: 10) ? settings : nil
+    }
+
+    /// A Settings tab, by its name. Back on 服务器 before a test lets go, so a test after it finds the
+    /// server's fields however the window comes back.
+    @MainActor
+    private func select(_ name: String, in settings: XCUIElement) {
+        let tabs = [settings.toolbarButtons[name], settings.toolbars.buttons[name], settings.buttons[name],
+                    settings.radioButtons[name]]
+        if let tab = tabs.first(where: { $0.exists }) {
+            tab.click()
+        } else {
+            let any = settings.descendants(matching: .any).matching(NSPredicate(format: "label == %@", name)).firstMatch
+            if any.waitForExistence(timeout: 3) { any.click() }
+        }
     }
 
     /// Scrolls Settings until `element` can be clicked. Which sign of a wheel delta scrolls down is

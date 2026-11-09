@@ -124,6 +124,7 @@ struct FocusSettings: View {
             LabeledContent("这台 Mac 上的窗口记录") {
                 Button("清空") { local.clearFocusLog() }
                     .disabled(local.engine.samples.isEmpty)
+                    .accessibilityIdentifier("focus-clear")
             }
         } header: {
             Text("专注检查")
@@ -195,6 +196,7 @@ struct UsageSettings: View {
                 }
             }
             .fixedSize()
+            .accessibilityIdentifier("usage-exclude")
         } header: {
             Text("应用使用记录")
         } footer: {

@@ -33,7 +33,8 @@ final class LocalScreenshotTests: XCTestCase {
 
             if let settings = openLocalSettings(app, waitingFor: "focus-check") {
                 Thread.sleep(forTimeInterval: 1)
-                for (identifier, name) in [("calendar-fx-lessons", "calendars"), ("focus-check", "focus"), ("usage-log", "usage")] {
+                // each framed by a row below its section, so the whole section is in view
+                for (identifier, name) in [("calendar-fx-lessons", "calendars"), ("usage-log", "focus"), ("usage-exclude", "usage")] {
                     if reveal(element(identifier, in: settings), in: settings) {
                         Thread.sleep(forTimeInterval: 0.3)
                         keep(settings.screenshot(), "settings-\(name)-\(appearance)")
@@ -42,6 +43,8 @@ final class LocalScreenshotTests: XCTestCase {
                         XCTFail("No \(identifier) in Settings (\(appearance))")
                     }
                 }
+                select("服务器", in: settings)
+                Thread.sleep(forTimeInterval: 0.5)
             } else {
                 keep(XCUIScreen.main.screenshot(), "settings-local-\(appearance)-missing")
                 XCTFail("No 这台 Mac tab in Settings (\(appearance))")
@@ -57,11 +60,16 @@ final class LocalScreenshotTests: XCTestCase {
             keep(window.screenshot(), "calendar-noaccess-light")
             XCTAssertTrue(element("calendar-allow", in: app).exists, "no way to allow calendar access on 日程")
         }
-        if let settings = openLocalSettings(app, waitingFor: "calendar-access"),
-           reveal(element("calendar-access", in: settings), in: settings) {
-            keep(settings.screenshot(), "settings-calendars-noaccess-light")
+        if let settings = openLocalSettings(app, waitingFor: "calendar-access") {
+            if reveal(element("calendar-access", in: settings), in: settings) {
+                keep(settings.screenshot(), "settings-calendars-noaccess-light")
+            } else {
+                XCTFail("No calendar access button in Settings")
+            }
+            select("服务器", in: settings)
+            Thread.sleep(forTimeInterval: 0.5)
         } else {
-            XCTFail("No calendar access button in Settings")
+            XCTFail("No 这台 Mac tab in Settings")
         }
         app.terminate()
     }
@@ -74,16 +82,23 @@ final class LocalScreenshotTests: XCTestCase {
         guard settings.waitForExistence(timeout: 5) else { return nil }
         let mine = element(identifier, in: settings)
         if !mine.waitForExistence(timeout: 1) {
-            let tabs = [settings.toolbarButtons["这台 Mac"], settings.toolbars.buttons["这台 Mac"], settings.buttons["这台 Mac"],
-                        settings.radioButtons["这台 Mac"]]
-            if let tab = tabs.first(where: { $0.exists }) {
-                tab.click()
-            } else {
-                let any = settings.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "这台 Mac")).firstMatch
-                if any.waitForExistence(timeout: 3) { any.click() }
-            }
+            select("这台 Mac", in: settings)
         }
         return mine.waitForExistence(timeout: 10) ? settings : nil
+    }
+
+    /// A Settings tab, by its name. Back on 服务器 before a test lets go, so a test after it finds the
+    /// server's fields however the window comes back.
+    @MainActor
+    private func select(_ name: String, in settings: XCUIElement) {
+        let tabs = [settings.toolbarButtons[name], settings.toolbars.buttons[name], settings.buttons[name],
+                    settings.radioButtons[name]]
+        if let tab = tabs.first(where: { $0.exists }) {
+            tab.click()
+        } else {
+            let any = settings.descendants(matching: .any).matching(NSPredicate(format: "label == %@", name)).firstMatch
+            if any.waitForExistence(timeout: 3) { any.click() }
+        }
     }
 
     /// Scrolls Settings until `element` can be clicked: one way, then the other (the sign of a

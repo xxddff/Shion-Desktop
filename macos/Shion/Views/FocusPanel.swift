@@ -63,8 +63,13 @@ struct FocusPanelRow: View {
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
                         .frame(width: 34, alignment: .leading)
-                    Text(row.window)
+                    Text(row.app)
+                        .font(.t12.weight(.medium))
+                        .lineLimit(1)
+                        .fixedSize()
+                    Text(row.title)
                         .font(.t12)
+                        .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Spacer(minLength: 4)
@@ -95,7 +100,8 @@ struct FocusPanelRow: View {
     private struct WindowRow: Identifiable {
         let id: UUID
         let at: Date
-        let window: String
+        let app: String
+        let title: String
         let fit: String
         let tone: Color
     }
@@ -115,7 +121,8 @@ struct FocusPanelRow: View {
             return WindowRow(
                 id: row.sample.id,
                 at: row.sample.at,
-                window: row.sample.front.map { [$0.app, $0.title].filter { !$0.isEmpty }.joined(separator: " · ") } ?? "不在 Mac 前",
+                app: row.sample.front?.app ?? "不在 Mac 前",
+                title: row.sample.front?.title ?? "",
                 fit: label.text,
                 tone: label.tone
             )
