@@ -241,28 +241,103 @@ final class BoardTests: XCTestCase {
             XCTFail("no code block with the long line, or the words before it are missing")
         }
 
-        // a click opens the folded calls below the line, which stays under the pointer while what
-        // is below it moves down; a second click closes them, and the line stays again
+        // a click opens the folded calls below the line, which stays under the pointer while the
+        // reply below moves down by as much as they take; a second click closes them, and both are
+        // back. At the end of the chat, then scrolled back from it a little.
         let run = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "用了 3 个工具")).firstMatch
-        guard run.waitForExistence(timeout: 3) else {
-            return XCTFail("no button for the folded tool calls")
+        guard run.waitForExistence(timeout: 3), let reply = findText("这周要交的有两项", in: app) else {
+            return XCTFail("no button for the folded tool calls, or no reply below it")
         }
+        var positions: [String] = []
+        openAndClose(run, above: reply, in: app, window: window, "at the end",
+                     shots: ("board-14-chat-tools-opened", "board-15-chat-tools-closed"), positions: &positions)
+        let back = scrollBack(over: run, by: 120)
+        positions.append("scrolled back from the end: the line moved \(back)")
+        if back >= 90 {
+            openAndClose(run, above: reply, in: app, window: window, "scrolled back",
+                         shots: ("board-16-chat-tools-opened-midway", "board-17-chat-tools-closed-midway"), positions: &positions)
+        } else {
+            keep(window.screenshot(), "board-16-not-scrolled-back")
+            XCTFail("the chat did not scroll back from its end: the line moved \(back)")
+        }
+        note(positions.joined(separator: "\n"), "board-positions")
+        app.terminate()
+    }
+
+    /// Opens the folded calls with a click and closes them with another, measuring the line and
+    /// the reply below it each time: the line stays put, and the reply moves down by as much as
+    /// the calls take, then back. The numbers go in the failures and in `positions`.
+    @MainActor
+    private func openAndClose(_ run: XCUIElement, above reply: XCUIElement, in app: XCUIApplication, window: XCUIElement,
+                              _ place: String, shots: (opened: String, closed: String), positions: inout [String]) {
         let line = run.frame.minY
+        let below = reply.frame.minY
         run.click()
-        let opened = waitForText("read_file · syllabus（CI）", in: app, timeout: 5)
-        Thread.sleep(forTimeInterval: 0.5)
-        let openedAt = run.frame.minY
-        keep(window.screenshot(), "board-14-chat-tools-opened")
-        XCTAssertTrue(opened, "the folded tool calls did not open on a click")
-        XCTAssertEqual(openedAt, line, accuracy: 4, "the line moved as it opened: from \(line) to \(openedAt)")
+        let opened = waitUntil(timeout: 5) { self.findText("web_extract · moodle.example（CI）", in: app) != nil }
+        settle { abs(run.frame.minY - line) <= 2 }
+        let openedLine = run.frame.minY
+        let openedBelow = reply.frame.minY
+        // from the line's foot to the last call's: what opening added
+        let calls = (findText("web_extract · moodle.example（CI）", in: app)?.frame.maxY ?? run.frame.maxY) - run.frame.maxY
+        keep(window.screenshot(), shots.opened)
         run.click()
         let closed = waitUntil(timeout: 5) { self.findText("read_file · syllabus（CI）", in: app) == nil }
+        settle { abs(run.frame.minY - line) <= 2 }
+        let closedLine = run.frame.minY
+        let closedBelow = reply.frame.minY
+        keep(window.screenshot(), shots.closed)
+        let numbers = "\(place): the line at \(line), opened \(openedLine), closed \(closedLine); "
+            + "the reply below at \(below), opened \(openedBelow), closed \(closedBelow); the calls take \(calls)"
+        positions.append(numbers)
+        print("positions: \(numbers)")
+        XCTAssertTrue(opened, "\(place): the folded tool calls did not open on a click")
+        XCTAssertTrue(closed, "\(place): the opened tool calls did not close on a second click")
+        XCTAssertEqual(openedLine, line, accuracy: 4, "\(place): the line moved as the calls opened. \(numbers)")
+        XCTAssertGreaterThan(calls, 30, "\(place): the opened calls take no room. \(numbers)")
+        XCTAssertEqual(openedBelow - below, calls, accuracy: 6, "\(place): the reply did not move down by as much as the calls take. \(numbers)")
+        XCTAssertEqual(closedLine, line, accuracy: 4, "\(place): the line moved as the calls closed. \(numbers)")
+        XCTAssertEqual(closedBelow, below, accuracy: 4, "\(place): the reply did not come back as the calls closed. \(numbers)")
+    }
+
+    /// Scrolls the chat back from its end by about `distance` with the wheel over `handle` (a line
+    /// of the chat, not a block that scrolls sideways); how far `handle` moved down. Which sign of
+    /// a wheel delta scrolls back, and how far a delta goes, is the runner's business: nudges both
+    /// ways, growing until one moves the chat back (at the end, the other way moves nothing).
+    @MainActor
+    private func scrollBack(over handle: XCUIElement, by distance: CGFloat) -> CGFloat {
+        let start = handle.frame.minY
+        let moved = { handle.frame.minY - start }
+        var step: CGFloat = 0
+        var size: CGFloat = 10
+        while step == 0, size <= 160 {
+            for sign: CGFloat in [1, -1] {
+                let before = handle.frame.minY
+                handle.scroll(byDeltaX: 0, deltaY: sign * size)
+                Thread.sleep(forTimeInterval: 0.3)
+                if handle.frame.minY > before + 1 {
+                    step = sign * size
+                    break
+                }
+            }
+            size *= 2
+        }
+        for _ in 0..<20 where step != 0 && moved() < distance {
+            handle.scroll(byDeltaX: 0, deltaY: step)
+            Thread.sleep(forTimeInterval: 0.3)
+        }
         Thread.sleep(forTimeInterval: 0.5)
-        let closedAt = run.frame.minY
-        keep(window.screenshot(), "board-15-chat-tools-closed")
-        XCTAssertTrue(closed, "the opened tool calls did not close on a second click")
-        XCTAssertEqual(closedAt, line, accuracy: 4, "the line moved as it closed: from \(line) to \(closedAt)")
-        app.terminate()
+        return moved()
+    }
+
+    /// Waits a little at a time for `condition`, up to `timeout`, then a moment more for what
+    /// moves to come to rest.
+    @MainActor
+    private func settle(timeout: TimeInterval = 1.5, _ condition: () -> Bool) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition(), Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        Thread.sleep(forTimeInterval: 0.3)
     }
 
     /// Scrolls `area` sideways until `target`'s right edge is inside it. Which sign of a wheel
@@ -374,6 +449,14 @@ final class BoardTests: XCTestCase {
 
     private func keep(_ screenshot: XCUIScreenshot, _ name: String) {
         let attachment = XCTAttachment(screenshot: screenshot)
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    /// Numbers worth reading after the run, kept as a text beside the pictures (`name.txt`).
+    private func note(_ text: String, _ name: String) {
+        let attachment = XCTAttachment(string: text)
         attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)

@@ -11,10 +11,13 @@ struct ChatView: View {
     @State private var short = false
     /// Folded runs of tool calls opened by a click, by line id; not kept once the chat closes.
     @State private var openRuns: Set<String> = []
-    /// A run of tool calls just opened or closed: the transcript holds its top for a moment, so
-    /// the line stays under the pointer and what is below it moves (see the scroll anchors).
-    @State private var holdingTop = false
-    @State private var holds = 0
+    /// Keeps the content's top while a run of tool calls opens or closes (ChatLines.swift): it is
+    /// scrolled back to the mark, laid where the top was.
+    @State private var keeper = TopKeeper()
+    @State private var mark: CGFloat?
+    /// Counts scrolls to the mark asked for a moment later.
+    @State private var rescrolls = 0
+    private static let markId = "transcript-mark"
 
     var body: some View {
         let bot = store.bot(botId)
@@ -27,6 +30,29 @@ struct ChatView: View {
                 .onChange(of: items.first?.id) { previous, _ in
                     guard let previous, let line = lines.first(where: { line in line.items.contains { $0.id == previous } }) else { return }
                     reader.scrollTo(line.id, anchor: .top)
+                }
+                // a run of tool calls opened or closed, and the content kept its bottom as it grew
+                // or shrank: its top goes back, so the line stays under the pointer and what is
+                // below it moves
+                .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                    geometry.contentOffset.y + geometry.contentInsets.top
+                } action: { old, new in
+                    guard let place = keeper.moved(from: old, to: new) else { return }
+                    if place == mark {
+                        reader.scrollTo(Self.markId, anchor: .top)
+                    } else {
+                        mark = place
+                    }
+                    Task {
+                        // once the mark is laid where it now goes, or again if that scroll did not take
+                        try? await Task.sleep(for: .milliseconds(50))
+                        if keeper.away() {
+                            rescrolls += 1
+                        }
+                    }
+                }
+                .onChange(of: rescrolls) {
+                    reader.scrollTo(Self.markId, anchor: .top)
                 }
         }
         .overlay {
@@ -68,7 +94,10 @@ struct ChatView: View {
                         ChatRow(item: item, bot: bot, showHead: showsHead(lines, index))
                     case .tools(let id, let tools):
                         ToolRun(tools: tools, open: openRuns.contains(id)) {
-                            toggle(id)
+                            if let place = keeper.hold() {
+                                mark = place
+                            }
+                            openRuns.formSymmetricDifference([id])
                         }
                     }
                 }
@@ -78,12 +107,17 @@ struct ChatView: View {
             .frame(maxWidth: 760)
             // a short chat sits at the bottom of a full-height page, not on a short one
             .frame(maxWidth: .infinity, minHeight: viewport, alignment: .bottom)
+            .overlay(alignment: .topLeading) {
+                if let mark {
+                    Color.clear
+                        .frame(width: 1, height: 1)
+                        .id(Self.markId)
+                        .padding(.top, max(0, mark))
+                }
+            }
         }
-        // starts at the newest message, and follows new ones; while a run of tool calls opens or
-        // closes, the top holds instead, or the line would move up as the run grows below it
-        .defaultScrollAnchor(.bottom, for: .initialOffset)
-        .defaultScrollAnchor(.bottom, for: .alignment)
-        .defaultScrollAnchor(holdingTop ? .top : .bottom, for: .sizeChanges)
+        // starts at the newest message, and follows new ones
+        .defaultScrollAnchor(.bottom)
         .accessibilityIdentifier("transcript")
         // measured from the first layout on (a scroll geometry change only reports changes); the
         // size is already inside the toolbar and the composer
@@ -112,21 +146,6 @@ struct ChatView: View {
                 if short {
                     await store.loadOlder(botId)
                 }
-            }
-        }
-    }
-
-    /// Opens or closes a run of tool calls with its line held where it is: the size change it
-    /// makes keeps the content's top, not its bottom, for as long as the rows take to settle.
-    private func toggle(_ id: String) {
-        holds += 1
-        let hold = holds
-        holdingTop = true
-        openRuns.formSymmetricDifference([id])
-        Task {
-            try? await Task.sleep(for: .seconds(1))
-            if holds == hold {
-                holdingTop = false
             }
         }
     }
