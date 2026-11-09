@@ -25,9 +25,10 @@ hermes_cli/dashboard_auth and the Canonical Gateway Protocol:
   /api/profiles, /api/mcp/…,   the assistants' profiles: create, title, SOUL, model, MCP
   /api/skills, /api/tools/…,   servers, skills, toolsets, config, delete (fake_profiles.py, which
   /api/config?profile=         also answers profiles.list, profiles.create and profiles.configure)
+  prompt.submit "小窗：…"       詩音's answer to the ⌥Space window, streamed slowly (fake_quick.py)
 
-Like Hermes's contracts (extra="forbid"), session.resume and session.transcript refuse keys
-they do not know, so a client's wrong parameter fails here as it would on a real server.
+Like Hermes's contracts (extra="forbid"), session.resume, session.transcript and prompt.submit
+refuse keys they do not know, so a client's wrong parameter fails here as it would on a real server.
 
 Every request is logged (path, which credentials came, the answer), so a failing run shows
 where the flow stopped. Stdlib only.
@@ -52,6 +53,7 @@ import fake_control  # noqa: E402  stop, retry and the server check (ChatControl
 import fake_kanban  # noqa: E402  the kanban plugin's routes (BoardTests)
 import fake_profiles  # noqa: E402  the profiles' routes and RPCs (BotsTests)
 import fake_shion  # noqa: E402  the shion plugin's RPCs
+import fake_quick  # noqa: E402  詩音's answers to the ⌥Space window (QuickAskTests)
 
 ACCESS_ID, ACCESS_SECRET = "ci-client", "ci-secret"
 USER, PASSWORD = "ci-user", "ci-pass"
@@ -122,6 +124,10 @@ CREATE_KEYS = {"request_id", "source", "cwd", "model", "toolsets", "provider", "
                "checkpoints", "accept_hooks", "pass_session_id", "follow_profile_config", "service_tier",
                "cwd_explicit", "run_budget", "verbose", "row_cwd", "client_env", "client", "title", "hidden",
                "profile"}
+# tui_gateway/contracts/canonical_sessions.py: CanonicalSubmitParams (+ profile), extra="forbid"
+SUBMIT_KEYS = {"profile", "session_id", "text", "submission_id", "input_id", "queued", "attachments", "finite",
+               "unattended", "surface", "voice_context", "interrupted", "voice_turn", "display_kind",
+               "title_preview", "turn_author", "api_text", "model_override", "clarify_batch"}
 CLIENT_NAME = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}")
 CLIENT_VERSION = re.compile(r"[!-~]{1,64}")
 
@@ -708,8 +714,13 @@ class Handler(BaseHTTPRequestHandler):
             self.event("session.info", params.get("session_id"), {"running": False})
             return
         elif method == "prompt.submit":
+            unknown = sorted(set(params) - SUBMIT_KEYS)
+            if unknown:
+                return self.refuse(rid, unknown)
             self.send_json({"jsonrpc": "2.0", "id": rid, "result": {"accepted": True}})
             session_id, text = params.get("session_id"), params.get("text", "")
+            if fake_quick.handles(text):
+                return fake_quick.answer(self, log, lock, transcripts, session_id, text)
             if "派一张卡" in text:
                 return self.hand_over(session_id, text)
             if "这周的作业" in text:

@@ -83,7 +83,7 @@ jobs:
           # each test gets a fresh stand-in: its one-off events (课程's approval, the todo it adds)
           # would otherwise go to whichever test connects first, and BotsTests changes its profiles
           failed=""
-          for test in SignInTests BoardTests BotsTests ChatControlTests; do
+          for test in SignInTests BoardTests BotsTests QuickAskTests ChatControlTests; do
             python3 -u ci/fake_hermes.py --port 8765 > "build/fake_hermes-$test.log" 2>&1 &
             standin=$!
             for attempt in 1 2 3 4 5 6 7 8 9 10; do
@@ -111,7 +111,7 @@ jobs:
             wait "$standin" 2>/dev/null || true
           done
           if [ -n "$failed" ]; then
-            echo "::warning title=End to end::failed:$failed; see the signin-*, board-*, bots-* and chatctl-* screenshots and the fake_hermes-*.log files in the shots artifact"
+            echo "::warning title=End to end::failed:$failed; see the signin-*, board-*, bots-*, quick-* and chatctl-* screenshots and the fake_hermes-*.log files in the shots artifact"
             exit 1
           fi
 
@@ -129,7 +129,7 @@ jobs:
         if: always()
         run: |
           mkdir -p build/shots
-          for bundle in Shots SignInTests BoardTests BotsTests ChatControlTests; do
+          for bundle in Shots SignInTests BoardTests BotsTests QuickAskTests ChatControlTests; do
             if [ -d "build/$bundle.xcresult" ]; then
               mkdir -p "build/export-$bundle"
               xcrun xcresulttool export attachments --path "build/$bundle.xcresult" --output-path "build/export-$bundle" \
@@ -141,7 +141,7 @@ jobs:
           import json, os, re, shutil
           out = 'build/shots'
           for folder in ('build/export-Shots', 'build/export-SignInTests', 'build/export-BoardTests', 'build/export-BotsTests',
-                         'build/export-ChatControlTests'):
+                         'build/export-QuickAskTests', 'build/export-ChatControlTests'):
               manifest = os.path.join(folder, 'manifest.json')
               if not os.path.exists(manifest):
                   continue

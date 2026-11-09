@@ -2,6 +2,7 @@ import SwiftUI
 
 struct TodosView: View {
     @Environment(AppStore.self) private var store
+    @Environment(JumpState.self) private var jump: JumpState?
     @State private var draft = ""
     @State private var selection: String? = nil
     @State private var showInspector = false
@@ -57,6 +58,13 @@ struct TodosView: View {
             if let id = selection, let todo = store.todo(id) {
                 TodoInspector(todo: todo)
             }
+        }
+        // a todo picked in ⌘K opens here
+        .onChange(of: jump?.todo, initial: true) { _, id in
+            guard let id else { return }
+            selection = id
+            showInspector = true
+            jump?.todo = nil
         }
     }
 

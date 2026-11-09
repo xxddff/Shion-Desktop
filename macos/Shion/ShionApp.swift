@@ -3,15 +3,27 @@ import SwiftUI
 @main
 struct ShionApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    @State private var store = AppStore(now: Clock.demoNow)
+    @State private var store: AppStore
+    @State private var jump = JumpState()
+
+    init() {
+        let store = AppStore(now: Clock.demoNow)
+        _store = State(initialValue: store)
+        // the ⌥Space window sends through the same store as the main window
+        QuickAsk.shared.attach(store)
+    }
 
     var body: some Scene {
         WindowGroup("Shion", id: "main") {
             RootView()
                 .environment(store)
+                .environment(jump)
                 .preferredColorScheme(LaunchOptions.current.colorScheme)
         }
         .defaultSize(width: 1240, height: 780)
+        .commands {
+            ShionCommands(store: store, jump: jump, quick: QuickAsk.shared)
+        }
 
         MenuBarExtra {
             MenuBarPanel()
@@ -35,5 +47,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let scheme = LaunchOptions.current.colorScheme {
             NSApp.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
         }
+    }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // the global shortcut goes live
+        QuickAsk.shared.launched()
     }
 }

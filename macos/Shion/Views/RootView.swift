@@ -20,6 +20,10 @@ struct RootView: View {
             try? await Task.sleep(for: .milliseconds(200))
             sidebarFocused = true
         }
+        // ⌘K (JumpPalette.swift)
+        .overlay(alignment: .top) {
+            JumpOverlay()
+        }
         .frame(minWidth: 960, minHeight: 620)
     }
 }

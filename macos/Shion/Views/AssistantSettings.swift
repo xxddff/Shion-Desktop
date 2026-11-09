@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// The Settings window: the server, the assistants on it, and the server check (ServerCheckView.swift).
-/// The window remembers its tab, across launches too; screenshot and test runs keep it to themselves
-/// and always open on 服务器, so one run's tab does not carry into the next.
+/// The Settings window: the server, the assistants on it, the server check (ServerCheckView.swift)
+/// and the keys (ShortcutSettings.swift). The window remembers its tab, across launches too;
+/// screenshot and test runs keep it to themselves and always open on 服务器, so one run's tab does not
+/// carry into the next.
 struct SettingsTabs: View {
     @State private var tab = 0
 
@@ -18,6 +19,9 @@ struct SettingsTabs: View {
                 Tab("服务器体检", systemImage: "stethoscope", value: 2) {
                     ServerCheckView()
                 }
+                Tab("快捷键", systemImage: "keyboard", value: 3) {
+                    ShortcutSettings()
+                }
             }
         } else {
             TabView {
@@ -29,6 +33,9 @@ struct SettingsTabs: View {
                 }
                 Tab("服务器体检", systemImage: "stethoscope") {
                     ServerCheckView()
+                }
+                Tab("快捷键", systemImage: "keyboard") {
+                    ShortcutSettings()
                 }
             }
         }
