@@ -40,10 +40,10 @@ struct WebSocketTransportTests {
             case .urlSession:
                 var request = URLRequest(url: url)
                 for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
-                return URLSessionWebSocketTransport(request: request, log: log)
+                return try URLSessionWebSocketTransport(request: request, log: log)
             case .network:
                 #if canImport(Network)
-                return NWWebSocketTransport(url: url, headers: headers, connectTimeout: 5, log: log)
+                return try NWWebSocketTransport(url: url, headers: headers, connectTimeout: 5, log: log)
                 #else
                 fatalError("Network.framework only")
                 #endif
@@ -66,27 +66,24 @@ struct WebSocketTransportTests {
             ending = error
         }
         FileHandle.standardError.write(Data("[\(kind.rawValue)] run ended with \(ending.map { "\($0)" } ?? "nothing")\n".utf8))
+        // Everything before the close was decoded: the picture matches the real screen.
         let sample = Sample(name: "watch")
-        let framebuffer = await client.framebuffer
-        let check = {
-            let closed = try #require(ending as? RFBConnectionClosed, "ended with \(ending.map { "\($0)" } ?? "no error")")
-            #expect(closed.code == 4000)
-            #expect(closed.bridgeReason == .controlTaken)
-            // Everything before the close was decoded: the picture matches the real screen.
-            let diff = differingPixels(framebuffer, try sample.file("expected.z"))
-            let (px, py) = try sample.pointer
-            #expect(diff.allSatisfy { abs($0.x - px) <= 24 && abs($0.y - py) <= 24 })
-        }
-        if kind == .plain {
-            try check()
-        } else {
-            // macOS CI (2026-11-09), before the client kept reading after a failed send: both
-            // URLSession and Network.framework ended with "Socket is not connected" from a failed
-            // fence answer, not with 4000. URLSession also reported closeCode 0 when the task
-            // completed. Not re-run since (macOS minutes); the stderr line above says what happened.
-            withKnownIssue("Apple transport did not report the server's close code", isIntermittent: true) {
-                try check()
+        let diff = differingPixels(await client.framebuffer, try sample.file("expected.z"))
+        let (px, py) = try sample.pointer
+        #expect(diff.allSatisfy { abs($0.x - px) <= 24 && abs($0.y - py) <= 24 })
+        #expect(await client.statistics.updates == 7)
+
+        let closed = ending as? RFBConnectionClosed
+        if kind == .urlSession {
+            // macOS CI (2026-11-09): URLSessionWebSocketTask reported the server's close only as
+            // "Socket is not connected", and closeCode stayed 0 even when the task completed.
+            // The stderr line above shows what it did this time.
+            withKnownIssue("URLSessionWebSocketTask does not report a server-initiated close code", isIntermittent: true) {
+                #expect(closed?.code == 4000)
             }
+        } else {
+            #expect(closed?.code == 4000, "ended with \(ending.map { "\($0)" } ?? "no error")")
+            #expect(closed?.bridgeReason == .controlTaken)
         }
     }
 
@@ -142,7 +139,7 @@ final class ReplayServer: @unchecked Sendable {
 
     init(sample: String) throws {
         process.executableURL = URL(fileURLWithPath: Self.python!)
-        process.arguments = ["-I", Self.script.path,
+        process.arguments = ["-I", "-B", Self.script.path,
                              Sample.directory.appendingPathComponent("\(sample).server.z").path,
                              "--require-header", "CF-Access-Client-Id"]
         process.standardOutput = output
@@ -171,7 +168,7 @@ final class ReplayServer: @unchecked Sendable {
         }
         guard let found else {
             process.terminate()
-            throw POSIXSocketError("replay server did not start")
+            throw RFBSocketError("replay server did not start")
         }
         port = found
     }

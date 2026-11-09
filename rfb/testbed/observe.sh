@@ -5,7 +5,7 @@
 set -euo pipefail
 PORT="${RFB_TESTBED_PORT:-8765}"
 q=""; [[ -n "${1:-}" ]] && q="?viewer_id=$1"
-curl -fsS --noproxy 127.0.0.1 "http://127.0.0.1:$PORT/observe$q" | python3 -I -c '
+curl -fsS --noproxy 127.0.0.1 "http://127.0.0.1:$PORT/observe$q" | python3 -I -B -c '
 import json, sys
 d = json.load(sys.stdin)
 print(f"ws://127.0.0.1:'"$PORT"'{d["path"]}?display_ticket={d["ticket"]}")'

@@ -25,7 +25,7 @@ command -v Xvnc >/dev/null || { echo "Xvnc missing: apt-get install tigervnc-sta
 PY="${RFB_TESTBED_PYTHON:-python3}"
 # -I: the bridge never imports from the working directory or user site-packages; the interpreter
 # must have websockets in its own site-packages (a venv works: RFB_TESTBED_PYTHON=venv/bin/python3).
-"$PY" -I -c 'import websockets' 2>/dev/null || { echo "$PY has no websockets (>= 13): pip install websockets, or set RFB_TESTBED_PYTHON to a venv's python3" >&2; exit 1; }
+"$PY" -I -B -c 'import websockets' 2>/dev/null || { echo "$PY has no websockets (>= 13): pip install websockets, or set RFB_TESTBED_PYTHON to a venv's python3" >&2; exit 1; }
 
 pids=()
 cleanup() { kill "${pids[@]}" 2>/dev/null || true; wait 2>/dev/null || true; rm -f "$SOCK"; }
@@ -66,7 +66,7 @@ fi
 
 bridge_args=(--latency-ms "${RFB_TESTBED_LATENCY_MS:-0}")
 for h in ${RFB_TESTBED_REQUIRE_HEADER:-}; do bridge_args+=(--require-header "$h"); done
-"$PY" -I "$HERE/bridge.py" --socket "$SOCK" --port "$PORT" "${bridge_args[@]}" & pids+=($!)
+"$PY" -I -B "$HERE/bridge.py" --socket "$SOCK" --port "$PORT" "${bridge_args[@]}" & pids+=($!)
 echo "testbed: Xvnc $DISPLAY_NUM ($GEOM), socket $SOCK, bridge ws://127.0.0.1:$PORT/api/display/ws" >&2
 echo "testbed: get a ticket URL with  $HERE/observe.sh" >&2
 wait -n "${pids[@]}"

@@ -53,7 +53,7 @@ import Testing
         """
         let process = Process()
         process.executableURL = URL(fileURLWithPath: python!)
-        process.arguments = ["-I", "-c", script, filterDirectory.path, allowInput ? "1" : "0"]
+        process.arguments = ["-I", "-B", "-c", script, filterDirectory.path, allowInput ? "1" : "0"]
         let stdin = Pipe(), stdout = Pipe(), stderr = Pipe()
         process.standardInput = stdin; process.standardOutput = stdout; process.standardError = stderr
         try process.run()

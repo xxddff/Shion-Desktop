@@ -20,8 +20,16 @@ concurrency:
   group: rfb-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 env:
   SWIFT_VERSION: '6.4.2'
+  # sha256 of swift-6.4.2-RELEASE-ubuntu24.04.tar.gz, checked against swift.org's PGP signature
+  # (Swift 6.x Release Signing Key, 52BB7E3DE28A71BE22EC05FFEF80A866B47A981F) when it was pinned.
+  SWIFT_SHA256: '2e9ebec040ad459dd89a6d093a02d8314939135104850fae4d5c0f174fb3ba8c'
+  # The testbed bridge and the replay server use websockets' asyncio API (13+); tested on 17.
+  WEBSOCKETS: 'websockets>=13,<18'
 
 jobs:
   linux:
@@ -36,10 +44,10 @@ jobs:
 
       - name: Cache the Swift toolchain
         id: swift-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/swift
-          key: swift-${{ env.SWIFT_VERSION }}-ubuntu24.04-x86_64
+          key: swift-${{ env.SWIFT_VERSION }}-ubuntu24.04-x86_64-${{ env.SWIFT_SHA256 }}
 
       - name: Install Swift ${{ env.SWIFT_VERSION }}
         if: steps.swift-cache.outputs.cache-hit != 'true'
@@ -47,8 +55,11 @@ jobs:
         run: |
           mkdir -p ~/swift
           v=$SWIFT_VERSION
-          curl -fsSL "https://download.swift.org/swift-$v-release/ubuntu2404/swift-$v-RELEASE/swift-$v-RELEASE-ubuntu24.04.tar.gz" \
-            | tar xz -C ~/swift --strip-components 1
+          curl -fsSL -o "$RUNNER_TEMP/swift.tar.gz" \
+            "https://download.swift.org/swift-$v-release/ubuntu2404/swift-$v-RELEASE/swift-$v-RELEASE-ubuntu24.04.tar.gz"
+          echo "$SWIFT_SHA256  $RUNNER_TEMP/swift.tar.gz" | sha256sum -c -
+          tar xzf "$RUNNER_TEMP/swift.tar.gz" -C ~/swift --strip-components 1
+          rm "$RUNNER_TEMP/swift.tar.gz"
 
       - name: Toolchain
         run: |
@@ -61,7 +72,7 @@ jobs:
         working-directory: .
         run: |
           python3 -m venv ~/testbed-venv
-          ~/testbed-venv/bin/pip install -q 'websockets>=13'
+          ~/testbed-venv/bin/pip install -q "$WEBSOCKETS"
           echo "RFB_TESTBED_PYTHON=$HOME/testbed-venv/bin/python3" >> "$GITHUB_ENV"
 
       - name: Build
@@ -86,7 +97,7 @@ jobs:
     name: macOS build and test
     if: (github.event_name == 'workflow_dispatch' && inputs.macos) || contains(github.event.head_commit.message, '[macos]')
     runs-on: xcode-27
-    timeout-minutes: 15
+    timeout-minutes: 8
     defaults:
       run:
         working-directory: rfb
@@ -96,13 +107,13 @@ jobs:
         run: |
           sw_vers
           swift --version
-      # The WebSocket transport tests run URLSessionWebSocketTransport (what the App uses)
-      # against testbed/replay_server.py.
+      # The WebSocket transport tests run NWWebSocketTransport (what the App uses) and
+      # URLSessionWebSocketTransport against testbed/replay_server.py.
       - name: Python for the replay server
         working-directory: .
         run: |
           python3 -m venv ~/testbed-venv
-          ~/testbed-venv/bin/pip install -q 'websockets>=13'
+          ~/testbed-venv/bin/pip install -q "$WEBSOCKETS"
           echo "RFB_TESTBED_PYTHON=$HOME/testbed-venv/bin/python3" >> "$GITHUB_ENV"
       - name: Build
         run: swift build --build-tests

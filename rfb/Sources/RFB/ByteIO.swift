@@ -25,6 +25,13 @@ struct ReceiveBuffer {
         return Array(buffer[offset..<offset + count])
     }
 
+    /// Throws away up to `count` buffered bytes; returns how many it dropped.
+    mutating func drop(upTo count: Int) -> Int {
+        let n = min(count, available)
+        offset += n
+        return n
+    }
+
     mutating func u8() -> UInt8 {
         precondition(available >= 1)
         defer { offset += 1 }

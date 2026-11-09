@@ -74,7 +74,8 @@ public struct ExtendedClipboardMessage: Sendable, Equatable {
         return out
     }
 
-    static func decode(_ payload: [UInt8]) throws -> ExtendedClipboardMessage {
+    /// `inflateLimit` bounds what a provide message may inflate to.
+    static func decode(_ payload: [UInt8], inflateLimit: Int = ClientMessage.maxCutText + 64) throws -> ExtendedClipboardMessage {
         var r = SliceReader(payload)
         let flags = try r.u32()
         let formats = Formats(rawValue: flags & 0xFFFF)
@@ -92,7 +93,7 @@ public struct ExtendedClipboardMessage: Sendable, Equatable {
         }
         guard action == .provide else { return Self(action: action, formats: formats) }
         // provide: zlib stream of (u32 length, bytes) for each format bit set, in bit order.
-        let plain = try Inflater().inflate(Array(r.bytes[r.offset...]))
+        let plain = try Inflater().inflate(Array(r.bytes[r.offset...]), limit: inflateLimit)
         var p = SliceReader(plain)
         var text: String?
         for bit in 0..<16 where flags & (1 << UInt32(bit)) != 0 {

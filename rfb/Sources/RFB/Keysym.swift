@@ -32,16 +32,29 @@ public enum Keysym {
         return 0xFFBE + UInt32(n - 1)
     }
 
-    /// The keysym that types `scalar`: Latin-1 is its own code (ASCII control characters map to
-    /// their keys), anything else is 0x0100_0000 + the code point. For CJK text use the clipboard
-    /// instead (`RFBClient.paste`): Xvnc has to invent a key mapping for every such keysym.
+    /// The keysym for a character as AppKit reports it in `NSEvent.charactersIgnoringModifiers`:
+    /// Latin-1 is its own code, control characters map to their keys, AppKit's function-key
+    /// characters (U+F700…, NSUpArrowFunctionKey and friends) to theirs, anything else is
+    /// 0x0100_0000 + the code point. For CJK text use the clipboard instead
+    /// (`RFBClient.paste`): Xvnc has to invent a key mapping for every such keysym.
     public static func forCharacter(_ scalar: Unicode.Scalar) -> UInt32 {
         switch scalar.value {
-        case 0x08: return backSpace
-        case 0x09: return tab
+        case 0x03: return keypadEnter              // NSEnterCharacter
+        case 0x08, 0x7F: return backSpace          // the Mac's delete key sends 0x7F
+        case 0x09, 0x19: return tab                // 0x19: Shift+Tab (NSBackTabCharacter)
         case 0x0A, 0x0D: return `return`
         case 0x1B: return escape
-        case 0x7F: return delete
+        case 0xF700: return up
+        case 0xF701: return down
+        case 0xF702: return left
+        case 0xF703: return right
+        case 0xF704...0xF71B: return function(Int(scalar.value - 0xF704) + 1)  // F1…F24
+        case 0xF727: return insert
+        case 0xF728: return delete                 // forward delete (fn+delete)
+        case 0xF729: return home
+        case 0xF72B: return end
+        case 0xF72C: return pageUp
+        case 0xF72D: return pageDown
         case 0x20...0x7E, 0xA0...0xFF: return scalar.value
         default: return 0x0100_0000 + scalar.value
         }

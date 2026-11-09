@@ -17,7 +17,7 @@ struct Sample: CustomTestStringConvertible, Sendable {
 
     func file(_ suffix: String) throws -> [UInt8] {
         let data = try Data(contentsOf: Self.directory.appendingPathComponent("\(name).\(suffix)"))
-        return try Inflater().inflate([UInt8](data))
+        return try Inflater().inflate([UInt8](data), limit: 64 << 20)
     }
 
     var metadata: [String: Any] {

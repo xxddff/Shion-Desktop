@@ -9,10 +9,24 @@ final class ZRLEDecoder {
         inflater = try Inflater()
     }
 
+    /// The most tile data a rect can inflate to: per tile a subencoding byte and a 127-colour
+    /// palette, and per pixel at most 4 bytes (plain RLE with runs of one: CPIXEL + length).
+    static func maxInflated(_ r: RFBRect) -> Int {
+        let tiles = ((r.width + tileSize - 1) / tileSize) * ((r.height + tileSize - 1) / tileSize)
+        return tiles * (1 + 127 * 3) + r.width * r.height * 4
+    }
+
+    /// The most compressed bytes a rect can take: deflate's worst case for `maxInflated` plus a
+    /// little for the sync flush. Anything longer is refused before it is read.
+    static func maxCompressed(_ r: RFBRect) -> Int {
+        let n = maxInflated(r)
+        return n + n / 1000 + 1024
+    }
+
     /// `compressed` is the rect's zlib data (after its u32 length).
     func decode(_ compressed: [UInt8], rect r: RFBRect, into fb: inout Framebuffer) throws {
         try fb.check(r)
-        let data = try inflater.inflate(compressed, sizeHint: r.width * r.height * 3 + 1024)
+        let data = try inflater.inflate(compressed, limit: Self.maxInflated(r), sizeHint: r.width * r.height * 3 + 1024)
         try Self.decodeTiles(data, rect: r, into: &fb)
     }
 

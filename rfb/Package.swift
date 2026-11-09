@@ -14,7 +14,8 @@ let package = Package(
         .systemLibrary(name: "CZlib", path: "Sources/CZlib", providers: [.apt(["zlib1g-dev"])]),
         // Platform-independent protocol core: handshake, messages, decoders, framebuffer. No Foundation.
         .target(name: "RFB", dependencies: ["CZlib"]),
-        // Transports: URLSessionWebSocketTask (Apple), plus a small ws:// client and raw TCP / Unix sockets.
+        // Transports: Network.framework WebSocket (what the App uses) and URLSession on Apple platforms,
+        // a small ws:// client and raw TCP / Unix sockets everywhere.
         .target(name: "RFBNetwork", dependencies: ["RFB"]),
         .executableTarget(name: "rfb-probe", dependencies: ["RFB", "RFBNetwork"]),
         .testTarget(name: "RFBTests", dependencies: ["RFB", "RFBNetwork"], resources: [.copy("Samples")]),

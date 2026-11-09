@@ -24,6 +24,7 @@ usage: rfb-probe <url> [options]
   --no-continuous              do not enable continuous updates (one request per update)
   --no-extended-desktop-size   only advertise the plain DesktopSize pseudo-encoding
   --no-pipeline                wait for each server step of the handshake before answering
+  --keepalive SECONDS          keepalive interval and timeout (default 15; 0 turns it off)
   --encodings LIST             e.g. zrle,copyrect,raw (pseudo-encodings are always added)
   --transport auto|network|urlsession|plain
                                auto: Network.framework on Apple platforms, the small built-in ws:// client on Linux
@@ -47,6 +48,7 @@ struct Arguments {
     var continuous = true
     var extendedDesktopSize = true
     var pipeline = true
+    var keepalive: Double?
     var encodings: [RFBEncoding]?
     var transport = "auto"
     var paste: String?
@@ -96,6 +98,9 @@ func parseArguments() -> Arguments {
         case "--no-continuous": a.continuous = false
         case "--no-extended-desktop-size": a.extendedDesktopSize = false
         case "--no-pipeline": a.pipeline = false
+        case "--keepalive":
+            guard let n = Double(value(arg)) else { fail("--keepalive takes a number") }
+            a.keepalive = n
         case "--encodings":
             a.encodings = value(arg).split(separator: ",").map {
                 switch $0.lowercased() {
@@ -127,6 +132,27 @@ func parseArguments() -> Arguments {
     return a
 }
 
+/// An error as text without anything secret. Foundation's own errors carry the whole URL (with
+/// the display ticket, or the session token in /api/ws?token=) in their description, so only
+/// their domain and code are shown.
+func describe(_ error: any Error) -> String {
+    switch error {
+    case let e as RFBError: return e.description
+    case let e as RFBConnectionClosed: return e.description
+    case let e as WebSocketTransportError: return e.description
+    case let e as RFBSocketError: return e.description
+    case is CancellationError: return "cancelled"
+    default: return WebSocketTransportError(error).description
+    }
+}
+
+/// A query value percent-encoded the way the App does it (URLQueryItem leaves "+" alone, which
+/// a server reads as a space).
+func queryValue(_ value: String) -> String {
+    let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
+    return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
+}
+
 /// The URL without its query (which may hold a ticket or token).
 func redacted(_ url: String) -> String {
     guard let q = url.firstIndex(of: "?") else { return url }
@@ -156,14 +182,14 @@ func makeTransport(_ url: String, _ args: Arguments) throws -> any RFBTransport 
         return try PlainWebSocketTransport(url: u, headers: args.headers)
     case "network":
         #if canImport(Network)
-        return NWWebSocketTransport(url: u, headers: args.headers)
+        return try NWWebSocketTransport(url: u, headers: args.headers)
         #else
         fail("Network.framework is not available here")
         #endif
     case "urlsession":
         var request = URLRequest(url: u)
         for (name, value) in args.headers { request.setValue(value, forHTTPHeaderField: name) }
-        return URLSessionWebSocketTransport(request: request)
+        return try URLSessionWebSocketTransport(request: request)
     default:
         fail("unknown transport \(kind)")
     }
@@ -198,7 +224,7 @@ func observe(_ args: Arguments) async throws -> (String, URLSessionWebSocketTask
     guard let profile = args.profile else { fail("--gateway needs --profile") }
     guard let token = ProcessInfo.processInfo.environment[args.tokenEnv] else { fail("\(args.tokenEnv) is not set") }
     components.path = "/api/ws"
-    components.queryItems = [URLQueryItem(name: "token", value: token)]
+    components.percentEncodedQuery = "token=" + queryValue(token)
     var request = URLRequest(url: components.url!)
     for (name, value) in args.headers { request.setValue(value, forHTTPHeaderField: name) }
     let task = URLSession.shared.webSocketTask(with: request)
@@ -222,8 +248,9 @@ func observe(_ args: Arguments) async throws -> (String, URLSessionWebSocketTask
               let path = result["path"] as? String else { fail("display.observe: unexpected answer") }
         var display = URLComponents(string: gateway)!
         display.path = path
-        display.queryItems = [URLQueryItem(name: "display_ticket", value: ticket)]
-        log("display.observe: viewer \(String((result["viewer_id"] as? String ?? "?").prefix(4)))…, running \(result["running"] ?? "?")")
+        display.percentEncodedQuery = "display_ticket=" + queryValue(ticket)
+        // Neither the ticket nor the viewer id is printed: both are capabilities.
+        log("display.observe: got a ticket; screen running: \(result["running"] ?? "?")")
         return (display.url!.absoluteString, task)
     }
 }
@@ -233,7 +260,7 @@ func run() async {
     var gatewayTask: URLSessionWebSocketTask?
     var url = args.url ?? ""
     if args.gateway != nil {
-        do { (url, gatewayTask) = try await observe(args) } catch { fail("gateway: \(error)") }
+        do { (url, gatewayTask) = try await observe(args) } catch { fail("gateway: \(describe(error))") }
     }
     defer { gatewayTask?.cancel(with: .normalClosure, reason: nil) }
 
@@ -242,13 +269,17 @@ func run() async {
     do {
         transport = RecordingTransport(try makeTransport(url, args)) { recording.add($0, $1) }
     } catch {
-        fail("connect \(redacted(url)): \(error)")
+        fail("connect \(redacted(url)): \(describe(error))")
     }
     if !args.headers.isEmpty { log("headers: \(args.headers.map(\.0).joined(separator: ", "))") }
 
     var options = RFBOptions()
     options.continuousUpdates = args.continuous
     options.pipelineHandshake = args.pipeline
+    if let keepalive = args.keepalive {
+        options.keepaliveInterval = keepalive
+        options.keepaliveTimeout = keepalive
+    }
     if let encodings = args.encodings {
         options.encodings = encodings + [.desktopSize, .extendedDesktopSize, .lastRect, .fence, .continuousUpdates, .extendedClipboard]
     }
@@ -260,7 +291,7 @@ func run() async {
     do {
         info = try await client.handshake()
     } catch {
-        fail("handshake with \(redacted(url)): \(error)")
+        fail("handshake with \(redacted(url)): \(describe(error))")
     }
     log("connected to \(redacted(url)) in \(String(format: "%.0f", Date().timeIntervalSince(started) * 1000)) ms")
     log("server: \"\(info.name)\" \(info.width)x\(info.height), native format \(info.pixelFormat == .bgrx ? "= BGRX" : "\(info.pixelFormat)")")
@@ -317,18 +348,18 @@ func run() async {
             pasted = true
             if let paste = args.paste {
                 do { try await client.sendClipboard(paste); log("pasted \(paste.utf8.count) bytes to the remote clipboard") }
-                catch { log("paste failed: \(error)") }
+                catch { log("paste failed: \(describe(error))") }
             }
             if let text = args.type {
                 do { try await client.paste(text); log("typed \(text.utf8.count) bytes with clipboard + Ctrl+V") }
-                catch { log("typing failed: \(error)") }
+                catch { log("typing failed: \(describe(error))") }
             }
         }
         if let after = args.cursorAfter, let first, !cursorAsked, Date().timeIntervalSince(first) >= after {
             cursorAsked = true
             progress.lock.withLock { progress.cursorRequested = Date() }
             do { try await client.setCursorShapeUpdates(true); log("asked for the cursor shape") }
-            catch { log("cursor request failed: \(error)") }
+            catch { log("cursor request failed: \(describe(error))") }
             if let (x, y) = args.movePointer {
                 // Two moves a moment apart, like a real pointer, ending at (x, y).
                 try? await client.sendPointer(x: x - 5, y: y - 5, buttons: [])
@@ -357,15 +388,15 @@ func run() async {
         try Data(sent).write(to: out.appendingPathComponent("client.bin"))
         if fb.width > 0 { try Data(try PNG.encode(fb)).write(to: out.appendingPathComponent("frame.png")) }
     } catch {
-        fail("writing \(out.path): \(error)")
+        fail("writing \(out.path): \(describe(error))")
     }
     for line in progress.lock.withLock({ progress.events }) { log(line) }
-    log("updates: \(stats.updates), received \(stats.bytesReceived) bytes, sent \(stats.bytesSent), fences answered \(stats.fencesAnswered)")
+    log("updates: \(stats.updates), received \(stats.bytesReceived) bytes, sent \(stats.bytesSent), fences answered \(stats.fencesAnswered), keepalives answered \(stats.keepalivesAnswered)")
     for (encoding, count) in stats.rects.sorted(by: { $0.key > $1.key }) {
         log("  \(RFBEncoding(rawValue: encoding)): \(count) rects, \(stats.encodedBytes[encoding] ?? 0) bytes")
     }
     if let endError, !(endError is CancellationError) {
-        log("connection ended: \(endError)")
+        log("connection ended: \(describe(endError))")
     }
     log("wrote \(out.path)/server.bin, client.bin, frame.png")
 }

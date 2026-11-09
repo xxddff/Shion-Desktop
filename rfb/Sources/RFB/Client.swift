@@ -45,6 +45,24 @@ public struct RFBStatistics: Sendable, Equatable {
     /// Wire bytes per encoding, rect headers excluded.
     public var encodedBytes: [Int32: Int] = [:]
     public var fencesAnswered = 0
+    /// Keepalive fences of ours the server answered.
+    public var keepalivesAnswered = 0
+}
+
+/// Input for `RFBClient.post(_:)`. Applied strictly in the order posted.
+public enum RFBInput: Sendable, Equatable {
+    /// One key going down or up (an X keysym, see `Keysym`).
+    case key(UInt32, down: Bool)
+    /// Press and release `keysym` while holding `modifiers`.
+    case keyPress(UInt32, modifiers: [UInt32])
+    /// Pointer at (x, y) in framebuffer pixels with these buttons held.
+    case pointer(x: Int, y: Int, buttons: PointerButtons)
+    /// One wheel notch at (x, y).
+    case scroll(x: Int, y: Int, direction: PointerButtons, held: PointerButtons)
+    /// Put text on the remote clipboard.
+    case clipboard(String)
+    /// Clipboard, then the paste shortcut (Ctrl+V by default).
+    case paste(String, shortcut: [UInt32])
 }
 
 public struct RFBOptions: Sendable {
@@ -59,9 +77,6 @@ public struct RFBOptions: Sendable {
     /// three round trips before the first picture. A server that wants anything else (another
     /// version, real authentication) fails the handshake either way.
     public var pipelineHandshake = true
-    /// After a send of ours fails while running, keep reading this many seconds for the reason
-    /// (the close code usually waits on the read side), then drop the connection.
-    public var sendFailureGrace: Double = 2
     /// Encodings in preference order. Cursor is left out on purpose while only watching: Xvnc
     /// then paints the agent's pointer into the picture.
     public var encodings: [RFBEncoding] = [
@@ -69,6 +84,28 @@ public struct RFBOptions: Sendable {
         .desktopSize, .extendedDesktopSize, .lastRect,
         .fence, .continuousUpdates, .extendedClipboard,
     ]
+
+    /// The largest screen accepted from the server (ServerInit, DesktopSize), per side and in
+    /// pixels; the framebuffer is allocated at 4 bytes per pixel. 8K by default.
+    public var maxScreenDimension = 8192
+    public var maxScreenPixels = 7680 * 4320
+    /// The largest pointer image accepted, per side.
+    public var maxCursorDimension = 512
+
+    /// Give up (and drop the connection) when the handshake has not finished in this many seconds.
+    public var handshakeTimeout: Double = 20
+    /// An idle screen sends nothing, so while running the client asks the server for a Fence
+    /// answer every `keepaliveInterval` seconds (only once the server has shown it does fences);
+    /// no answer within `keepaliveTimeout` seconds counts as a dead connection. 0 turns it off.
+    public var keepaliveInterval: Double = 15
+    public var keepaliveTimeout: Double = 15
+    /// After a send of ours fails, keep reading this many seconds for the reason (the close code
+    /// usually waits on the read side), then drop the connection.
+    public var sendFailureGrace: Double = 2
+    /// How the connection is closed when the task running `handshake` or `run` is cancelled.
+    /// `.normal` (1000) tells Hermes' bridge the viewer left, which also hands the lease back.
+    public var closeOnCancel: RFBCloseCode = .normal
+
     public init() {}
 }
 
@@ -79,8 +116,9 @@ public struct RFBOptions: Sendable {
 /// let info = try await client.handshake()
 /// try await client.run { event, framebuffer in … }     // returns when the connection ends
 /// ```
-/// Input methods (`sendKey`, `sendPointer`, `sendClipboard`) may be called from any task while
-/// `run` is going. The bridge silently drops them unless this viewer holds the lease.
+/// Input: `post(_:)` from any thread, applied in order while `run` is going; or the async
+/// methods (`sendKey`, `sendPointer`, `paste`, …) when the caller orders them itself. The bridge
+/// silently drops input unless this viewer holds the lease.
 public actor RFBClient {
     public let options: RFBOptions
     private let transport: any RFBTransport
@@ -95,22 +133,47 @@ public actor RFBClient {
     /// The server answered our ContinuousUpdates pseudo-encoding with EndOfContinuousUpdates.
     public private(set) var serverSupportsContinuousUpdates = false
     public private(set) var continuousUpdatesEnabled = false
-    private var wantContinuousUpdates: Bool
-    /// Text offered with Notify, waiting for the server's Request.
-    private var pendingClipboard: String?
-    private var closed = false
-    /// SetPixelFormat and SetEncodings already went out with a pipelined handshake.
-    private var setupSent = false
-    /// The first failed send while running; the read side usually reports the close soon after.
-    private var sendFailure: Error?
     /// Cursor pseudo-encoding currently requested.
     public private(set) var cursorShapeUpdates = false
+    private var wantContinuousUpdates: Bool
+
+    /// Text offered with Notify, waiting for the server's Request.
+    private var pendingClipboard: String?
+    /// Caps have arrived, or the first update did without them (no extended clipboard).
+    private var clipboardReady = false
+    private var clipboardWaiters: [Int: CheckedContinuation<Void, Error>] = [:]
+    private var nextWaiter = 0
+
+    private var closed = false
+    private var running = false
+    private var finished = false
+    /// SetPixelFormat and SetEncodings already went out with a pipelined handshake.
+    private var setupSent = false
+
+    /// The first failed send; the read side usually reports the close soon after.
+    private var sendFailure: Error?
+    private var graceTask: Task<Void, Never>?
+    private var abortedAfterSendFailure = false
+    /// Set when our own watchdog (handshake timeout, keepalive) dropped the connection.
+    private var deadReason: String?
+
+    private var serverSupportsFence = false
+    private var keepaliveSentAt: ContinuousClock.Instant?
+    private var keepaliveCounter: UInt8 = 0
+    private static let keepaliveMarker: [UInt8] = [0x53, 0x48]  // "SH"
+
+    private nonisolated let inputs: AsyncStream<RFBInput>
+    private nonisolated let inputContinuation: AsyncStream<RFBInput>.Continuation
+
+    /// Longest server string kept (refusal reasons, the desktop name); the rest is skipped.
+    static let maxStringLength = 4096
 
     /// To keep the raw byte streams (test samples), wrap the transport in a `RecordingTransport`.
     public init(transport: any RFBTransport, options: RFBOptions = RFBOptions()) {
         self.transport = transport
         self.options = options
         self.wantContinuousUpdates = options.continuousUpdates
+        (inputs, inputContinuation) = AsyncStream.makeStream(of: RFBInput.self)
     }
 
     // MARK: - reading
@@ -127,63 +190,165 @@ public actor RFBClient {
     private func u16() async throws -> UInt16 { try await need(2); return buffer.u16() }
     private func u32() async throws -> UInt32 { try await need(4); return buffer.u32() }
     private func bytes(_ n: Int) async throws -> [UInt8] { try await need(n); return buffer.take(n) }
-    private func string(_ n: Int) async throws -> String { String(decoding: try await bytes(n), as: UTF8.self) }
+
+    /// Reads and throws away `count` bytes without holding more than one chunk at a time.
+    private func discard(_ count: Int) async throws {
+        var left = count
+        while left > 0 {
+            if buffer.available == 0 {
+                guard let chunk = try await transport.receive() else { throw RFBError.endOfStream }
+                statistics.bytesReceived += chunk.count
+                buffer.append(chunk)
+            }
+            left -= buffer.drop(upTo: left)
+        }
+    }
+
+    /// A `length`-byte server string, of which at most `maxStringLength` bytes are kept.
+    private func string(_ length: Int) async throws -> String {
+        let keep = min(length, Self.maxStringLength)
+        let text = String(decoding: try await bytes(keep), as: UTF8.self)
+        try await discard(length - keep)
+        return text
+    }
 
     // MARK: - writing
 
-    /// Sends one client message. Every message we can build is one Hermes' bridge forwards.
-    public func send(_ message: ClientMessage) async throws {
+    /// Sends one client message. Every message we can build is one Hermes' bridge forwards. A
+    /// message that cannot be encoded (too large) throws without touching the connection; a
+    /// transport failure is also noted, so that the connection ends with its real reason.
+    func send(_ message: ClientMessage) async throws {
         let bytes = try message.encoded()
-        statistics.bytesSent += bytes.count
-        try await transport.send(bytes)
+        try await sendBytes(bytes)
     }
 
-    /// For what the client sends by itself while running (requests, fence answers, clipboard
-    /// replies). If the connection is going down, the write side often fails first, while the
-    /// reason (the bridge's close code) is still waiting on the read side; so a failed send does
-    /// not end `run`. Reading goes on until the transport reports the close. Should nothing come,
-    /// a half-open connection is closed after a grace period instead of waiting forever.
-    private func sendWhileRunning(_ message: ClientMessage) async {
+    private func sendBytes(_ bytes: [UInt8]) async throws {
+        statistics.bytesSent += bytes.count
         do {
-            try await send(message)
+            try await transport.send(bytes)
         } catch {
-            guard sendFailure == nil else { return }
-            sendFailure = error
-            let transport = self.transport
-            let grace = UInt64(max(options.sendFailureGrace, 0) * 1_000_000_000)
-            Task {
-                try? await Task.sleep(nanoseconds: grace)
-                // Not 1000/1001: those tell the bridge we left on purpose and hand the lease back.
-                await transport.close(.abort)
-            }
+            noteSendFailure(error)
+            throw error
         }
+    }
+
+    /// For what the client sends by itself (requests, fence answers, clipboard replies). If the
+    /// connection is going down, the write side often fails first while the reason (the
+    /// bridge's close code) still waits on the read side; so a failed send does not end the
+    /// session: reading goes on until the transport reports the close.
+    private func sendWhileRunning(_ message: ClientMessage) async {
+        try? await send(message)
+    }
+
+    /// Remembers the first send failure and, should the read side never say why the connection
+    /// ended (half-open), drops it after `sendFailureGrace`. Never with 1000 / 1001: those tell
+    /// the bridge we left on purpose and hand the lease back.
+    private func noteSendFailure(_ error: Error) {
+        guard sendFailure == nil else { return }
+        sendFailure = error
+        let grace = max(options.sendFailureGrace, 0)
+        graceTask = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(grace)) } catch { return }
+            await self?.graceExpired()
+        }
+    }
+
+    private func graceExpired() async {
+        guard !finished else { return }
+        abortedAfterSendFailure = true
+        await transport.close(.abort)
+    }
+
+    /// Drops the connection when a watchdog expires; `ending(_:)` then reports `timedOut`.
+    private func expire(_ reason: String) async {
+        guard deadReason == nil, !finished else { return }
+        deadReason = reason
+        await transport.close(.abort)
+    }
+
+    private func startWatchdog(after seconds: Double, reason: String) -> Task<Void, Never>? {
+        guard seconds > 0 else { return nil }
+        return Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(seconds)) } catch { return }
+            await self?.expire(reason)
+        }
+    }
+
+    /// Runs `body`; if the calling task is cancelled meanwhile, closes the transport with
+    /// `options.closeOnCancel`, which also ends whatever `body` is waiting for.
+    private func closingOnCancel<T>(_ body: () async throws -> T) async throws -> T {
+        let transport = self.transport
+        let code = options.closeOnCancel
+        return try await withTaskCancellationHandler {
+            try await body()
+        } onCancel: {
+            Task { await transport.close(code) }
+        }
+    }
+
+    /// Why the connection ended, from what the read side threw: cancellation first, then a close
+    /// code from the server, then our own watchdogs, then a send that failed before the read
+    /// side stopped without a reason.
+    private func ending(_ error: Error) -> Error {
+        if error is CancellationError || Task.isCancelled { return CancellationError() }
+        if let closed = error as? RFBConnectionClosed, closed.code != nil { return closed }
+        if let deadReason { return RFBError.timedOut(deadReason) }
+        if let sendFailure {
+            if abortedAfterSendFailure { return sendFailure }
+            if case RFBError.endOfStream = error { return sendFailure }
+            if let closed = error as? RFBConnectionClosed, closed.code == nil { return sendFailure }
+        }
+        return error
+    }
+
+    /// After the session ended (or failed before it began): stop timers, wake waiters, refuse
+    /// further input.
+    private func finish() {
+        finished = true
+        running = false
+        graceTask?.cancel()
+        inputContinuation.finish()
+        let waiters = clipboardWaiters
+        clipboardWaiters = [:]
+        for (_, waiter) in waiters { waiter.resume(throwing: RFBError.endOfStream) }
     }
 
     // MARK: - handshake
 
-    /// Version 3.8, security type None, ClientInit, ServerInit.
+    /// Version 3.8, security type None, ClientInit, ServerInit. Gives up after
+    /// `options.handshakeTimeout`; cancelling the calling task closes the connection.
     @discardableResult
     public func handshake() async throws -> ServerInit {
+        if let serverInit { return serverInit }
+        let watchdog = startWatchdog(after: options.handshakeTimeout,
+                                     reason: "no handshake within \(Int(options.handshakeTimeout)) s")
+        defer { watchdog?.cancel() }
+        do {
+            return try await closingOnCancel { try await handshakeSteps() }
+        } catch {
+            finish()
+            throw ending(error)
+        }
+    }
+
+    private func handshakeSteps() async throws -> ServerInit {
         let version = Array("RFB 003.008\n".utf8)
         let shared: UInt8 = options.shared ? 1 : 0
+        // A failed send here does not end the handshake: if the bridge refused us (a used ticket:
+        // 4401; no screen: 4001), the reason is on the read side.
         if options.pipelineHandshake {
             let setup = try ClientMessage.setPixelFormat(.bgrx).encoded() + ClientMessage.setEncodings(options.encodings).encoded()
-            let all = version + [1, shared] + setup
-            statistics.bytesSent += all.count
-            try await transport.send(all)
+            try? await sendBytes(version + [1, shared] + setup)
             setupSent = true
         }
 
-        let serverVersion = try await string(12)
+        let serverVersion = String(decoding: try await bytes(12), as: UTF8.self)
         guard serverVersion.hasPrefix("RFB "), serverVersion.hasSuffix("\n"),
               let major = Int(serverVersion.dropFirst(4).prefix(3)), let minor = Int(serverVersion.dropFirst(8).prefix(3)),
               major > 3 || (major == 3 && minor >= 8) else {
             throw RFBError.unsupportedVersion(String(serverVersion.prefix(11)))
         }
-        if !options.pipelineHandshake {
-            try await transport.send(version)
-            statistics.bytesSent += version.count
-        }
+        if !options.pipelineHandshake { try? await sendBytes(version) }
 
         let count = Int(try await u8())
         if count == 0 {
@@ -192,40 +357,65 @@ public actor RFBClient {
         }
         let types = try await bytes(count)
         guard types.contains(1) else { throw RFBError.unsupportedSecurity(types) }
-        if !options.pipelineHandshake {
-            try await transport.send([1])
-            statistics.bytesSent += 1
-        }
+        if !options.pipelineHandshake { try? await sendBytes([1]) }
         let result = try await u32()
         if result != 0 {
             let length = Int(try await u32())
             throw RFBError.securityFailed(try await string(length))
         }
 
-        if !options.pipelineHandshake {
-            try await transport.send([shared])
-            statistics.bytesSent += 1
-        }
+        if !options.pipelineHandshake { try? await sendBytes([shared]) }
         let width = Int(try await u16())
         let height = Int(try await u16())
         let format = PixelFormat(try await bytes(16))
         let nameLength = Int(try await u32())
         let name = try await string(nameLength)
+        try checkScreen(width, height)
         let info = ServerInit(width: width, height: height, pixelFormat: format, name: name)
         serverInit = info
         framebuffer = Framebuffer(width: width, height: height)
         return info
     }
 
+    private func checkScreen(_ width: Int, _ height: Int) throws {
+        guard width <= options.maxScreenDimension, height <= options.maxScreenDimension,
+              width * height <= options.maxScreenPixels else {
+            throw RFBError.limitExceeded("screen \(width)x\(height)")
+        }
+    }
+
     // MARK: - running
 
     /// Asks for our pixel format and encodings, requests the whole screen and processes server
-    /// messages until the connection ends, which it reports by throwing (`RFBConnectionClosed`
-    /// for a WebSocket close, `RFBError.endOfStream` for EOF). A failed send of the client's own
-    /// replies does not end it early: the read side's reason wins (see `sendFailureGrace`).
-    /// `onEvent` runs on this actor, with the framebuffer as it is right after the event.
+    /// messages until the connection ends, which it reports by throwing: `RFBConnectionClosed`
+    /// for a WebSocket close (with the bridge's code when there was one), `RFBError.timedOut`
+    /// when the keepalive found the connection dead, `CancellationError` when the calling task
+    /// was cancelled (the connection is then closed with `options.closeOnCancel`). A failed send
+    /// does not end it early: the read side's reason wins (see `sendFailureGrace`).
+    ///
+    /// `onEvent` runs on this actor, with the framebuffer as it is right after the event. Call
+    /// `run` once per client.
     public func run(onEvent: @Sendable (RFBEvent, Framebuffer) -> Void = { _, _ in }) async throws {
+        guard !running, !finished else { throw RFBError.refusedToSend("run() is called once per client") }
         if serverInit == nil { try await handshake() }
+        running = true
+        defer { finish() }
+        do {
+            try await closingOnCancel {
+                try await withThrowingTaskGroup(of: Void.self) { group in
+                    group.addTask { await self.pumpInput() }
+                    if self.options.keepaliveInterval > 0 {
+                        group.addTask { await self.keepaliveLoop() }
+                    }
+                    try await self.readLoop(onEvent)
+                }
+            }
+        } catch {
+            throw ending(error)
+        }
+    }
+
+    private func readLoop(_ onEvent: @Sendable (RFBEvent, Framebuffer) -> Void) async throws {
         if !setupSent {
             await sendWhileRunning(.setPixelFormat(.bgrx))
             await sendWhileRunning(.setEncodings(options.encodings))
@@ -233,27 +423,45 @@ public actor RFBClient {
         }
         await sendWhileRunning(fullUpdateRequest(incremental: false))
 
-        do {
-            while true {
-                let type = try await u8()
-                switch type {
-                case 0: try await framebufferUpdate(onEvent)
-                case 1: try await colourMapEntries()
-                case 2: onEvent(.bell, framebuffer)
-                case 3: try await serverCutText(onEvent)
-                case 150: try await endOfContinuousUpdates(onEvent)
-                case 248: try await serverFence()
-                default: throw RFBError.unknownServerMessage(type)
-                }
+        while true {
+            let type = try await u8()
+            switch type {
+            case 0: try await framebufferUpdate(onEvent)
+            case 1: try await colourMapEntries()
+            case 2: onEvent(.bell, framebuffer)
+            case 3: try await serverCutText(onEvent)
+            case 150: try await endOfContinuousUpdates(onEvent)
+            case 248: try await serverFence()
+            default: throw RFBError.unknownServerMessage(type)
             }
-        } catch RFBError.endOfStream where sendFailure != nil {
-            // The stream just stopped after our send had failed: that failure is the reason.
-            throw sendFailure!
         }
     }
 
+    private func keepaliveLoop() async {
+        let interval = options.keepaliveInterval
+        while true {
+            do { try await Task.sleep(for: .seconds(interval)) } catch { return }
+            await keepaliveTick()
+        }
+    }
+
+    /// One keepalive step: a fence of ours still unanswered after `keepaliveTimeout` means the
+    /// connection is dead; otherwise ask again. Only once the server has shown it does fences.
+    private func keepaliveTick() async {
+        guard serverSupportsFence, deadReason == nil, !finished else { return }
+        if let sent = keepaliveSentAt {
+            if ContinuousClock.now - sent >= .seconds(options.keepaliveTimeout) {
+                await expire("no keepalive answer within \(Int(options.keepaliveTimeout)) s")
+            }
+            return
+        }
+        keepaliveCounter &+= 1
+        keepaliveSentAt = .now
+        await sendWhileRunning(.fence(flags: [.request], payload: Self.keepaliveMarker + [keepaliveCounter]))
+    }
+
     /// Closes the connection. `.normal` (1000) tells the bridge we left on purpose, which also
-    /// hands the lease back.
+    /// hands the lease back; `.abort` drops it like a network failure, keeping the lease.
     public func close(_ code: RFBCloseCode = .normal) async {
         guard !closed else { return }
         closed = true
@@ -325,7 +533,11 @@ public actor RFBClient {
                 try framebuffer.copy(from: sx, sy, to: r)
                 dirty.append(r)
             case .zrle:
+                try framebuffer.check(r)
                 let length = Int(try await u32())
+                guard length <= ZRLEDecoder.maxCompressed(r) else {
+                    throw RFBError.limitExceeded("ZRLE rect \(r) with \(length) compressed bytes")
+                }
                 let data = try await bytes(length)
                 if zrle == nil { zrle = try ZRLEDecoder() }
                 try zrle!.decode(data, rect: r, into: &framebuffer)
@@ -346,6 +558,12 @@ public actor RFBClient {
                 break rects
             case .cursor:
                 // x, y = hotspot; then width*height pixels and a 1-bit mask, rows padded to bytes.
+                guard r.width <= options.maxCursorDimension, r.height <= options.maxCursorDimension else {
+                    throw RFBError.limitExceeded("cursor \(r.width)x\(r.height)")
+                }
+                if r.width > 0 && r.height > 0 && (r.x >= r.width || r.y >= r.height) {
+                    throw RFBError.protocolViolation("cursor hotspot \(r.x),\(r.y) outside its \(r.width)x\(r.height) image")
+                }
                 let pixels = try await bytes(r.width * r.height * Framebuffer.bytesPerPixel)
                 let rowMask = (r.width + 7) / 8
                 let mask = try await bytes(rowMask * r.height)
@@ -365,6 +583,9 @@ public actor RFBClient {
         statistics.updates += 1
         if resized { dirty = [RFBRect(x: 0, y: 0, width: framebuffer.width, height: framebuffer.height)] }
         onEvent(.framebufferUpdated(dirty: dirty), framebuffer)
+        // Xvnc sends its clipboard caps right after SetEncodings, before any update: if none came
+        // by now, the server has no extended clipboard.
+        markClipboardReady()
         if !continuousUpdatesEnabled {
             await sendWhileRunning(fullUpdateRequest(incremental: true))
         }
@@ -372,6 +593,7 @@ public actor RFBClient {
 
     private func resize(width: Int, height: Int, _ onEvent: @Sendable (RFBEvent, Framebuffer) -> Void) async throws {
         guard width != framebuffer.width || height != framebuffer.height else { return }
+        try checkScreen(width, height)
         framebuffer.resize(width: width, height: height)
         onEvent(.resized(width: width, height: height), framebuffer)
         if continuousUpdatesEnabled {
@@ -386,26 +608,39 @@ public actor RFBClient {
         try await need(5)
         _ = buffer.take(3)
         let n = Int(buffer.u16())
-        _ = try await bytes(6 * n)
+        try await discard(6 * n)
     }
 
     private func serverCutText(_ onEvent: @Sendable (RFBEvent, Framebuffer) -> Void) async throws {
         try await need(7)
         _ = buffer.take(3)
         let length = Int32(bitPattern: buffer.u32())
+        let size = Int(length.magnitude)
+        guard size <= ClientMessage.maxCutText else {
+            // Larger than anything the bridge lets through the other way: skip it, holding no
+            // more than a chunk at a time. (Hermes runs -SendCutText=0, so this never happens.)
+            try await discard(size)
+            return
+        }
         if length >= 0 {
-            let text = try await bytes(Int(length))
+            let text = try await bytes(size)
             // Classic cut text is Latin-1.
             onEvent(.serverClipboard(String(text.map { Character(Unicode.Scalar($0)) })), framebuffer)
             return
         }
-        let payload = try await bytes(Int(length.magnitude))
-        let message = try ExtendedClipboardMessage.decode(payload)
+        let payload = try await bytes(size)
+        let message: ExtendedClipboardMessage
+        do {
+            message = try ExtendedClipboardMessage.decode(payload)
+        } catch RFBError.limitExceeded {
+            return  // inflates past the limit: dropped
+        }
         switch message.action {
         case .caps:
             serverClipboardCaps = message
             await sendWhileRunning(.extendedClipboard(Self.clientClipboardCaps))
             onEvent(.serverClipboardCapabilities(message), framebuffer)
+            markClipboardReady()
         case .request:
             // Xvnc asks for the text we announced (an X client is pasting).
             if message.formats.contains(.text), let text = pendingClipboard {
@@ -446,8 +681,18 @@ public actor RFBClient {
         _ = buffer.take(3)
         let flags = FenceFlags(rawValue: buffer.u32())
         let length = Int(buffer.u8())
+        // The Fence extension allows at most 64 bytes (TigerVNC refuses more, too).
+        guard length <= 64 else { throw RFBError.protocolViolation("fence payload of \(length) bytes") }
         let payload = try await bytes(length)
-        guard flags.contains(.request) else { return }  // an answer to a fence of ours; we send none
+        serverSupportsFence = true
+        guard flags.contains(.request) else {
+            // An answer to one of ours: the keepalive.
+            if payload.starts(with: Self.keepaliveMarker) {
+                keepaliveSentAt = nil
+                statistics.keepalivesAnswered += 1
+            }
+            return
+        }
         // We handle messages strictly in order, so BlockBefore / BlockAfter hold by construction.
         // SyncNext is not supported, so it is left out of the answer (as noVNC does).
         await sendWhileRunning(.fence(flags: flags.intersection([.blockBefore, .blockAfter]), payload: payload))
@@ -455,6 +700,35 @@ public actor RFBClient {
     }
 
     // MARK: - input (only reaches Xvnc while this viewer holds the lease)
+
+    /// Queues input to be sent in exactly this order while `run` is going (and anything posted
+    /// before `run` starts once it does). Safe to call from any thread, e.g. for every NSEvent.
+    /// Fire and forget: input the bridge or the size limit refuses is dropped; check a paste
+    /// with `clipboardFits(_:)` first.
+    public nonisolated func post(_ input: RFBInput) {
+        inputContinuation.yield(input)
+    }
+
+    private func pumpInput() async {
+        for await input in inputs {
+            do {
+                try await perform(input)
+            } catch {
+                // Dropped; a transport failure was noted by send() and ends the session.
+            }
+        }
+    }
+
+    private func perform(_ input: RFBInput) async throws {
+        switch input {
+        case .key(let keysym, let down): try await sendKey(keysym, down: down)
+        case .keyPress(let keysym, let modifiers): try await sendKeyPress(keysym, modifiers: modifiers)
+        case .pointer(let x, let y, let buttons): try await sendPointer(x: x, y: y, buttons: buttons)
+        case .scroll(let x, let y, let direction, let held): try await sendScroll(x: x, y: y, direction: direction, held: held)
+        case .clipboard(let text): try await sendClipboard(text)
+        case .paste(let text, let shortcut): try await paste(text, shortcut: shortcut)
+        }
+    }
 
     public func sendKey(_ keysym: UInt32, down: Bool) async throws {
         try await send(.keyEvent(down: down, keysym: keysym))
@@ -491,11 +765,19 @@ public actor RFBClient {
         try await sendPointer(x: x, y: y, buttons: held)
     }
 
-    /// Puts `text` on the remote clipboard (then send Ctrl+V to paste it). With the extended
-    /// clipboard, the text is announced and handed over when Xvnc asks for it, as UTF-8; without
-    /// it, it goes as Latin-1 cut text (other characters become "?"). Throws
-    /// `RFBError.refusedToSend` when the message would exceed the bridge's 256 KiB limit.
+    /// Whether `text` fits through the bridge as one clipboard message (256 KiB, on the wire and
+    /// unpacked).
+    public static func clipboardFits(_ text: String) -> Bool {
+        (try? ClientMessage.extendedClipboard(.provide(text: text)).encoded()) != nil
+    }
+
+    /// Puts `text` on the remote clipboard (then send Ctrl+V to paste it). First waits until `run`
+    /// knows the server's clipboard caps (right after the handshake). With the extended clipboard the text
+    /// is announced and handed over as UTF-8 when Xvnc asks for it; without it, only Latin-1
+    /// text can go (as classic cut text), anything else throws `refusedToSend` rather than
+    /// arriving garbled. Also throws `refusedToSend` over the bridge's 256 KiB limit.
     public func sendClipboard(_ text: String) async throws {
+        try await waitForClipboardReady()
         if let caps = serverClipboardCaps, caps.formats.contains(.text),
            caps.supportedActions.contains(.notify) || caps.supportedActions.contains(.provide) {
             // Check the size limit before announcing anything.
@@ -510,9 +792,39 @@ public actor RFBClient {
                 try await send(.extendedClipboard(.provide(text: text)))
             }
         } else {
-            let latin1 = text.unicodeScalars.map { $0.value < 256 ? UInt8($0.value) : UInt8(ascii: "?") }
-            try await send(.clientCutText(latin1: latin1))
+            guard text.unicodeScalars.allSatisfy({ $0.value < 256 }) else {
+                throw RFBError.refusedToSend("text outside Latin-1 needs the extended clipboard, which the server did not offer")
+            }
+            try await send(.clientCutText(latin1: text.unicodeScalars.map { UInt8($0.value) }))
         }
+    }
+
+    private func markClipboardReady() {
+        guard !clipboardReady else { return }
+        clipboardReady = true
+        let waiters = clipboardWaiters
+        clipboardWaiters = [:]
+        for (_, waiter) in waiters { waiter.resume() }
+    }
+
+    /// Waits until `run` has learned whether the server has the extended clipboard. Called
+    /// before `run` started, it waits for it (cancel the task to stop waiting).
+    private func waitForClipboardReady() async throws {
+        if clipboardReady { return }
+        guard !finished else { throw RFBError.refusedToSend("the session has ended") }
+        let id = nextWaiter
+        nextWaiter += 1
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
+                clipboardWaiters[id] = c
+            }
+        } onCancel: {
+            Task { await self.cancelClipboardWaiter(id) }
+        }
+    }
+
+    private func cancelClipboardWaiter(_ id: Int) {
+        clipboardWaiters.removeValue(forKey: id)?.resume(throwing: CancellationError())
     }
 
     /// Text only; we accept server clipboard data up to the bridge's limit.

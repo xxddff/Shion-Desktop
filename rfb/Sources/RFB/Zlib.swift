@@ -21,10 +21,11 @@ final class Inflater {
     }
 
     /// Inflates all of `input` (which must end on a flush point, as ZRLE rects and extended
-    /// clipboard messages do) and returns everything it produced.
-    func inflate(_ input: [UInt8], sizeHint: Int = 0) throws -> [UInt8] {
+    /// clipboard messages do) and returns everything it produced. Throws `limitExceeded` as soon
+    /// as the output would pass `limit` bytes (a zip bomb stops there).
+    func inflate(_ input: [UInt8], limit: Int, sizeHint: Int = 0) throws -> [UInt8] {
         var output: [UInt8] = []
-        output.reserveCapacity(max(sizeHint, input.count * 4))
+        output.reserveCapacity(min(limit, max(sizeHint, min(input.count * 4, 1 << 20))))
         try input.withUnsafeBufferPointer { inBuf in
             stream.pointee.next_in = UnsafeMutablePointer(mutating: inBuf.baseAddress)
             stream.pointee.avail_in = UInt32(inBuf.count)
@@ -36,6 +37,9 @@ final class Inflater {
                     // Z_BUF_ERROR just means no progress was possible (input used up).
                     if rc != Z_OK && rc != Z_STREAM_END && rc != Z_BUF_ERROR { throw RFBError.zlib(rc) }
                     return out.count - Int(stream.pointee.avail_out)
+                }
+                guard output.count + produced <= limit else {
+                    throw RFBError.limitExceeded("inflated data over \(limit) bytes")
                 }
                 output += scratch[0..<produced]
                 if stream.pointee.avail_in == 0 && produced < scratch.count { break }

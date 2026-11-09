@@ -47,7 +47,8 @@ public struct RFBConnectionClosed: Error, Sendable, Equatable, CustomStringConve
 
 /// Close codes used by Hermes' `/api/display/ws` (hermes_cli/web_routers/display.py).
 public enum DisplayBridgeClose: Int, Sendable, CustomStringConvertible {
-    /// Our normal close, or the bridge's own teardown.
+    /// Our normal close, or the bridge's own teardown: when the server closes with 1000 on its
+    /// own, Xvnc went away (the screen stopped or crashed); check `display.status`.
     case normal = 1000
     case goingAway = 1001
     /// A text frame, or a client message the bridge's RFB filter cannot frame (or a clipboard
@@ -60,8 +61,8 @@ public enum DisplayBridgeClose: Int, Sendable, CustomStringConvertible {
     /// The ticket is missing, expired, already used, or its browser tab signed out: call
     /// `display.observe` again.
     case badTicket = 4401
-    /// Refused by the bridge's Host / Origin / client-IP policy.
-    case notAllowed = 4403
+    // The bridge's Host / Origin / client-IP refusal (4403) happens before the WebSocket is
+    // accepted, so it arrives as a refused upgrade (HTTP 403), never as a close code.
 
     public var description: String {
         switch self {
@@ -71,7 +72,6 @@ public enum DisplayBridgeClose: Int, Sendable, CustomStringConvertible {
         case .controlTaken: "control taken by another viewer"
         case .desktopGone: "screen not running"
         case .badTicket: "ticket missing, expired or used"
-        case .notAllowed: "not allowed"
         }
     }
 }

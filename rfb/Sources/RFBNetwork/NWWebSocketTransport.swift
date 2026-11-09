@@ -4,15 +4,15 @@ import Network
 import RFB
 
 /// RFB over a Network.framework WebSocket (`NWConnection` + `NWProtocolWebSocket`), with extra
-/// request headers for Cloudflare Access.
+/// request headers for Cloudflare Access. What the App uses.
 ///
-/// Unlike `URLSessionWebSocketTask`, which reports a server-initiated close only as "socket is
-/// not connected", this hands us the server's close frame with its code, so the App can tell
-/// Hermes' 4000 (another viewer took control: go back to watching) from a dropped link (control
-/// stays with you).
+/// A receive is always pending (into a bounded queue), so the server's close frame is read the
+/// moment it arrives, even while the client is busy sending; this is how Hermes' 4000 (another
+/// viewer took control) reaches the caller as a close code instead of a failed send. Errors are
+/// Network.framework's (no URL in them) or `RFBConnectionClosed`.
 ///
 /// ```swift
-/// let transport = NWWebSocketTransport(url: displayURL, headers: [
+/// let transport = try NWWebSocketTransport(url: displayURL, headers: [
 ///     ("CF-Access-Client-Id", id), ("CF-Access-Client-Secret", secret)])
 /// ```
 public final class NWWebSocketTransport: RFBTransport, @unchecked Sendable {
@@ -38,21 +38,25 @@ public final class NWWebSocketTransport: RFBTransport, @unchecked Sendable {
     private var phase = Phase.connecting
     private var readyWaiters: [CheckedContinuation<Void, Error>] = []
     private var closeReceived: RFBConnectionClosed?
+    private let inbox = Inbox()
     private let log: (@Sendable (String) -> Void)?
 
-    /// `url` is `ws://` or `wss://`; it carries the single-use ticket and is logged nowhere.
-    /// Header values are sent, never logged. Not ready within `connectTimeout` seconds counts as
-    /// refused. `log` hears connection states and close codes (for debugging; no secrets).
+    /// `url` is `ws://` or `wss://` (any letter case); it carries the single-use ticket and is
+    /// logged nowhere. Header values are sent, never logged; over plain `ws://` only to loopback.
+    /// Not ready within `connectTimeout` seconds counts as refused. `log` hears connection states
+    /// and close codes (for debugging; no secrets).
     public init(url: URL, headers: [(String, String)] = [], connectTimeout: Double = 15,
-                log: (@Sendable (String) -> Void)? = nil) {
+                log: (@Sendable (String) -> Void)? = nil) throws {
+        let (secure, url) = try WebSocketURLPolicy.check(url, sendsHeaders: !headers.isEmpty)
         self.log = log
         let options = NWProtocolWebSocket.Options()
         options.autoReplyPing = true
         options.maximumMessageSize = 64 * 1024 * 1024
         options.setAdditionalHeaders(headers.map { (name: $0.0, value: $0.1) })
-        let parameters: NWParameters = url.scheme == "wss" ? .tls : .tcp
+        let parameters: NWParameters = secure ? .tls : .tcp
         parameters.defaultProtocolStack.applicationProtocols.insert(options, at: 0)
         connection = NWConnection(to: .url(url), using: parameters)
+        inbox.onDrain = { [weak self] in self?.receiveNext() }
         connection.stateUpdateHandler = { [weak self] state in self?.stateChanged(state) }
         connection.start(queue: queue)
         queue.asyncAfter(deadline: .now() + connectTimeout) { [weak self] in
@@ -72,8 +76,12 @@ public final class NWWebSocketTransport: RFBTransport, @unchecked Sendable {
             return readyWaiters
         }
         guard let waiters else { return }
-        if case .failure(let error) = outcome {
+        switch outcome {
+        case .success:
+            receiveNext()
+        case .failure(let error):
             log?("not connected: \(error)")
+            inbox.finish(.failure(error))
             connection.cancel()
         }
         waiters.forEach { $0.resume(with: outcome) }
@@ -81,23 +89,23 @@ public final class NWWebSocketTransport: RFBTransport, @unchecked Sendable {
 
     private func stateChanged(_ state: NWConnection.State) {
         log?("state \(state)")
-        let outcome: Result<Void, Error>?
         switch state {
         case .ready:
-            outcome = .success(())
+            settle(.success(()))
         case .failed(let error):
-            outcome = .failure(RFBError.connectionRefused("WebSocket connection failed: \(error)"))
+            settle(.failure(RFBError.connectionRefused("WebSocket connection failed: \(error)")))
+            // Once connected, a failure ends the inbox too (unless a close frame did already).
+            inbox.finish(.failure(lock.withLock { closeReceived } ?? RFBConnectionClosed(code: nil, reason: "\(error)")))
         case .waiting(let error):
             // Before it is ready, "waiting" means it could not connect (refused, no route, a
             // rejected upgrade); do not sit there retrying.
-            outcome = .failure(RFBError.connectionRefused("WebSocket connection failed: \(error)"))
+            settle(.failure(RFBError.connectionRefused("WebSocket connection failed: \(error)")))
         case .cancelled:
-            outcome = .failure(RFBError.endOfStream)
+            settle(.failure(RFBError.endOfStream))
+            inbox.finish(.failure(lock.withLock { closeReceived } ?? RFBConnectionClosed(code: nil, reason: "cancelled")))
         default:
-            outcome = nil
+            break
         }
-        guard let outcome else { return }
-        settle(outcome)
     }
 
     private func waitUntilReady() async throws {
@@ -112,6 +120,59 @@ public final class NWWebSocketTransport: RFBTransport, @unchecked Sendable {
                 }
             }
             if let now { c.resume(with: now) }
+        }
+    }
+
+    /// Keeps one receive pending; data goes to the inbox, a close frame ends it with its code.
+    private func receiveNext() {
+        connection.receiveMessage { [weak self] content, context, _, error in
+            guard let self else { return }
+            let incoming: Incoming
+            if let error {
+                incoming = .failed("\(error)")
+            } else if let metadata = context?.protocolMetadata(definition: NWProtocolWebSocket.definition)
+                        as? NWProtocolWebSocket.Metadata {
+                switch metadata.opcode {
+                case .binary, .cont:
+                    incoming = .data(content ?? Data())
+                case .close:
+                    incoming = .close(Self.number(metadata.closeCode), content.map { String(decoding: $0, as: UTF8.self) } ?? "")
+                case .text:
+                    incoming = .text
+                case .ping, .pong:
+                    incoming = .control
+                @unknown default:
+                    incoming = .control
+                }
+            } else if let content {
+                incoming = .data(content)
+            } else {
+                incoming = .ended
+            }
+            self.handle(incoming)
+        }
+    }
+
+    private func handle(_ incoming: Incoming) {
+        switch incoming {
+        case .data(let data):
+            if inbox.push([UInt8](data)) { receiveNext() }
+        case .control:
+            receiveNext()
+        case .close(let code, let reason):
+            log?("close frame, code \(code.map(String.init) ?? "none")")
+            let closed = RFBConnectionClosed(code: code, reason: reason)
+            lock.withLock { closeReceived = closed }
+            inbox.finish(.failure(closed))
+            connection.cancel()
+        case .text:
+            inbox.finish(.failure(RFBError.protocolViolation("text frame on the RFB socket")))
+            connection.cancel()
+        case .failed(let message):
+            log?("receive failed: \(message)")
+            inbox.finish(.failure(lock.withLock { closeReceived } ?? RFBConnectionClosed(code: nil, reason: message)))
+        case .ended:
+            inbox.finish(.success(nil))
         }
     }
 
@@ -131,59 +192,7 @@ public final class NWWebSocketTransport: RFBTransport, @unchecked Sendable {
 
     public func receive() async throws -> [UInt8]? {
         try await waitUntilReady()
-        if let closed = lock.withLock({ closeReceived }) { throw closed }
-        while true {
-            let incoming = await withCheckedContinuation { (c: CheckedContinuation<Incoming, Never>) in
-                connection.receiveMessage { content, context, _, error in
-                    if let error {
-                        c.resume(returning: .failed("\(error)"))
-                        return
-                    }
-                    guard let metadata = context?.protocolMetadata(definition: NWProtocolWebSocket.definition)
-                        as? NWProtocolWebSocket.Metadata else {
-                        if let content {
-                            c.resume(returning: Incoming.data(content))
-                        } else {
-                            c.resume(returning: Incoming.ended)
-                        }
-                        return
-                    }
-                    switch metadata.opcode {
-                    case .binary, .cont:
-                        c.resume(returning: .data(content ?? Data()))
-                    case .close:
-                        let reason = content.map { String(decoding: $0, as: UTF8.self) } ?? ""
-                        c.resume(returning: .close(Self.number(metadata.closeCode), reason))
-                    case .text:
-                        c.resume(returning: .text)
-                    case .ping, .pong:
-                        c.resume(returning: .control)
-                    @unknown default:
-                        c.resume(returning: .control)
-                    }
-                }
-            }
-            switch incoming {
-            case .data(let data):
-                return [UInt8](data)
-            case .close(let code, let reason):
-                log?("close frame, code \(code.map(String.init) ?? "none")")
-                let closed = RFBConnectionClosed(code: code, reason: reason)
-                lock.withLock { closeReceived = closed }
-                connection.cancel()
-                throw closed
-            case .text:
-                throw RFBError.protocolViolation("text frame on the RFB socket")
-            case .control:
-                continue
-            case .failed(let message):
-                log?("receive failed: \(message)")
-                if let closed = lock.withLock({ closeReceived }) { throw closed }
-                throw RFBConnectionClosed(code: nil, reason: message)
-            case .ended:
-                return nil
-            }
-        }
+        return try await inbox.next()
     }
 
     public func close(_ code: RFBCloseCode) async {

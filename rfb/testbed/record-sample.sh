@@ -54,8 +54,8 @@ sleep 2   # quiet: everything has reached the probe
 X xwd -root -silent >"$WORK/screen.xwd"
 wait $PROBE || { cat "$WORK/probe.log" >&2; exit 1; }
 cat "$WORK/probe.log" >&2
-SIZE=$(python3 -I "$HERE/xwd2bgrx.py" "$WORK/screen.xwd" "$OUT/$NAME.expected.z")
-python3 -I -c 'import sys, zlib; open(sys.argv[2], "wb").write(zlib.compress(open(sys.argv[1], "rb").read(), 9))' \
+SIZE=$(python3 -I -B "$HERE/xwd2bgrx.py" "$WORK/screen.xwd" "$OUT/$NAME.expected.z")
+python3 -I -B -c 'import sys, zlib; open(sys.argv[2], "wb").write(zlib.compress(open(sys.argv[1], "rb").read(), 9))' \
   "$WORK/probe/server.bin" "$OUT/$NAME.server.z"
 cp "$WORK/probe/frame.png" "$OUT/$NAME.png"
 printf '{"name": "%s", "script": "%s", "size": "%s", "pointer": [%d, %d], "xvnc": "%s", "probe_options": "%s"}\n' \

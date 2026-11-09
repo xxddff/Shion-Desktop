@@ -3,7 +3,7 @@ import RFB
 
 /// A small RFC 6455 client for `ws://` (no TLS), with extra request headers. It exists because
 /// Foundation's WebSocket does not work on Linux with the distribution libcurl; on Apple
-/// platforms, and for `wss://`, use `URLSessionWebSocketTransport`.
+/// platforms, and for `wss://`, use `NWWebSocketTransport` (what the App uses).
 ///
 /// Binary frames only (a text frame is a protocol error on the RFB socket), answers pings,
 /// reports the peer's close code. Messages are sent unfragmented.
@@ -13,13 +13,19 @@ public final class PlainWebSocketTransport: RFBTransport, @unchecked Sendable {
     private let state = NSLock()
     private var sentClose = false
 
-    /// `url` must be `ws://host[:port]/path?query`. Header values are sent, never logged.
-    public init(url: URL, headers: [(String, String)] = []) throws {
-        guard url.scheme == "ws", let host = url.host else {
-            throw POSIXSocketError("PlainWebSocketTransport takes ws:// URLs only")
+    /// The largest message accepted (Hermes' bridge sends at most 64 KiB per frame).
+    static let maxMessage = 16 << 20
+
+    /// `url` must be `ws://host[:port]/path?query` (any letter case); with headers, only to a
+    /// loopback host (the testbed). Header values are sent, never logged. Connecting and the
+    /// upgrade each give up after `timeout` seconds.
+    public init(url: URL, headers: [(String, String)] = [], timeout: Double = 15) throws {
+        let (secure, url) = try WebSocketURLPolicy.check(url, sendsHeaders: !headers.isEmpty)
+        guard !secure, let host = url.host else {
+            throw RFBSocketError("PlainWebSocketTransport takes ws:// URLs only (no TLS)")
         }
         let port = UInt16(url.port ?? 80)
-        socket = try POSIXSocket(connectingTo: .tcp(host: host, port: port))
+        socket = try POSIXSocket(connectingTo: .tcp(host: host, port: port), timeout: timeout)
 
         var keyBytes = [UInt8](repeating: 0, count: 16)
         for i in keyBytes.indices { keyBytes[i] = UInt8.random(in: 0...255) }
@@ -32,7 +38,7 @@ public final class PlainWebSocketTransport: RFBTransport, @unchecked Sendable {
         for (name, value) in headers {
             guard !name.contains(where: { $0 == "\r" || $0 == "\n" || $0 == ":" }),
                   !value.contains(where: { $0 == "\r" || $0 == "\n" }) else {
-                throw POSIXSocketError("invalid header \(name)")
+                throw RFBSocketError("invalid header \(name)")
             }
             request += "\(name): \(value)\r\n"
         }
@@ -42,16 +48,23 @@ public final class PlainWebSocketTransport: RFBTransport, @unchecked Sendable {
         // Read the response head; anything after it is already frame data.
         var head: [UInt8] = []
         var leftover: [UInt8] = []
+        socket.setReadTimeout(timeout)
         while true {
-            let chunk = try socket.read()
-            if chunk.isEmpty { throw POSIXSocketError("connection closed during the WebSocket upgrade") }
+            let chunk: [UInt8]
+            do {
+                chunk = try socket.read()
+            } catch {
+                socket.close()
+                throw RFBSocketError("no WebSocket upgrade answer within \(Int(timeout)) s")
+            }
+            if chunk.isEmpty { throw RFBSocketError("connection closed during the WebSocket upgrade") }
             head += chunk
             if let end = head.firstRange(of: [13, 10, 13, 10]) {
                 leftover = Array(head[end.upperBound...])
                 head = Array(head[..<end.lowerBound])
                 break
             }
-            if head.count > 64 * 1024 { throw POSIXSocketError("oversized upgrade response") }
+            if head.count > 64 * 1024 { throw RFBSocketError("oversized upgrade response") }
         }
         let lines = String(decoding: head, as: UTF8.self).components(separatedBy: "\r\n")
         let status = lines.first?.split(separator: " ").dropFirst().first.flatMap { Int($0) } ?? 0
@@ -64,9 +77,10 @@ public final class PlainWebSocketTransport: RFBTransport, @unchecked Sendable {
         let expected = Data(SHA1.hash(Array((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").utf8))).base64EncodedString()
         guard accept == expected else {
             socket.close()
-            throw POSIXSocketError("bad Sec-WebSocket-Accept")
+            throw RFBSocketError("bad Sec-WebSocket-Accept")
         }
 
+        socket.setReadTimeout(0)
         let s = socket
         let reader = FrameReader(socket: s, initial: leftover)
         reader.onControl = { [weak self] opcode, payload in self?.control(opcode, payload) }
@@ -169,7 +183,14 @@ private final class FrameReader: @unchecked Sendable {
                 let l = take(2); length = Int(l[0]) << 8 | Int(l[1])
             } else if length == 127 {
                 guard try need(8) else { return nil }
-                length = take(8).reduce(0) { $0 << 8 | Int($1) }
+                let wide = take(8).reduce(UInt64(0)) { $0 << 8 | UInt64($1) }
+                guard wide <= UInt64(PlainWebSocketTransport.maxMessage) else {
+                    throw RFBError.protocolViolation("WebSocket frame of \(wide) bytes")
+                }
+                length = Int(wide)
+            }
+            guard message.count + length <= PlainWebSocketTransport.maxMessage else {
+                throw RFBError.protocolViolation("WebSocket message over \(PlainWebSocketTransport.maxMessage) bytes")
             }
             var mask: [UInt8] = []
             if masked { guard try need(4) else { return nil }; mask = take(4) }

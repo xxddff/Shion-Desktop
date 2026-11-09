@@ -244,6 +244,13 @@ struct ServerScript {
         #expect(Keysym.forCharacter("€") == 0x0100_20AC)
         #expect(Keysym.forCharacter("云") == 0x0100_4E91)
         #expect(Keysym.function(1) == 0xFFBE && Keysym.function(12) == 0xFFC9)
+        // What AppKit reports for the Mac's keys.
+        #expect(Keysym.forCharacter("\u{7F}") == Keysym.backSpace)   // delete (backspace)
+        #expect(Keysym.forCharacter("\u{F728}") == Keysym.delete)    // fn+delete
+        #expect(Keysym.forCharacter("\u{F700}") == Keysym.up)
+        #expect(Keysym.forCharacter("\u{F704}") == Keysym.function(1))
+        #expect(Keysym.forCharacter("\u{F70F}") == Keysym.function(12))
+        #expect(Keysym.forCharacter("\u{19}") == Keysym.tab)
     }
 
     @Test func pasteIsClipboardThenControlV() async throws {
