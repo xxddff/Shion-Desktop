@@ -23,10 +23,13 @@ usage: rfb-probe <url> [options]
   --updates N                  or stop after N framebuffer updates
   --no-continuous              do not enable continuous updates (one request per update)
   --no-extended-desktop-size   only advertise the plain DesktopSize pseudo-encoding
+  --no-pipeline                wait for each server step of the handshake before answering
   --encodings LIST             e.g. zrle,copyrect,raw (pseudo-encodings are always added)
   --transport auto|urlsession|plain
                                auto: the small built-in client for ws:// on Linux, URLSession otherwise
   --paste TEXT                 after the first picture, put TEXT on the remote clipboard (needs the lease)
+  --cursor-after SECONDS       after that long, ask for the pointer shape (Cursor pseudo-encoding), as at takeover
+  --move-pointer X,Y           then move the pointer there (only reaches Xvnc while holding the lease)
 
 Getting a ticket from the gateway first (display.observe over /api/ws; not yet tried on a real server):
   --gateway URL                the gateway origin, e.g. wss://hermes.example.com
@@ -42,9 +45,12 @@ struct Arguments {
     var updates: Int?
     var continuous = true
     var extendedDesktopSize = true
+    var pipeline = true
     var encodings: [RFBEncoding]?
     var transport = "auto"
     var paste: String?
+    var cursorAfter: Double?
+    var movePointer: (Int, Int)?
     var gateway: String?
     var profile: String?
     var tokenEnv = "HERMES_SESSION_TOKEN"
@@ -87,6 +93,7 @@ func parseArguments() -> Arguments {
             a.updates = n
         case "--no-continuous": a.continuous = false
         case "--no-extended-desktop-size": a.extendedDesktopSize = false
+        case "--no-pipeline": a.pipeline = false
         case "--encodings":
             a.encodings = value(arg).split(separator: ",").map {
                 switch $0.lowercased() {
@@ -98,6 +105,13 @@ func parseArguments() -> Arguments {
             }
         case "--transport": a.transport = value(arg)
         case "--paste": a.paste = value(arg)
+        case "--move-pointer":
+            let xy = value(arg).split(separator: ",").compactMap { Int($0) }
+            guard xy.count == 2 else { fail("--move-pointer takes X,Y") }
+            a.movePointer = (xy[0], xy[1])
+        case "--cursor-after":
+            guard let n = Double(value(arg)) else { fail("--cursor-after takes a number") }
+            a.cursorAfter = n
         case "--gateway": a.gateway = value(arg)
         case "--profile": a.profile = value(arg)
         case "--token-env": a.tokenEnv = value(arg)
@@ -164,6 +178,8 @@ final class Progress: @unchecked Sendable {
     var events: [String] = []
     var ended = false
     var endError: Error?
+    var cursorRequested: Date?
+    var loggedAfterCursor = 0
 }
 
 /// display.observe over the gateway's JSON-RPC WebSocket; returns the display URL with its ticket.
@@ -223,6 +239,7 @@ func run() async {
 
     var options = RFBOptions()
     options.continuousUpdates = args.continuous
+    options.pipelineHandshake = args.pipeline
     if let encodings = args.encodings {
         options.encodings = encodings + [.desktopSize, .extendedDesktopSize, .lastRect, .fence, .continuousUpdates, .extendedClipboard]
     }
@@ -253,6 +270,11 @@ func run() async {
                         progress.events.append(String(format: "first picture after %.0f ms", Date().timeIntervalSince(started) * 1000))
                     }
                     if progress.updates <= 3 { progress.events.append("update: \(dirty.count) rects") }
+                    if let asked = progress.cursorRequested, progress.loggedAfterCursor < 2 {
+                        progress.loggedAfterCursor += 1
+                        progress.events.append(String(format: "update %.0f ms after asking for the cursor: ", Date().timeIntervalSince(asked) * 1000)
+                            + dirty.map(\.description).joined(separator: " "))
+                    }
                 case .serverClipboardCapabilities(let caps):
                     progress.events.append("server clipboard caps: formats \(caps.formats.rawValue), actions \(caps.supportedActions.map { "\($0)" }.sorted()), max sizes \(caps.maxSizes)")
                 case .continuousUpdates(let on):
@@ -263,6 +285,9 @@ func run() async {
                     progress.events.append("server clipboard: \(text.utf8.count) bytes")
                 case .bell:
                     progress.events.append("bell")
+                case .cursorShape(let c):
+                    let after = progress.cursorRequested.map { String(format: " %.0f ms after asking", Date().timeIntervalSince($0) * 1000) } ?? ""
+                    progress.events.append("cursor shape \(c.width)x\(c.height), hotspot \(c.hotspotX),\(c.hotspotY)\(after)")
                 }
             }
             _ = fb
@@ -275,6 +300,7 @@ func run() async {
 
     // Watch until the deadline, the update budget, or the connection ending.
     var pasted = false
+    var cursorAsked = false
     while true {
         try? await Task.sleep(nanoseconds: 100_000_000)
         let (first, updates) = progress.lock.withLock { (progress.firstPicture, progress.updates) }
@@ -282,6 +308,19 @@ func run() async {
             pasted = true
             do { try await client.sendClipboard(paste); log("pasted \(paste.utf8.count) bytes to the remote clipboard") }
             catch { log("paste failed: \(error)") }
+        }
+        if let after = args.cursorAfter, let first, !cursorAsked, Date().timeIntervalSince(first) >= after {
+            cursorAsked = true
+            progress.lock.withLock { progress.cursorRequested = Date() }
+            do { try await client.setCursorShapeUpdates(true); log("asked for the cursor shape") }
+            catch { log("cursor request failed: \(error)") }
+            if let (x, y) = args.movePointer {
+                // Two moves a moment apart, like a real pointer, ending at (x, y).
+                try? await client.sendPointer(x: x - 5, y: y - 5, buttons: [])
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                try? await client.sendPointer(x: x, y: y, buttons: [])
+                log("moved the pointer to \(x),\(y)")
+            }
         }
         if let maxUpdates, updates >= maxUpdates { break }
         if let first, Date().timeIntervalSince(first) >= args.seconds { break }

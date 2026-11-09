@@ -14,8 +14,14 @@ WORK="$RFB_TESTBED_RUN/work"; mkdir -p "$WORK"
 "$HERE/start.sh" >"$WORK/testbed.log" 2>&1 &
 TB=$!
 trap 'kill $TB 2>/dev/null; wait $TB 2>/dev/null || true; rm -rf "$RFB_TESTBED_RUN"' EXIT
-for _ in $(seq 1 100); do curl -fs "http://127.0.0.1:$RFB_TESTBED_PORT/lease" >/dev/null 2>&1 && break; sleep 0.1; done
 (cd "$PKG" && swift build --product rfb-probe >/dev/null)
+up=0
+for _ in $(seq 1 100); do
+  curl -fs "http://127.0.0.1:$RFB_TESTBED_PORT/lease" >/dev/null 2>&1 && { up=1; break; }
+  kill -0 $TB 2>/dev/null || break
+  sleep 0.1
+done
+[[ $up == 1 ]] || { echo "FAIL: the testbed did not come up" >&2; cat "$WORK/testbed.log" >&2; exit 1; }
 PROBE="$PKG/.build/debug/rfb-probe"
 X() { DISPLAY=$RFB_TESTBED_DISPLAY XAUTHORITY=$RFB_TESTBED_RUN/Xauthority "$@"; }
 API="http://127.0.0.1:$RFB_TESTBED_PORT"

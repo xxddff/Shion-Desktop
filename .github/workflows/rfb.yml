@@ -55,20 +55,28 @@ jobs:
           echo "$HOME/swift/usr/bin" >> "$GITHUB_PATH"
           "$HOME/swift/usr/bin/swift" --version
 
+      # websockets for testbed/bridge.py and testbed/replay_server.py (the WebSocket transport
+      # tests use the latter, so this comes before the tests).
+      - name: Python for the testbed
+        working-directory: .
+        run: |
+          python3 -m venv ~/testbed-venv
+          ~/testbed-venv/bin/pip install -q 'websockets>=13'
+          echo "RFB_TESTBED_PYTHON=$HOME/testbed-venv/bin/python3" >> "$GITHUB_ENV"
+
       - name: Build
         run: swift build --build-tests
 
       - name: Test
         run: swift test
 
-      - name: Testbed packages (Xvnc, X clients, bridge)
+      - name: Testbed packages (Xvnc, X clients)
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq tigervnc-standalone-server x11-apps x11-utils x11-xserver-utils \
             xterm xdotool xclip fonts-dejavu-core
-          python3 -m pip install --user --break-system-packages -q 'websockets>=13'
           Xvnc -version 2>&1 | head -1
 
       - name: Smoke test against a live Xvnc
@@ -88,6 +96,14 @@ jobs:
         run: |
           sw_vers
           swift --version
+      # The WebSocket transport tests run URLSessionWebSocketTransport (what the App uses)
+      # against testbed/replay_server.py.
+      - name: Python for the replay server
+        working-directory: .
+        run: |
+          python3 -m venv ~/testbed-venv
+          ~/testbed-venv/bin/pip install -q 'websockets>=13'
+          echo "RFB_TESTBED_PYTHON=$HOME/testbed-venv/bin/python3" >> "$GITHUB_ENV"
       - name: Build
         run: swift build --build-tests
       - name: Test

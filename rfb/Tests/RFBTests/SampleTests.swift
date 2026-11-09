@@ -131,14 +131,16 @@ func differingPixels(_ fb: Framebuffer, _ expected: [UInt8]) -> [(x: Int, y: Int
 
         // What the client said: pixel format, encodings, a full request, our clipboard caps,
         // fence answers, EnableContinuousUpdates. Nothing the bridge cannot frame.
+        // The handshake goes out pipelined, in one write: version, security None, shared,
+        // SetPixelFormat, SetEncodings.
         let sent = transport.sent
-        #expect(sent[0] == Array("RFB 003.008\n".utf8))
-        #expect(sent[1] == [1])  // security None
-        #expect(sent[2] == [1])  // shared
-        #expect(sent[3] == (try ClientMessage.setPixelFormat(.bgrx).encoded()))
+        let opening = Array("RFB 003.008\n".utf8) + [1, 1] + (try ClientMessage.setPixelFormat(.bgrx).encoded())
+            + (try ClientMessage.setEncodings(RFBOptions().encodings).encoded())
+        #expect(sent[0] == opening)
+        #expect(sent[1] == (try ClientMessage.framebufferUpdateRequest(incremental: false, x: 0, y: 0, width: 800, height: 500).encoded()))
         #expect(sent.contains { $0.first == 150 })
         #expect(sent.contains { $0.first == 248 })
-        #expect(!sent.dropFirst(3).contains { [4, 5, 251, 255].contains($0.first!) })
+        #expect(!sent.dropFirst().contains { [4, 5, 251, 255].contains($0.first!) })
     }
 
     @Test func resizeFollowsTheServer() async throws {

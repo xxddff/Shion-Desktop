@@ -128,6 +128,41 @@ struct ServerScript {
         }
     }
 
+    /// Without pipelining, each of our handshake steps waits for the server's previous one.
+    @Test func stepByStepHandshake() async throws {
+        final class Gate: RFBTransport, @unchecked Sendable {
+            // Hands out the server's handshake one step at a time and records what the client
+            // had sent before each step, so we can see that it waited.
+            let steps: [[UInt8]]
+            var index = 0
+            var sent: [[UInt8]] = []
+            var sentBeforeStep: [Int] = []
+            init(_ steps: [[UInt8]]) { self.steps = steps }
+            func send(_ bytes: [UInt8]) async throws { sent.append(bytes) }
+            func receive() async throws -> [UInt8]? {
+                guard index < steps.count else { return nil }
+                sentBeforeStep.append(sent.count)
+                defer { index += 1 }
+                return steps[index]
+            }
+            func close(_ code: RFBCloseCode) async {}
+        }
+        var serverInit: [UInt8] = []
+        serverInit.put(UInt16(8)); serverInit.put(UInt16(8)); serverInit += PixelFormat.bgrx.encoded
+        serverInit.put(UInt32(1)); serverInit += [0x78]
+        let gate = Gate([Array("RFB 003.008\n".utf8), [1, 1], [0, 0, 0, 0], serverInit])
+        var options = RFBOptions()
+        options.pipelineHandshake = false
+        _ = try await RFBClient(transport: gate, options: options).handshake()
+        #expect(gate.sent == [Array("RFB 003.008\n".utf8), [1], [1]])
+        #expect(gate.sentBeforeStep == [0, 1, 2, 3])
+
+        let pipelined = Gate(gate.steps)
+        _ = try await RFBClient(transport: pipelined).handshake()
+        #expect(pipelined.sent.count == 1)
+        #expect(pipelined.sentBeforeStep == [1, 1, 1, 1])
+    }
+
     @Test func rawCopyRectAndLastRect() async throws {
         var s = ServerScript.handshake(width: 4, height: 3)
         var raw: [UInt8] = []
@@ -149,6 +184,34 @@ struct ServerScript {
         #expect((0..<4).map { fb.rgb(x: $0, y: 2).2 } == [8, 8, 9, 10])
         #expect(events.last == .bell)
         #expect(events.filter { if case .framebufferUpdated = $0 { true } else { false } }.count == 2)
+    }
+
+    @Test func cursorShape() async throws {
+        var s = ServerScript.handshake(width: 8, height: 8)
+        // 3x2 cursor, hotspot (1, 1): pixels then a mask with 1-byte rows (bits 101 / 010).
+        var payload: [UInt8] = []
+        for i in 0..<6 { payload += [UInt8(i), 0, 0, 0] }
+        payload += [0b1010_0000, 0b0100_0000]
+        s.update([(RFBRect(x: 1, y: 1, width: 3, height: 2), .cursor, payload)])
+        // What Xvnc sends while it paints the pointer itself: an empty cursor.
+        s.update([(RFBRect(x: 0, y: 0, width: 0, height: 0), .cursor, [])])
+        let (_, _, events) = try await replay(s.bytes)
+        let shapes = events.compactMap { if case .cursorShape(let c) = $0 { c } else { nil } }
+        #expect(shapes.count == 2)
+        #expect(shapes[0].hotspotX == 1 && shapes[0].hotspotY == 1 && shapes[0].width == 3)
+        #expect(stride(from: 3, to: 24, by: 4).map { shapes[0].pixels[$0] } == [255, 0, 255, 0, 255, 0])
+        #expect(stride(from: 0, to: 24, by: 4).map { shapes[0].pixels[$0] } == [0, 1, 2, 3, 4, 5])
+        #expect(shapes[1].width == 0 && shapes[1].pixels.isEmpty)
+    }
+
+    @Test func cursorShapeUpdatesResendEncodings() async throws {
+        let transport = ReplayTransport(ServerScript.handshake().bytes)
+        let client = RFBClient(transport: transport)
+        try await client.handshake()
+        try await client.setCursorShapeUpdates(true)
+        #expect(transport.sent.last == (try ClientMessage.setEncodings(RFBOptions().encodings + [.cursor]).encoded()))
+        try await client.setCursorShapeUpdates(false)
+        #expect(transport.sent.last == (try ClientMessage.setEncodings(RFBOptions().encodings).encoded()))
     }
 
     @Test func copyRectOverlapEveryDirection() throws {

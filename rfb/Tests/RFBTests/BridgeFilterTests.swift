@@ -57,9 +57,10 @@ import Testing
         let stdin = Pipe(), stdout = Pipe(), stderr = Pipe()
         process.standardInput = stdin; process.standardOutput = stdout; process.standardError = stderr
         try process.run()
+        let input = Unchecked(stdin.fileHandleForWriting)
         let writer = Thread {
-            stdin.fileHandleForWriting.write(Data(stream))
-            try? stdin.fileHandleForWriting.close()
+            input.value.write(Data(stream))
+            try? input.value.close()
         }
         writer.start()
         let out = stdout.fileHandleForReading.readDataToEndOfFile()
@@ -101,4 +102,10 @@ import Testing
         let (_, error) = try Self.filter(bad + Array(repeating: 0x41, count: 16), allowInput: true)
         #expect(error.contains("clipboard message too large"))
     }
+}
+
+/// Hands a value to a thread when the compiler cannot see it is safe (it is used by one thread).
+struct Unchecked<T>: @unchecked Sendable {
+    let value: T
+    init(_ value: T) { self.value = value }
 }

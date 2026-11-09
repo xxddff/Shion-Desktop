@@ -14,6 +14,25 @@ public enum RFBEvent: Sendable, Equatable {
     case serverClipboardCapabilities(ExtendedClipboardMessage)
     /// Continuous updates were switched on or off (TigerVNC's EnableContinuousUpdates).
     case continuousUpdates(Bool)
+    /// The pointer's shape, after `setCursorShapeUpdates(true)`: draw it locally at the local
+    /// pointer position. Xvnc stops painting the pointer into the picture meanwhile.
+    case cursorShape(RFBCursor)
+}
+
+/// A pointer image from the Cursor pseudo-encoding, as BGRA with straight alpha (0 or 255).
+///
+/// Xvnc decides per client: it sends the real shape only while this client is the one moving
+/// the pointer (its last PointerEvent is where the pointer is). When someone else moved it (the
+/// agent), it paints the pointer into the picture and sends an empty (0x0) cursor: hide the local
+/// one then.
+public struct RFBCursor: Sendable, Equatable {
+    public var width: Int
+    public var height: Int
+    /// The point of the image that sits on the pointer position.
+    public var hotspotX: Int
+    public var hotspotY: Int
+    /// `width * height * 4` bytes, B, G, R, A per pixel; A is 255 where the server's mask is set.
+    public var pixels: [UInt8]
 }
 
 /// Counters for the probe and for tuning.
@@ -34,6 +53,12 @@ public struct RFBOptions: Sendable {
     /// Ask Xvnc to push updates without waiting for each request (TigerVNC extension), when the
     /// server offers it. Saves a round trip per frame, which matters over Cloudflare.
     public var continuousUpdates = true
+    /// Send our side of the handshake (version 3.8, security None, ClientInit) and the
+    /// SetPixelFormat / SetEncodings that follow it in one go, without waiting for each server
+    /// step. Our answers are fixed, and Xvnc reads its input as a stream, so this saves about
+    /// three round trips before the first picture. A server that wants anything else (another
+    /// version, real authentication) fails the handshake either way.
+    public var pipelineHandshake = true
     /// Encodings in preference order. Cursor is left out on purpose while only watching: Xvnc
     /// then paints the agent's pointer into the picture.
     public var encodings: [RFBEncoding] = [
@@ -71,6 +96,10 @@ public actor RFBClient {
     /// Text offered with Notify, waiting for the server's Request.
     private var pendingClipboard: String?
     private var closed = false
+    /// SetPixelFormat and SetEncodings already went out with a pipelined handshake.
+    private var setupSent = false
+    /// Cursor pseudo-encoding currently requested.
+    public private(set) var cursorShapeUpdates = false
 
     /// To keep the raw byte streams (test samples), wrap the transport in a `RecordingTransport`.
     public init(transport: any RFBTransport, options: RFBOptions = RFBOptions()) {
@@ -109,14 +138,26 @@ public actor RFBClient {
     /// Version 3.8, security type None, ClientInit, ServerInit.
     @discardableResult
     public func handshake() async throws -> ServerInit {
-        let version = try await string(12)
-        guard version.hasPrefix("RFB "), version.hasSuffix("\n"),
-              let major = Int(version.dropFirst(4).prefix(3)), let minor = Int(version.dropFirst(8).prefix(3)),
-              major > 3 || (major == 3 && minor >= 8) else {
-            throw RFBError.unsupportedVersion(String(version.prefix(11)))
+        let version = Array("RFB 003.008\n".utf8)
+        let shared: UInt8 = options.shared ? 1 : 0
+        if options.pipelineHandshake {
+            let setup = try ClientMessage.setPixelFormat(.bgrx).encoded() + ClientMessage.setEncodings(options.encodings).encoded()
+            let all = version + [1, shared] + setup
+            statistics.bytesSent += all.count
+            try await transport.send(all)
+            setupSent = true
         }
-        try await transport.send(Array("RFB 003.008\n".utf8))
-        statistics.bytesSent += 12
+
+        let serverVersion = try await string(12)
+        guard serverVersion.hasPrefix("RFB "), serverVersion.hasSuffix("\n"),
+              let major = Int(serverVersion.dropFirst(4).prefix(3)), let minor = Int(serverVersion.dropFirst(8).prefix(3)),
+              major > 3 || (major == 3 && minor >= 8) else {
+            throw RFBError.unsupportedVersion(String(serverVersion.prefix(11)))
+        }
+        if !options.pipelineHandshake {
+            try await transport.send(version)
+            statistics.bytesSent += version.count
+        }
 
         let count = Int(try await u8())
         if count == 0 {
@@ -125,15 +166,20 @@ public actor RFBClient {
         }
         let types = try await bytes(count)
         guard types.contains(1) else { throw RFBError.unsupportedSecurity(types) }
-        try await transport.send([1])
+        if !options.pipelineHandshake {
+            try await transport.send([1])
+            statistics.bytesSent += 1
+        }
         let result = try await u32()
         if result != 0 {
             let length = Int(try await u32())
             throw RFBError.securityFailed(try await string(length))
         }
 
-        try await transport.send([options.shared ? 1 : 0])
-        statistics.bytesSent += 2
+        if !options.pipelineHandshake {
+            try await transport.send([shared])
+            statistics.bytesSent += 1
+        }
         let width = Int(try await u16())
         let height = Int(try await u16())
         let format = PixelFormat(try await bytes(16))
@@ -153,8 +199,11 @@ public actor RFBClient {
     /// the framebuffer as it is right after the event.
     public func run(onEvent: @Sendable (RFBEvent, Framebuffer) -> Void = { _, _ in }) async throws {
         if serverInit == nil { try await handshake() }
-        try await send(.setPixelFormat(.bgrx))
-        try await send(.setEncodings(options.encodings))
+        if !setupSent {
+            try await send(.setPixelFormat(.bgrx))
+            try await send(.setEncodings(options.encodings))
+            setupSent = true
+        }
         try await requestUpdate(incremental: false)
 
         while true {
@@ -188,6 +237,18 @@ public actor RFBClient {
     public func requestUpdate(incremental: Bool) async throws {
         let (w, h) = fullScreen
         try await send(.framebufferUpdateRequest(incremental: incremental, x: 0, y: 0, width: w, height: h))
+    }
+
+    /// Whether the pointer comes as a shape to draw locally (Cursor pseudo-encoding) or is painted
+    /// into the picture by Xvnc (the default, so a watcher sees where the agent points). Turn it on
+    /// at takeover, so the local pointer does not lag behind the network, and off on hand-back.
+    /// Re-sends SetEncodings; Xvnc answers at once, but with an empty cursor until our own
+    /// PointerEvents move the pointer (see `RFBCursor`).
+    public func setCursorShapeUpdates(_ on: Bool) async throws {
+        var encodings = options.encodings.filter { $0 != .cursor }
+        if on { encodings.append(.cursor) }
+        try await send(.setEncodings(encodings))
+        cursorShapeUpdates = on
     }
 
     /// Turns continuous updates on or off (when the server supports them). Off falls back to one
@@ -247,6 +308,19 @@ public actor RFBClient {
                 }
             case .lastRect:
                 break rects
+            case .cursor:
+                // x, y = hotspot; then width*height pixels and a 1-bit mask, rows padded to bytes.
+                let pixels = try await bytes(r.width * r.height * Framebuffer.bytesPerPixel)
+                let rowMask = (r.width + 7) / 8
+                let mask = try await bytes(rowMask * r.height)
+                var bgra = pixels
+                for y in 0..<r.height {
+                    for x in 0..<r.width {
+                        let on = mask[y * rowMask + x / 8] & (0x80 >> UInt8(x % 8)) != 0
+                        bgra[(y * r.width + x) * 4 + 3] = on ? 255 : 0
+                    }
+                }
+                onEvent(.cursorShape(RFBCursor(width: r.width, height: r.height, hotspotX: r.x, hotspotY: r.y, pixels: bgra)), framebuffer)
             default:
                 throw RFBError.unsupportedEncoding(encoding)
             }

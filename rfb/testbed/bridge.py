@@ -21,6 +21,9 @@ same port, for scripts and tests (never put it on a public interface):
 ``--require-header NAME`` (repeatable) refuses the upgrade with HTTP 403 unless the request carries
 that header, the way Cloudflare Access refuses a request without the service-token headers. Header
 values and tickets are never printed.
+
+``--latency-ms N`` delays every chunk by N/2 ms in each direction (N ms round trip), to see how the
+client behaves over a slow path like Cloudflare's.
 """
 
 from __future__ import annotations
@@ -78,8 +81,9 @@ class Lease:
 
 
 class State:
-    def __init__(self, socket_path: str, required_headers: list[str]) -> None:
+    def __init__(self, socket_path: str, required_headers: list[str], latency_ms: float = 0) -> None:
         self.socket_path = socket_path
+        self.one_way_s = latency_ms / 2000.0
         self.required_headers = [h.lower() for h in required_headers]
         self.tickets: dict[str, tuple[float, str]] = {}
         self.lease = Lease()
@@ -165,6 +169,32 @@ async def handler(ws, state: State) -> None:
     rfb_filter = RfbClientFilter(may_send_input)
     viewer_closed = asyncio.Event()
     stats = {"up": 0, "down": 0}
+    loop = asyncio.get_running_loop()
+
+    def delayed(send):
+        """``send`` after the configured one-way delay, keeping order (a FIFO with deadlines)."""
+        if not state.one_way_s:
+            return send, None
+        queue: asyncio.Queue = asyncio.Queue()
+
+        async def pump() -> None:
+            while True:
+                due, data = await queue.get()
+                wait = due - loop.time()
+                if wait > 0:
+                    await asyncio.sleep(wait)
+                await send(data)
+
+        async def enqueue(data) -> None:
+            queue.put_nowait((loop.time() + state.one_way_s, data))
+        return enqueue, asyncio.create_task(pump())
+
+    async def to_xvnc(data: bytes) -> None:
+        writer.write(data)
+        await writer.drain()
+
+    send_down, down_pump = delayed(ws.send)
+    send_up, up_pump = delayed(to_xvnc)
 
     async def rfb_to_ws() -> None:
         while True:
@@ -172,7 +202,7 @@ async def handler(ws, state: State) -> None:
             if not chunk:
                 return
             stats["down"] += len(chunk)
-            await ws.send(chunk)
+            await send_down(chunk)
 
     async def ws_to_rfb() -> None:
         while True:
@@ -193,8 +223,7 @@ async def handler(ws, state: State) -> None:
                 return
             stats["up"] += len(allowed)
             if allowed:
-                writer.write(allowed)
-                await writer.drain()
+                await send_up(allowed)
 
     async def watch_eviction() -> None:
         await evicted.wait()
@@ -202,6 +231,7 @@ async def handler(ws, state: State) -> None:
 
     tasks = [asyncio.create_task(rfb_to_ws()), asyncio.create_task(ws_to_rfb()),
              asyncio.create_task(watch_eviction())]
+    tasks += [t for t in (down_pump, up_pump) if t is not None]
     try:
         done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         for t in pending:
@@ -231,8 +261,9 @@ async def main() -> None:
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8765)
     p.add_argument("--require-header", action="append", default=[], metavar="NAME")
+    p.add_argument("--latency-ms", type=float, default=0, help="added round-trip time")
     args = p.parse_args()
-    state = State(args.socket, args.require_header)
+    state = State(args.socket, args.require_header, args.latency_ms)
     async with serve(lambda ws: handler(ws, state), args.host, args.port,
                      process_request=make_process_request(state), max_size=None,
                      compression=None):

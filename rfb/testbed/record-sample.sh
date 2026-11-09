@@ -21,7 +21,9 @@ mkdir -p "$WORK"
 "$HERE/start.sh" >"$WORK/testbed.log" 2>&1 &
 TB=$!
 trap 'kill $TB 2>/dev/null; wait $TB 2>/dev/null; rm -rf "$RFB_TESTBED_RUN"' EXIT
-for _ in $(seq 1 100); do curl -fs "http://127.0.0.1:8767/lease" >/dev/null 2>&1 && break; sleep 0.1; done
+up=0
+for _ in $(seq 1 100); do curl -fs "http://127.0.0.1:8767/lease" >/dev/null 2>&1 && { up=1; break; }; sleep 0.1; done
+[[ $up == 1 ]] || { echo "the testbed did not come up" >&2; cat "$WORK/testbed.log" >&2; exit 1; }
 sleep 2   # let the windows map and draw
 read -r PX PY <<<"${RFB_SAMPLE_POINTER:-600 440}"
 

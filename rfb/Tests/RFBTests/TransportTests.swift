@@ -36,7 +36,9 @@ import Testing
     @Test func recordingSeesBothDirections() async throws {
         let log = EventLogBytes()
         let replay = ReplayTransport(ServerScript.handshake(width: 2, height: 2, name: "x").bytes, chunkSizes: [5])
-        let client = RFBClient(transport: RecordingTransport(replay) { log.add($0, $1) })
+        var options = RFBOptions()
+        options.pipelineHandshake = false
+        let client = RFBClient(transport: RecordingTransport(replay) { log.add($0, $1) }, options: options)
         let info = try await client.handshake()
         #expect(info.name == "x" && info.width == 2)
         #expect(log.received == ServerScript.handshake(width: 2, height: 2, name: "x").bytes)

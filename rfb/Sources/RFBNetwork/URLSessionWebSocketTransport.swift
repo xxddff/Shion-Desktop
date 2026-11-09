@@ -22,7 +22,8 @@ public final class URLSessionWebSocketTransport: NSObject, RFBTransport, URLSess
     private var session: URLSession!
     private var task: URLSessionWebSocketTask!
     private var closeInfo: RFBConnectionClosed?
-    private var closeWaiters: [CheckedContinuation<Void, Never>] = []
+    private var closeWaiters: [Int: CheckedContinuation<Void, Never>] = [:]
+    private var nextWaiter = 0
 
     /// The request's URL is logged nowhere; it carries the single-use ticket.
     public init(request: URLRequest, configuration: URLSessionConfiguration = .ephemeral) {
@@ -65,24 +66,16 @@ public final class URLSessionWebSocketTransport: NSObject, RFBTransport, URLSess
     public var upgradeStatus: Int? { (task.response as? HTTPURLResponse)?.statusCode }
 
     /// A failed receive/send usually means the server closed; the close code may land on the
-    /// delegate a moment after the error, so wait briefly for it.
+    /// delegate a moment after the error, so wait briefly for it. Either way the connection is
+    /// over, so the session is let go (it holds this delegate until invalidated).
     private func closed(or error: Error) async -> Error {
+        defer { session.finishTasksAndInvalidate() }
         if let info = currentClose() { return info }
         let code = task.closeCode.rawValue
         if code != URLSessionWebSocketTask.CloseCode.invalid.rawValue {
             return RFBConnectionClosed(code: code, reason: task.closeReason.map { String(decoding: $0, as: UTF8.self) } ?? "")
         }
-        await withTaskGroup(of: Void.self) { group in
-            group.addTask { await self.waitForClose() }
-            group.addTask { try? await Task.sleep(nanoseconds: 500_000_000) }
-            await group.next()
-            group.cancelAll()
-            self.lock.withLock {
-                let waiters = self.closeWaiters
-                self.closeWaiters = []
-                waiters.forEach { $0.resume() }
-            }
-        }
+        await waitForClose(timeoutNanoseconds: 500_000_000)
         if let info = currentClose() { return info }
         if let status = upgradeStatus, status != 101 {
             return RFBError.connectionRefused("WebSocket upgrade answered HTTP \(status)")
@@ -92,14 +85,22 @@ public final class URLSessionWebSocketTransport: NSObject, RFBTransport, URLSess
 
     private func currentClose() -> RFBConnectionClosed? { lock.withLock { closeInfo } }
 
-    private func waitForClose() async {
+    /// Returns when the delegate reports the close, or after the timeout. Each waiter is resumed
+    /// exactly once: whoever removes it from `closeWaiters` (under the lock) resumes it.
+    private func waitForClose(timeoutNanoseconds: UInt64) async {
         await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
-            let ready = lock.withLock { () -> Bool in
-                if closeInfo != nil { return true }
-                closeWaiters.append(c)
-                return false
+            let id = lock.withLock { () -> Int? in
+                if closeInfo != nil { return nil }
+                nextWaiter += 1
+                closeWaiters[nextWaiter] = c
+                return nextWaiter
             }
-            if ready { c.resume() }
+            guard let id else { return c.resume() }
+            Task {
+                try? await Task.sleep(nanoseconds: timeoutNanoseconds)
+                let waiter = self.lock.withLock { self.closeWaiters.removeValue(forKey: id) }
+                waiter?.resume()
+            }
         }
     }
 
@@ -111,8 +112,8 @@ public final class URLSessionWebSocketTransport: NSObject, RFBTransport, URLSess
         let info = RFBConnectionClosed(code: closeCode.rawValue, reason: reason.map { String(decoding: $0, as: UTF8.self) } ?? "")
         let waiters = lock.withLock { () -> [CheckedContinuation<Void, Never>] in
             closeInfo = info
-            defer { closeWaiters = [] }
-            return closeWaiters
+            defer { closeWaiters = [:] }
+            return Array(closeWaiters.values)
         }
         waiters.forEach { $0.resume() }
     }

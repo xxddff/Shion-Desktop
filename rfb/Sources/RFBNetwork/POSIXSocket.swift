@@ -52,7 +52,8 @@ final class POSIXSocket: @unchecked Sendable {
             guard connected >= 0 else { throw POSIXSocketError("cannot connect to \(host):\(port): \(lastError)") }
             fd = connected
             var one: Int32 = 1
-            setsockopt(fd, Int32(IPPROTO_TCP), TCP_NODELAY, &one, socklen_t(MemoryLayout<Int32>.size))
+            let tcpNoDelay: Int32 = 1  // TCP_NODELAY, the same value on Linux and Darwin
+            setsockopt(fd, Int32(IPPROTO_TCP), tcpNoDelay, &one, socklen_t(MemoryLayout<Int32>.size))
         case .unix(let path):
             #if canImport(Glibc)
             let s = socket(AF_UNIX, Int32(SOCK_STREAM.rawValue), 0)
