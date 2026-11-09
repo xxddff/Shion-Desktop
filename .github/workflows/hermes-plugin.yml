@@ -20,7 +20,8 @@ concurrency:
 jobs:
   test:
     name: pytest (Python ${{ matrix.python }})
-    runs-on: ubuntu-latest
+    # pinned: ubuntu-latest moves to Ubuntu 26 from 2026-10-19
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     strategy:
       matrix:
@@ -30,7 +31,7 @@ jobs:
         working-directory: hermes-plugin
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
       - run: pip install pytest
