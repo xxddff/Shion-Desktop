@@ -16,6 +16,11 @@ settings:
     DEVELOPMENT_TEAM: ""
     ENABLE_HARDENED_RUNTIME: NO
     DEAD_CODE_STRIPPING: YES
+packages:
+  # Apple's Markdown parser (cmark-gfm): replies' tables, task lists and the rest (Views/Markdown*.swift)
+  swift-markdown:
+    url: https://github.com/swiftlang/swift-markdown
+    minorVersion: 0.9.0
 targets:
   Shion:
     type: application
@@ -24,6 +29,9 @@ targets:
       - path: Shion
         excludes:
           - Info.plist
+    dependencies:
+      - package: swift-markdown
+        product: Markdown
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.shion.Shion

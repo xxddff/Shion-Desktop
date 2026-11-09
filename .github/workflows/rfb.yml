@@ -1,0 +1,121 @@
+name: RFB client
+
+# The RFB (VNC) client package in rfb/. Linux runs on every change to it: build, tests (recorded
+# Xvnc samples, Hermes' own RFB filter), then a live smoke test against a real Xvnc behind the
+# testbed bridge. The macOS build check uses the limited macOS minutes, so it only runs on a manual
+# run with "macos" ticked, or when the commit message contains [macos].
+on:
+  push:
+    paths:
+      - 'rfb/**'
+      - '.github/workflows/rfb.yml'
+  workflow_dispatch:
+    inputs:
+      macos:
+        description: 'Also build and test on macOS (limited minutes)'
+        type: boolean
+        default: false
+
+concurrency:
+  group: rfb-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  SWIFT_VERSION: '6.4.2'
+  # sha256 of swift-6.4.2-RELEASE-ubuntu24.04.tar.gz, checked against swift.org's PGP signature
+  # (Swift 6.x Release Signing Key, 52BB7E3DE28A71BE22EC05FFEF80A866B47A981F) when it was pinned.
+  SWIFT_SHA256: '2e9ebec040ad459dd89a6d093a02d8314939135104850fae4d5c0f174fb3ba8c'
+  # The testbed bridge and the replay server use websockets' asyncio API (13+); tested on 17.
+  WEBSOCKETS: 'websockets>=13,<18'
+
+jobs:
+  linux:
+    name: Linux build, test, smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: rfb
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Cache the Swift toolchain
+        id: swift-cache
+        uses: actions/cache@v5
+        with:
+          path: ~/swift
+          key: swift-${{ env.SWIFT_VERSION }}-ubuntu24.04-x86_64-${{ env.SWIFT_SHA256 }}
+
+      - name: Install Swift ${{ env.SWIFT_VERSION }}
+        if: steps.swift-cache.outputs.cache-hit != 'true'
+        working-directory: .
+        run: |
+          mkdir -p ~/swift
+          v=$SWIFT_VERSION
+          curl -fsSL -o "$RUNNER_TEMP/swift.tar.gz" \
+            "https://download.swift.org/swift-$v-release/ubuntu2404/swift-$v-RELEASE/swift-$v-RELEASE-ubuntu24.04.tar.gz"
+          echo "$SWIFT_SHA256  $RUNNER_TEMP/swift.tar.gz" | sha256sum -c -
+          tar xzf "$RUNNER_TEMP/swift.tar.gz" -C ~/swift --strip-components 1
+          rm "$RUNNER_TEMP/swift.tar.gz"
+
+      - name: Toolchain
+        run: |
+          echo "$HOME/swift/usr/bin" >> "$GITHUB_PATH"
+          "$HOME/swift/usr/bin/swift" --version
+
+      # websockets for testbed/bridge.py and testbed/replay_server.py (the WebSocket transport
+      # tests use the latter, so this comes before the tests).
+      - name: Python for the testbed
+        working-directory: .
+        run: |
+          python3 -m venv ~/testbed-venv
+          ~/testbed-venv/bin/pip install -q "$WEBSOCKETS"
+          echo "RFB_TESTBED_PYTHON=$HOME/testbed-venv/bin/python3" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: swift build --build-tests
+
+      - name: Test
+        run: swift test
+
+      - name: Testbed packages (Xvnc, X clients)
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq tigervnc-standalone-server x11-apps x11-utils x11-xserver-utils \
+            xterm xdotool xclip fonts-dejavu-core
+          Xvnc -version 2>&1 | head -1
+
+      - name: Smoke test against a live Xvnc
+        run: testbed/smoke.sh
+
+  macos:
+    name: macOS build and test
+    if: (github.event_name == 'workflow_dispatch' && inputs.macos) || contains(github.event.head_commit.message, '[macos]')
+    runs-on: xcode-27
+    timeout-minutes: 8
+    defaults:
+      run:
+        working-directory: rfb
+    steps:
+      - uses: actions/checkout@v7
+      - name: Toolchain
+        run: |
+          sw_vers
+          swift --version
+      # The WebSocket transport tests run URLSessionWebSocketTransport (what the App uses) and
+      # NWWebSocketTransport against testbed/replay_server.py.
+      - name: Python for the replay server
+        working-directory: .
+        run: |
+          python3 -m venv ~/testbed-venv
+          ~/testbed-venv/bin/pip install -q "$WEBSOCKETS"
+          echo "RFB_TESTBED_PYTHON=$HOME/testbed-venv/bin/python3" >> "$GITHUB_ENV"
+      - name: Build
+        run: swift build --build-tests
+      - name: Test
+        run: swift test

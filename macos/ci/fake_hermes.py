@@ -501,6 +501,51 @@ class Handler(BaseHTTPRequestHandler):
         except OSError:
             pass
 
+    HOMEWORK_CALLS = (("call-ci-hw-1", "web_search", "这周的作业（CI）"),
+                      ("call-ci-hw-2", "read_file", "syllabus（CI）"),
+                      ("call-ci-hw-3", "web_extract", "moodle.example（CI）"))
+    HOMEWORK_REPLY = ("这周要交的有两项：\n\n"
+                      "| 作业 | 截止 | 进度 |\n"
+                      "| :-- | :-: | --: |\n"
+                      "| 实验报告（CI） | 周三 17:00（CI） | 50% |\n"
+                      "| 作业5（CI） | 周五 23:59 | 0% |\n\n"
+                      "先写**实验报告**，周三前交。")
+
+    def homework(self, session_id, text):
+        """詩音 looks the week's work up with three tool calls, then replies with a table: streamed
+        as Hermes streams a turn, a moment between events so the calls can be seen while it runs
+        (each call's args at its start, its result at its end; the reply a paragraph at a time).
+        The transcript keeps the calls, without row ids or results, as Hermes's does."""
+        with lock:
+            rows = transcripts.setdefault(session_id, [])
+            rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "user", "text": text,
+                         "timestamp": time.time()})
+            for call, name, context in self.HOMEWORK_CALLS:
+                rows.append({"row_kind": "message", "role": "tool", "name": name, "context": context,
+                             "tool_call_id": call, "timestamp": time.time()})
+            rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "assistant",
+                         "text": self.HOMEWORK_REPLY, "timestamp": time.time()})
+        threading.Thread(target=self.homework_turn, args=(session_id,), daemon=True).start()
+
+    def homework_turn(self, session_id):
+        try:
+            self.event("message.start", session_id, {})
+            for call, name, context in self.HOMEWORK_CALLS:
+                time.sleep(0.8)
+                self.event("tool.start", session_id, {"tool_id": call, "name": name, "context": context,
+                                                      "args": {"query": context}})
+                time.sleep(0.4)
+                self.event("tool.complete", session_id, {"tool_id": call, "name": name,
+                                                         "result": json.dumps({"ok": True}, ensure_ascii=False)})
+            parts = self.HOMEWORK_REPLY.split("\n\n")
+            for index, part in enumerate(parts):
+                time.sleep(0.5)
+                self.event("message.delta", session_id, {"text": part + ("\n\n" if index < len(parts) - 1 else "")})
+            self.event("message.complete", session_id, {"text": self.HOMEWORK_REPLY, "status": "complete"})
+            log(f"  -> homework turn on {session_id}: {len(self.HOMEWORK_CALLS)} tool calls and a table")
+        except OSError:
+            pass
+
     def raise_approval(self, session_id):
         log(f"  -> approval.request on {session_id}")
         try:
@@ -663,6 +708,8 @@ class Handler(BaseHTTPRequestHandler):
             session_id, text = params.get("session_id"), params.get("text", "")
             if "派一张卡" in text:
                 return self.hand_over(session_id, text)
+            if "这周的作业" in text:
+                return self.homework(session_id, text)
             with lock:
                 rows = transcripts.setdefault(session_id, [])
                 rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "user", "text": text,

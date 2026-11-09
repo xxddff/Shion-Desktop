@@ -224,35 +224,39 @@ Shion 里的位置：
 
 缩略图和侧栏预览一直用 `display.thumbnail` 的图片，不连 VNC；只有打开大画面时才连 RFB。
 
-**为什么自己写。** 服务端只有一种：Hermes 画面桥后面的 TigerVNC（Xvnc，`-SecurityTypes None`、`-AlwaysShared`），握手是固定的，要支持的编码也就几种。传输是 WebSocket，`URLSessionWebSocketTask` 能直接带上 Access 的两个头。点画面接管、点外面交还、租约、交还快捷键、下面说的粘贴输入，这些用现成的库也得自己加。
+**为什么自己写。** 服务端只有一种：Hermes 画面桥后面的 TigerVNC（Xvnc，`-SecurityTypes None`、`-AlwaysShared`），握手是固定的，要支持的编码也就几种。传输是 WebSocket，用 `URLSessionWebSocketTask` 带上 Access 的两个头。它要一直挂着一个接收，才拿得到服务器的关闭码（比如别人接管时的 4000）；Network.framework 的 WebSocket 在 macOS 上实测拿不到，只留作备用。点画面接管、点外面交还、租约、交还快捷键、下面说的粘贴输入，这些用现成的库也得自己加。
 
 不选的几条路：
 - **RoyalVNCKit**：MIT 许可，自带处理键鼠的 macOS 画面视图，但 2026-10-05 已归档只读，而且只走 TCP。用它等于 fork 过来自己维护，还要换掉传输层。它的解码和键位表可以参考，按 MIT 的要求保留版权声明。
 - **libvncclient、TigerVNC 自带的 viewer**：都是 GPL，也一样要自己接 WebSocket。
 - **noVNC**：官方桌面端用的就是它，但它是网页，和"不套浏览器"冲突；网页里的 WebSocket 带不了 service token 的请求头，还得先拿到 Access 的 cookie 塞进 WebView。只在自己的客户端做好之前，用 SwiftUI 的 `WebView` 跑它过渡。
 
-分几步做：
+分几步做（协议部分在 `rfb/`，一个不依赖 App 的 Swift 包，说明、测试样本和测试环境都在那里的 README）：
 
-| 阶段 | 内容 | 估计 |
+| 阶段 | 内容 | 现在 |
 | --- | --- | --- |
-| 探路 | 命令行小程序：`display.observe` 拿 ticket，带 Access 头连上画面 WebSocket，走完 RFB 3.8 握手，把收到的数据存下来当测试样本 | 1–2 天 |
-| 只看 | 编码 Raw、CopyRect、ZRLE（用系统自带的 zlib），伪编码 DesktopSize；画到 IOSurface 上交给 `CALayer` 显示，按窗口等比缩放 | 约 1 周 |
-| 接管 | 租约；鼠标、滚轮（坐标换算回远端）；键盘（字符换成 X keysym，功能键按键码映射）；输入法（`NSTextInputClient`）；Cursor 伪编码；TigerVNC 的扩展剪贴板（UTF-8） | 约 1 周 |
+| 探路 | 命令行小程序：`display.observe` 拿 ticket，带 Access 头连上画面 WebSocket，走完 RFB 3.8 握手，把收到的数据存下来当测试样本 | `rfb-probe` 做好了，在 Linux 的测试环境里对着 Xvnc 和 Hermes 自己的过滤器测过；还没对真服务器跑 |
+| 只看 | 编码 Raw、CopyRect、ZRLE（用系统自带的 zlib），伪编码 DesktopSize；画到 IOSurface 上交给 `CALayer` 显示，按窗口等比缩放 | 协议部分做好了（解出来的画面和真实屏幕逐像素一致）；App 里的画面还没做 |
+| 接管 | 租约；鼠标、滚轮（坐标换算回远端）；键盘（字符换成 X keysym，功能键按键码映射）；输入法（`NSTextInputClient`）；Cursor 伪编码；TigerVNC 的扩展剪贴板（UTF-8） | 消息的格式做好、测好了；租约、App 里的键鼠和输入法还没做 |
 | 以后 | 带宽不够再加 Tight + JPEG（JPEG 用系统的 ImageIO 解）；断线后自动重连 | — |
 
 键盘和中文、日文输入：
 - **⌘ 当成 Ctrl 发过去**，⌘C、⌘V、⌘L、⌘T 在远端浏览器里照 Mac 的习惯用；⌘Tab、⌘Q 仍然归 Mac。
-- **⌘V 先同步剪贴板**：把 Mac 剪贴板里的文字用剪贴板消息放进远端，再发 Ctrl+V。⌘C 反过来，远端复制完把内容取回 Mac。只在你接管期间同步，助手自己复制的东西不会进你的剪贴板。
+- **⌘V 先同步剪贴板**：把 Mac 剪贴板里的文字用剪贴板消息放进远端，再发 Ctrl+V。**⌘C 取回 Mac 现在做不到**：Hermes 用 `-SendCutText=0` 启动 Xvnc（只看的人不能拿到持有者复制的东西），服务器根本不往外发剪贴板，接管时也不发。要做得等 Hermes 改：桥只把 ServerCutText 转给持有租约的人，或者加一个读远端剪贴板的 gateway 方法。
 - **中文、日文在你点的地方直接打。** 画面视图接上 Mac 的输入法（实现 `NSTextInputClient`）：点一下远端的输入框，照常用输入法打字，拼写中的文字和候选窗口就出现在你点的位置；确认后的文字用剪贴板消息放进远端，再发 Ctrl+V 粘进去，不碰 Mac 自己的剪贴板。英文、数字和快捷键不经过这一步，照常按键发。
   - 不逐字发 Unicode keysym：TigerVNC 1.10 起剪贴板支持完整的 Unicode，而逐字发的话 Xvnc 要临时给每个字分配键位，有人遇到过分配失败后键盘没反应（[TigerVNC #93](https://github.com/TigerVNC/tigervnc/issues/93)）。
   - 远端不会告诉我们光标在哪，所以先用你最后一次点的位置；用 Tab 换了输入框，就再点一下。以后可以再准一点：Xvnc 只发画面上变了的区域，光标闪烁就是点击位置附近一个反复出现的细长小块，找到它就能把拼写中的文字对准远端光标。
 - 密码也一样：从 Mac 的密码管理器复制，⌘V 粘过去。
 
 和画面桥打交道的规矩（依据 Hermes 的 `hermes_cli/web_routers/display.py` 和 `tools/bot_desktop/rfb_filter.py`）：
-- 只发桥认得的消息：SetPixelFormat、SetEncodings、FramebufferUpdateRequest、KeyEvent、PointerEvent、ClientCutText（含扩展剪贴板），以及 TigerVNC 的 EnableContinuousUpdates、Fence。发别的，桥分不清消息边界，会直接断开。剪贴板一次最多 256 KB。
+- 只发桥认得的消息：SetPixelFormat、SetEncodings、FramebufferUpdateRequest、KeyEvent、PointerEvent、ClientCutText（含扩展剪贴板），以及 TigerVNC 的 EnableContinuousUpdates、Fence。发别的，桥分不清消息边界，会直接断开。剪贴板一次最多 256 KB。桥还认 SetDesktopSize（251）和 QEMU 扩展键盘（255），都算输入、只放行给持有租约的人；Shion 都不发。
+- 扩展剪贴板只能先宣告、等 Xvnc 来要：它不收直接推过去的文字，远端程序粘贴时才来取，所以这时连接要开着。只看时桥连能力声明也丢，每次粘贴前再声明一次。
+- 声明了 Fence 就要应答（不应答，画面一秒左右就停），连续更新要靠它；两样都用，远的线路上帧数能翻倍。
 - 不发 SetDesktopSize：它会连助手的屏幕分辨率一起改掉。窗口大小只影响本地缩放。
 - 只看时不开 Cursor 伪编码，让服务器把助手的光标画进画面，看得到它在点哪；你接管后再打开，光标在本机画，不跟着网络卡。
-- 离开画面时用 1000 正常关闭 WebSocket，桥会顺带交还；网络断了不算，控制权还在你手里。被别人接管时桥用 4000 关掉连接，换一张新 ticket 回到只看。
+- 离开画面时用 1000 正常关闭 WebSocket，桥会顺带交还，1001 也一样；网络断了不算，控制权还在你手里。被别人接管时桥用 4000 关掉连接，换一张新 ticket 回到只看。关闭码不是每次都拿得到（网络断了就没有），所以连接断了、又没有关闭码时，先看 gateway 上的 `display.lease`：持有者的 `viewer_hash` 不是自己的，就是被挤掉了。Host / Origin 不对时桥在握手前就拒了，看到的是 HTTP 403，不会出现 4403；Xvnc 没了时桥用 1000 关闭，这时再查一次 `display.status`。
+- `display.*` 每次都带 `profile`，不带时回答的是 gateway 自己那个 profile 的屏幕。
+- 有人接管时 `display.thumbnail` 不给图（`data_url: null`，`suppressed: human_has_control`），因为画面上可能有正在输入的密码；缩略图和侧栏预览要照顾到这种情况。
 - 只断了画面连接时，带上原来的 `viewer_id` 再调 `display.observe`，租约还在；gateway 连接也断了的话，旧 id 就不认了，重连后用新 id 再接管一次。
 - 只看时画面不在眼前（窗口最小化或被挡住、切到别的页面）就断开，只留缩略图。连着的时候桥会当作有人在看，云桌面不会闲置自动停。
 - ticket 一次性有效，不写进日志。
@@ -263,7 +267,7 @@ Shion 里的位置：
 2. 远端经 `hermes serve` 时，canonical 方法和插件 RPC 是否都能用。
 3. 官方 Bot Mode 把头像、分组等存在 profile 的 `ui_meta` 里。Shion 现在读写其中的显示名（`ui_meta['hermes-bots'].title`，经 `profiles.configure`，按版本号比对后才写，这一节的其余键原样写回），头像和分组还没接。
 4. **云桌面相关的方法不在 canonical 方法表里。** `display.*` 属于通用方法表，官方桌面端在远程连接上能用。要验证 Shion 经 Cloudflare 连上后，同一条连接能不能调到它们。
-5. **RFB 客户端是整个项目最大的一块**，做法见上面「画面客户端」。探路时要确认：VPS 上的 TigerVNC 支持扩展剪贴板（中文、日文粘贴靠它）；中途开关 Cursor 伪编码，Xvnc 会立刻生效；ZRLE 走 Cloudflare 这条线带宽够不够，不够就提前做 Tight + JPEG。
+5. **RFB 客户端是整个项目最大的一块**，做法见上面「画面客户端」。测试环境（Xvnc 1.13.1）里已经确认：扩展剪贴板能传中文、日文、emoji，用「剪贴板 + Ctrl+V」打进 Chrome 的输入框一字不差；中途开 Cursor 伪编码立刻生效；ZRLE 静止时很省（一页文字首帧约 180 KB），Chrome 滚动时约 2.5 MB/s。还要确认：VPS 上的 TigerVNC 版本；在真的 Cloudflare 线路上用 `rfb-probe` 量一次带宽，再定要不要做 Tight + JPEG。
 6. **浏览器登录经过真的 Cloudflare Access。** 第一次带着 service token 打开登录窗口时，提交密码被严格模式拦下了，现在已经改成不带。CI 上的替身照严格模式演 Access，登录页在另一个域名上；还要在我们的域名上确认一次：登录完 Access 回到原来地址时，查询参数（PKCE、state）原样带回。
 7. **Apple 提醒事项经云端读写不一定可靠。** iCloud 日历走 CalDAV 没问题；但按 BusyMac、2Do 的说明，iOS 13 / macOS Catalina 之后升级过的提醒事项列表不再走 CalDAV，有的 MCP 声称能读写，说法不一。先用实际要用的工具测一遍；不行的话，就由 Mac 上的 Shion 用 EventKit 读写提醒事项（这正好是"接入本机"的第一个用途），或者以 `shion` 插件里的待办为准，只往提醒事项单向同步。
 
@@ -333,9 +337,9 @@ macOS 上是 SwiftUI 加 AppKit（UIKit 是 iOS 的；Mac Catalyst 做菜单栏�
 | 看板拖卡片 | `.draggable` + `.dropDestination` | 低 |
 | 日程周视图、时间线 | 自定义 `Layout` 或 `Canvas` | 中 |
 | 屏幕时间图表 | Swift Charts（`BarMark`） | 低 |
-| 流式回复、呼吸点 | `Text` 增量更新；`ellipsis` 符号加 `.symbolEffect` | 低 |
-| 助手回复里的 Markdown | 系统自带只支持行内样式，列表、代码块要用第三方渲染库或自己写 | 中 |
-| 复制消息 | 每条消息 `.textSelection(.enabled)`，再加一个「复制」按钮；不做跨多条消息的连续选中 | 低 |
+| 流式回复、呼吸点 | 已经完整的块先排好，其余跟着光标增量更新；`ellipsis` 符号加 `.symbolEffect` | 低 |
+| 助手回复里的 Markdown | Apple 的 swift-markdown（cmark-gfm）解析，自己写的 SwiftUI 视图排版，见下面「对话的显示」 | 中 |
+| 复制消息 | 每条消息 `.textSelection(.enabled)`（排好的回复一块一块地选），再加一个「复制」按钮；不做跨多条消息的连续选中 | 低 |
 | 菜单栏常驻和弹出面板 | AppKit `NSStatusItem`，面板里放 SwiftUI，用 `expandedInterfaceDelegate` 管键盘焦点；橙色数字角标画成图片 | 中 |
 | 可直接回复的系统通知 | `UNUserNotificationCenter` + `UNTextInputNotificationAction` | 低 |
 | ⌥Space 全局唤出 | 系统没有 SwiftUI 接口；用 Carbon 的 `RegisterEventHotKey`（不需要辅助功能权限），或 KeyboardShortcuts 这类封装库 | 中 |
@@ -347,6 +351,23 @@ macOS 上是 SwiftUI 加 AppKit（UIKit 是 iOS 的；Mac Catalyst 做菜单栏�
 | Gateway 连接 | `URLSessionWebSocketTask`（可以带 Access 和 Hermes 的请求头）+ 自己写的 JSON-RPC 层，类型从 OpenRPC 生成 | 中 |
 | 云桌面画面 | 见上面「画面客户端」：自己写精简的 RFB 客户端，画面是 AppKit 的 `NSView`，接管条浮在上面用玻璃 | 高 |
 | 点画面接管、点外面交还 | 画面视图成为第一响应者；`NSEvent.addLocalMonitorForEvents` 只看本 App 里的点击，所以切到别的 App 不会交还 | 中 |
+
+### 对话的显示
+
+- **工具调用**：连着的几条工具调用折成一行「用了 3 个工具 · web_search、read_file、web_extract」，点一下展开，再点收起，展开不记住。一轮还在跑时，最近的那几条照常一条一条显示，等这一轮的回复完成（`message.complete`）再折起来；后面已经接上助手的话的那几条不用等（和官方桌面端一样）。只有一条的不折，它本来就是一行。看板卡片（`kanban_create`）照常显示，夹在中间时前后各折各的。从 transcript 读进来的轮次已经结束，直接是折好的。
+- **折起来那一行的 id** 取这一段最后一条工具调用的 id（`tools-<id>`）：更早的页加在上面，被页边界切开的一段补上前半截后 id 不变，往上加页时照旧用 `scrollTo` 停在原来那一行；直播时的工具行就用 transcript 给它的 id（`tool-<tool_call_id>`），重连重读后也一样。
+- **Markdown**：助手的回复按 GitHub 的写法显示：标题、段落、有序 / 无序 / 嵌套列表、任务列表、代码块（等宽，长行横向滚）、行内代码、引用、表格（对齐照 `:--` / `:-:` / `--:`）、链接（没写成链接的网址也能点）、分隔线、删除线；图片只显示文字和链接。换行和标点照原样（不把直引号换成弯引号）。回复完成后一块一块地能选。流式输出时，最后一个空行（不在代码块里）之前的块已经完整，先排好，后面的跟着光标显示原文；完成后整条再排一次。
+- **不卡**：解析结果按消息 id 和文字缓存（`MarkdownCache`，最多 400 条），长对话滚动、`LazyVStack` 重建行时不再解析；流式输出时只解析新完整的那一块。在 Linux 上用 release 编译量过：20 KB 的回复解析一次约 12 毫秒，每来一段文字找可以排版到哪里约 0.1 毫秒。
+- **选型**（2026 年 11 月）：
+
+  | | 结论 |
+  | --- | --- |
+  | Apple 的 swift-markdown（cmark-gfm）+ 自己写 SwiftUI 渲染 | **用这个**。swiftlang 维护，Swift 工具链和 DocC 在用，2026 年还在发版（0.8.0 五月、0.9.0 九月）；依赖只有 swift-cmark；GFM 的表格和对齐、任务列表、删除线都在语法树里；样式跟 `Theme.swift` 一致；解析那一半不碰 SwiftUI，在 Linux 上也能编译和测试 |
+  | MarkdownUI | 2025 年 12 月起是维护模式，最后一次改代码在 2024 年 10 月，作者转去做 Textual |
+  | Textual（MarkdownUI 的后继） | 在维护（0.5.0，2026 年 6 月），能跨块连续选中；但还是 0.x，接口还在变，要用它自己的一套样式 |
+  | `AttributedString(markdown:)` 的 `PresentationIntent` | 不加依赖，能解析表格和对齐，但没有任务列表；`Text` 显示不了表格，块要从一串 run 里拼回来，还是要自己排版 |
+
+  代价是不能跨块连续选中，只能一块一块地选。包用 XcodeGen 的 `packages` 加在 `macos/project.yml`，版本限在 0.9.x。
 
 ## 界面原则（SwiftUI 版照这个来）
 
@@ -396,7 +417,7 @@ open Shion.xcodeproj
 - **Access 要允许浏览器登录**：登录窗口不带 service token，要像普通浏览器一样先登录 Access。在 Cloudflare Zero Trust 里打开这个 Hermes 应用的策略，除了给 Shion 用的 Service Auth（service token）那条，再加一条 Allow：Include 选 Emails，填你自己的邮箱。登录方式用 One-time PIN（邮箱验证码），在「设置 → 身份验证」里打开。用普通浏览器打开 Hermes 的地址，看到 Access 的登录页、能用邮箱验证码进去，就说明设好了。
 - **服务器要开账号密码登录**：在 `~/.hermes/config.yaml` 的 `dashboard.basic_auth` 下设 `username` 和 `password`（或者更好的 `password_hash`），再设 `secret`，然后重启 gateway。`secret` 用 `openssl rand -base64 32` 生成；不设的话每次启动都换一个随机值，gateway 一重启所有登录都失效，Shion 要重新登录。也可以用环境变量 `HERMES_DASHBOARD_BASIC_AUTH_USERNAME`、`_PASSWORD`、`_SECRET`。
 - **还是想用会话令牌**：登录方式选「会话令牌」，填服务器上的 `HERMES_DASHBOARD_SESSION_TOKEN`，点「连接」。
-- **服务器那边**：`/api/ws` 要由 `hermes gateway` 提供，Canonical 协议只在它上面有；单独跑的 `hermes serve` / `hermes dashboard` 说的是旧协议。`HERMES_DASHBOARD_SESSION_TOKEN` 要事先设好，不设的话每次启动都是随机值。经 Cloudflare Tunnel 转到本机端口时，Webapp 的 `public_url` 要填对外的地址，不然 Host 对不上会被拒（4403）。
+- **服务器那边**：`/api/ws` 要由 `hermes gateway` 提供，Canonical 协议只在它上面有；单独跑的 `hermes serve` / `hermes dashboard` 说的是旧协议。`HERMES_DASHBOARD_SESSION_TOKEN` 要事先设好，不设的话每次启动都是随机值。经 Cloudflare Tunnel 转到本机端口时，Webapp 的 `public_url` 要填对外的地址，不然 Host 对不上会在握手时就被拒：Hermes 在接受连接之前用 4403 关闭，客户端看到的是 HTTP 403。
 - **连不上时**：Shion 连之前会先用 HTTP 查一遍，设置里会写出是哪一步不对：Cloudflare Access 没放行；服务器没开浏览器登录（`/api/status` 的 `auth_flows` 里没有 `native_pkce`）；登录过期了；服务器没开会话令牌登录（`auth_providers` 里没有 `session-token`）；令牌对不上（`/api/auth/me` 返回 401）；或者 WebSocket 被拒（带 HTTP 状态码）。也可以在终端自己查，这是 Hermes 文档给的检查方法，加上 Access 的两个头：
 
   ```bash
@@ -418,7 +439,7 @@ open Shion.xcodeproj
 
   设置看 `hermes config show`（或 `~/.hermes/config.yaml` 里的 `dashboard:` 一节）。改了令牌要重启 gateway。
 - **开会话令牌登录**：在运行 `hermes gateway` 的环境里设 `HERMES_DASHBOARD_SESSION_TOKEN`（可以写进 `~/.hermes/.env`；也可以写成 `file:<路径>` 指向一个只放令牌的文件），确认 `dashboard.session_token_auth.enabled` 没设成 `false`，再重启 gateway。令牌用 `python3 -c "import secrets; print(secrets.token_urlsafe(32))"` 生成，至少 32 个字符。它能完全操作这台 Hermes，当密码保管；换了令牌，Shion 里也要换。
-- **现在能用的**：助手列表（每个 profile 一个助手）、每个助手的 Bot Chat（打开时先取最近 50 行，往上滑再一页一页取更早的；发消息、流式回复、工具调用；回复里的粗体、斜体、代码和链接按 Markdown 显示）、批准和提问（连上后在后台接上每个助手已有的 Bot Chat，不取历史，所以没打开过的对话里的批准和提问也会到「等你确认」，侧栏也能看到谁在忙），系统通知（批准可以直接在通知里点「允许这一次」或「拒绝」，提问和回复可以直接在通知里回；对话或「等你确认」正开在眼前时不发；Dock 图标上是等你确认的件数）、看板（服务器的卡片、实时更新、拖动换列、新建、详情、评论署登录名、切换看板）、今天页的「助手在做」和对话里的卡片（取自所有看板）、设置里的看板上限（取自服务器）。服务器装了 `shion` 插件（`hermes-plugin/`，装法见那里的 README）时，今天页顶部詩音写的那段话、待办（勾掉、确认日期、新加都写回插件）和日报也来自服务器；助手经插件改了数据，Shion 一秒左右就收到推送，断线时漏掉的推送在重连时和每 5 分钟补一次。没装插件时这几页照旧是示例数据。日程和云桌面还是示例数据。
+- **现在能用的**：助手列表（每个 profile 一个助手）、每个助手的 Bot Chat（打开时先取最近 50 行，往上滑再一页一页取更早的；发消息、流式回复；工具调用在这一轮回复完成后折成一行，点开能看每一条；回复按 Markdown 显示，表格、列表、代码块都排好，见「对话的显示」）、批准和提问（连上后在后台接上每个助手已有的 Bot Chat，不取历史，所以没打开过的对话里的批准和提问也会到「等你确认」，侧栏也能看到谁在忙），系统通知（批准可以直接在通知里点「允许这一次」或「拒绝」，提问和回复可以直接在通知里回；对话或「等你确认」正开在眼前时不发；Dock 图标上是等你确认的件数）、看板（服务器的卡片、实时更新、拖动换列、新建、详情、评论署登录名、切换看板）、今天页的「助手在做」和对话里的卡片（取自所有看板）、设置里的看板上限（取自服务器）。服务器装了 `shion` 插件（`hermes-plugin/`，装法见那里的 README）时，今天页顶部詩音写的那段话、待办（勾掉、确认日期、新加都写回插件）和日报也来自服务器；助手经插件改了数据，Shion 一秒左右就收到推送，断线时漏掉的推送在重连时和每 5 分钟补一次。没装插件时这几页照旧是示例数据。日程和云桌面还是示例数据。
 - **助手**：设置（⌘,）的「助手」一栏选谁当总秘书、哪些助手在 Shion 里不显示（Hermes 自己的默认 profile 删不掉，不用就不显示），按服务器地址存在这台 Mac 上；没选过时名叫 `shion` 的 profile 当总秘书，没有就是默认 profile。总秘书决定今天页那段话、「跟詩音说」和 shion 插件在哪个 profile 里调用，换成没装插件的助手，今天、待办和日报回到示例数据。「新建助手…」（那一栏，或侧栏右键）经 `profiles.create` 建 profile：名字、显示名、简介、SOUL、模型，可以复制一个现有的；不复制时 Hermes 把服务器自己的密钥和模型给它。每个助手有自己的设置页（侧栏右键「助手设置…」，或对话页顶部的按钮）：显示名（写进 `ui_meta`，和 Bot Mode 同一处）、简介、SOUL、模型、MCP 服务器（添加、删除、开关、测试、OAuth 登录、从目录安装）、技能（开关，锁住的有标记）、工具，还有危险命令的审批方式、记忆、每轮步数上限；最下面删除这个助手（默认 profile 和总秘书除外）。每个请求都写明是哪个 profile：路径里带名字，或者 `?profile=`；Shion 从不调 `POST /api/profiles/active`。删除、替换 SOUL、服务器提醒要确认的模型都先问你。MCP 的令牌和环境变量用密码框输入，只在添加时发给服务器，Shion 不显示、不保存，也不调 `/api/env/reveal`。
 - **连接方式**照官方桌面端连远端的做法：`wss://<地址>/api/ws?token=<登录凭证或会话令牌>`，不带子协议，每个请求带 Cloudflare Access 的两个头；连上后等 `gateway.ready`、发 `client.capabilities`，按服务器要求每 15 秒 `gateway.ping`；连上过又断了会自动重连，并重新打开刚才的对话。登录凭证被拒时先续一次再试，续不上才算登录过期。
 
@@ -426,11 +447,11 @@ open Shion.xcodeproj
 
 界面靠 CI 截图来看，不在本地开模拟器：
 - **什么时候跑**：只有 `macos/` 或这个工作流改了才跑，也可以在 Actions 里手动触发；同一分支上新的提交会取消还没跑完的那次。
-- **跑什么**：在 `xcode-27` runner（macOS 27、Apple 芯片）上生成工程、编译，再跑 `ShionUITests`：每个页面用启动参数直接打开（`-ShionSnapshot YES -ShionRoute today -ShionAppearance dark`），等界面稳定后截窗口（`assistant-shion` 是詩音的助手设置页，示例数据）；另外点开菜单栏面板截整个屏幕，按 ⌘, 截设置窗口（还有已登录和会话令牌两种设置）。
-- **浏览器登录、看板和助手的端到端测试**：runner 上没有真的 Cloudflare 和 Hermes，`macos/ci/fake_hermes.py` 两个都演：Access 按严格 service token 认证来（带 token 的请求只看 token、不发 cookie，错的 token 直接 403；不带 token 的浏览器转去另一个域名上的 Access 登录页，登录后靠 cookie 放行）；登录页自己填用户名密码提交；检查 PKCE、回调地址和 state；发登录凭证；`/api/ws` 说 JSON-RPC。替身还照 Hermes 的接口检查参数：`session.resume`、`session.transcript`、`session.create` 不认识的键一律 `invalid_params`，`source` 和 `client` 也照规则查。`SignInTests` 在设置里填好地址，点「用浏览器登录…」，等登录完、连上、助手列表换成服务器的；先到「等你确认」：没打开过的课程的对话发来一个批准，点「允许这一次」，替身记下回答；再看今天、待办、日报是不是插件里的（替身里的插件在 `macos/ci/fake_shion.py`）：勾掉一条待办，等课程经插件加的那条推过来；再打开詩音的对话（135 行，先只来最近 50 行；照 Hermes 的样子，压缩行和存它的那条消息共用 `row_id`，工具行没有 `row_id`），发一句、等回复，往上滑到第一条，看压缩行、第一条和后面的工具行都在；打开通勤的对话（新建）；最后看设置里的看板上限是不是服务器的值。每一步截一张（`signin-*.png`）。替身还演看板插件（`macos/ci/fake_kanban.py`：两块看板，`/workflow` 的移动规则、400 和 409 的拒绝、做完后把子卡升到就绪、`/events` 的 WebSocket，调了 `/dispatch` 会在记录里标出来）；`BoardTests` 登录后打开看板，看服务器的卡和每种「在等什么」，点开卡住的卡看评论和运行记录，留一条言（替身记下作者，要显示成「你」）并让它继续，把一张卡拖到「完成」（拖不动就用右键菜单），新建一张；再到詩音的对话里说「派一张卡」，替身照 Hermes 的样子演她调 `kanban_create`（开始时带参数，结束时结果里有卡的编号），几秒后课程做完，替身发看板的通知行，再让詩音接着说一句：对话里要先出现那张卡，再变成「完成」，通知行也显示成卡；换个页面再回来重新读对话，两张卡都还在；然后换到另一块看板，最后看今天页的「助手在做」列出两块看板上在做的卡（`board-*.png`）。替身还演 profile 这一套（`macos/ci/fake_profiles.py`：`profiles.list`、`profiles.create`、`profiles.configure` 照 Hermes 的参数检查和拒绝方式，`ui_meta` 按版本号比对，贵的模型要确认；`/api/profiles`、SOUL、简介、`/api/mcp/*`、`/api/skills`、`/api/tools/toolsets`、`/api/config?profile=`；删默认 profile 照 Hermes 返回 400；shion 插件只装在詩音的 profile 里；比 Hermes 严的一处：按 profile 的接口不带 `?profile=` 直接拒绝）；`BotsTests` 登录后把总秘书换成课程（今天页回到示例数据）再换回詩音，看默认 profile 的设置页上删不了，在设置里把它设成不显示，从侧栏右键新建一个助手，改它的简介和 SOUL（替换前要确认），加一个 MCP 服务器并测试，关掉一个技能，重新打开这一页看这些都从服务器读回来了，最后删掉它（`bots-*.png`）。每个测试各用一个新起的替身，课程的批准、它加的待办这类只发一次的事不会被前一个测试用掉，`BotsTests` 改过的 profile 也不会留给别的测试。替身的请求记录（`fake_hermes-SignInTests.log`、`fake_hermes-BoardTests.log`、`fake_hermes-BotsTests.log`，密钥只记名字）也在附件里。这一步失败只报警告，截图和安装包照样出。
+- **跑什么**：在 `xcode-27` runner（macOS 27、Apple 芯片）上生成工程、编译，再跑 `ShionUITests`：每个页面用启动参数直接打开（`-ShionSnapshot YES -ShionRoute today -ShionAppearance dark`），等界面稳定后截窗口（对话截詩音和课程的两段：折起来的工具调用，排好的表格、列表、代码块、引用和任务列表；`assistant-shion` 是詩音的助手设置页，示例数据）；另外点开菜单栏面板截整个屏幕，按 ⌘, 截设置窗口（还有已登录和会话令牌两种设置）。
+- **浏览器登录、看板和助手的端到端测试**：runner 上没有真的 Cloudflare 和 Hermes，`macos/ci/fake_hermes.py` 两个都演：Access 按严格 service token 认证来（带 token 的请求只看 token、不发 cookie，错的 token 直接 403；不带 token 的浏览器转去另一个域名上的 Access 登录页，登录后靠 cookie 放行）；登录页自己填用户名密码提交；检查 PKCE、回调地址和 state；发登录凭证；`/api/ws` 说 JSON-RPC。替身还照 Hermes 的接口检查参数：`session.resume`、`session.transcript`、`session.create` 不认识的键一律 `invalid_params`，`source` 和 `client` 也照规则查。`SignInTests` 在设置里填好地址，点「用浏览器登录…」，等登录完、连上、助手列表换成服务器的；先到「等你确认」：没打开过的课程的对话发来一个批准，点「允许这一次」，替身记下回答；再看今天、待办、日报是不是插件里的（替身里的插件在 `macos/ci/fake_shion.py`）：勾掉一条待办，等课程经插件加的那条推过来；再打开詩音的对话（135 行，先只来最近 50 行；照 Hermes 的样子，压缩行和存它的那条消息共用 `row_id`，工具行没有 `row_id`），发一句、等回复，往上滑到第一条，看压缩行、第一条都在，后面那轮的两次工具调用折成了一行；打开通勤的对话（新建）；最后看设置里的看板上限是不是服务器的值。每一步截一张（`signin-*.png`）。替身还演看板插件（`macos/ci/fake_kanban.py`：两块看板，`/workflow` 的移动规则、400 和 409 的拒绝、做完后把子卡升到就绪、`/events` 的 WebSocket，调了 `/dispatch` 会在记录里标出来）；`BoardTests` 登录后打开看板，看服务器的卡和每种「在等什么」，点开卡住的卡看评论和运行记录，留一条言（替身记下作者，要显示成「你」）并让它继续，把一张卡拖到「完成」（拖不动就用右键菜单），新建一张；再到詩音的对话里说「派一张卡」，替身照 Hermes 的样子演她调 `kanban_create`（开始时带参数，结束时结果里有卡的编号），几秒后课程做完，替身发看板的通知行，再让詩音接着说一句：对话里要先出现那张卡，再变成「完成」，通知行也显示成卡；在设置里断开再连上，对话从服务器重新读一遍（对话记录只留调用、不留结果），两张卡都还在、都是「完成」；然后换到另一块看板，再看今天页的「助手在做」列出两块看板上在做的卡；最后回到詩音的对话说「列一下这周的作业」，替身照 Hermes 的样子演一轮：三次工具调用（中间隔一会儿，跑着的时候能看到），再一段一段地回一张表：表格的格子要单独显示出来（不是带竖线的原文），回复完成后三次调用折成一行，点开能看到每一条（`board-*.png`）。替身还演 profile 这一套（`macos/ci/fake_profiles.py`：`profiles.list`、`profiles.create`、`profiles.configure` 照 Hermes 的参数检查和拒绝方式，`ui_meta` 按版本号比对，贵的模型要确认；`/api/profiles`、SOUL、简介、`/api/mcp/*`、`/api/skills`、`/api/tools/toolsets`、`/api/config?profile=`；删默认 profile 照 Hermes 返回 400；shion 插件只装在詩音的 profile 里；比 Hermes 严的一处：按 profile 的接口不带 `?profile=` 直接拒绝）；`BotsTests` 登录后把总秘书换成课程（今天页回到示例数据）再换回詩音，看默认 profile 的设置页上删不了，在设置里把它设成不显示，从侧栏右键新建一个助手，改它的简介和 SOUL（替换前要确认），加一个 MCP 服务器并测试，关掉一个技能，重新打开这一页看这些都从服务器读回来了，最后删掉它（`bots-*.png`）。每个测试各用一个新起的替身，课程的批准、它加的待办这类只发一次的事不会被前一个测试用掉，`BotsTests` 改过的 profile 也不会留给别的测试。替身的请求记录（`fake_hermes-SignInTests.log`、`fake_hermes-BoardTests.log`、`fake_hermes-BotsTests.log`，密钥只记名字）也在附件里。这一步失败只报警告，截图和安装包照样出。
 - **截图模式**：日期固定在 2026 年 11 月 9 日（周一）10:52，外观对整个 App 生效（菜单栏面板也跟着变），呼吸点不动。动画停下来 App 才算空闲，XCTest 不用干等，一次运行从 4.3 分钟降到 2.3 分钟。
 - **runner 的屏幕**：1024×768、1 倍，所以窗口截出来是 1024×674，比默认窗口小，正好看窄窗口下的布局。
-- **看哪里**：截图打包成这次运行的 `shots` 附件（保留 14 天），文件名是「页面-外观.png」。编译失败时，最后一步会列出错误；编译警告（xcodebuild 的警告不会自己变成注解）由「Compiler warnings」一步列成这次运行的注解，所以一次运行没有注解，就是没有警告。
+- **看哪里**：截图打包成这次运行的 `shots` 附件（保留 14 天），文件名是「页面-外观.png」。编译失败时，最后一步会列出错误；编译警告（xcodebuild 的警告不会自己变成注解）由「Compiler warnings」一步列成这次运行的注解，所以一次运行没有注解，就是没有警告。端到端测试失败时，那一步从结果包里打出失败的断言和消息（`-quiet` 不打）；XCTest 在找不到元素时存的界面层级（「App UI hierarchy」）也在附件里，同名的按新旧编号，不互相覆盖。
 - **省时间**：macOS runner 的分钟数有限，攒够一批改动再推；只改 README 这类文件不会触发。
 
 ## 路线图

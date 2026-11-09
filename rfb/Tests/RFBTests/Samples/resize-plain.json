@@ -1,0 +1,1 @@
+{"name": "resize-plain", "script": "resize", "size": "640x480", "pointer": [600, 440], "xvnc": "TigerVNC 1.13.1", "probe_options": "--no-extended-desktop-size"}

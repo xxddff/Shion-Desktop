@@ -1,0 +1,1 @@
+{"name": "raw", "script": "raw", "size": "400x300", "pointer": [360, 260], "xvnc": "TigerVNC 1.13.1", "probe_options": "--encodings raw,copyrect --no-continuous"}

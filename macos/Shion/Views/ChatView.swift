@@ -9,16 +9,20 @@ struct ChatView: View {
     @State private var viewport: CGFloat = 0
     /// The transcript is too short to scroll, so its top is always in view.
     @State private var short = false
+    /// Folded runs of tool calls opened by a click, by line id; not kept once the chat closes.
+    @State private var openRuns: Set<String> = []
 
     var body: some View {
         let bot = store.bot(botId)
         let items = store.chats[botId] ?? []
+        let lines = ChatLine.lines(items, replying: store.replying.contains(botId))
         ScrollViewReader { reader in
-            transcript(items, bot: bot)
-                // older rows arrived above: the rows that were at the top stay where they were
+            transcript(lines, bot: bot)
+                // older rows arrived above: the rows that were at the top stay where they were (a
+                // run of tool calls the page boundary cut is one line with the calls before it)
                 .onChange(of: items.first?.id) { previous, _ in
-                    guard let previous, items.contains(where: { $0.id == previous }) else { return }
-                    reader.scrollTo(previous, anchor: .top)
+                    guard let previous, let line = lines.first(where: { line in line.items.contains { $0.id == previous } }) else { return }
+                    reader.scrollTo(line.id, anchor: .top)
                 }
         }
         .overlay {
@@ -48,14 +52,21 @@ struct ChatView: View {
     }
 
     /// The rows, newest at the bottom. Older pages load as the top comes into view.
-    private func transcript(_ items: [ChatItem], bot: Bot?) -> some View {
+    private func transcript(_ lines: [ChatLine], bot: Bot?) -> some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 14) {
                 if store.olderPages[botId] != nil || store.olderErrors[botId] != nil {
                     OlderMessages(botId: botId)
                 }
-                ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                    ChatRow(item: item, bot: bot, showHead: showsHead(items, index))
+                ForEach(Array(lines.enumerated()), id: \.element.id) { index, line in
+                    switch line {
+                    case .item(let item):
+                        ChatRow(item: item, bot: bot, showHead: showsHead(lines, index))
+                    case .tools(let id, let tools):
+                        ToolRun(tools: tools, open: openRuns.contains(id)) {
+                            openRuns.formSymmetricDifference([id])
+                        }
+                    }
                 }
             }
             .padding(.horizontal, 40)
@@ -99,11 +110,10 @@ struct ChatView: View {
     }
 
     /// The assistant's name shows once per run of its messages, again after ten quiet minutes.
-    private func showsHead(_ items: [ChatItem], _ index: Int) -> Bool {
-        guard items[index].role == .assistant else { return false }
-        guard index > 0 else { return true }
-        let previous = items[index - 1]
-        return previous.role != .assistant || items[index].at.timeIntervalSince(previous.at) > 600
+    private func showsHead(_ lines: [ChatLine], _ index: Int) -> Bool {
+        guard case .item(let item) = lines[index], item.role == .assistant else { return false }
+        guard index > 0, case .item(let previous) = lines[index - 1] else { return true }
+        return previous.role != .assistant || item.at.timeIntervalSince(previous.at) > 600
     }
 }
 
@@ -171,10 +181,51 @@ struct ChatRow: View {
         case .assistant:
             AssistantMessage(item: item, bot: bot, showHead: showHead)
         case .tool:
-            Label(item.text, systemImage: "wrench.adjustable")
+            ToolLine(text: item.text)
+        }
+    }
+}
+
+/// One tool call: the tool, and what it was called on.
+struct ToolLine: View {
+    let text: String
+
+    var body: some View {
+        Label(text, systemImage: "wrench.adjustable")
+            .font(.t12)
+            .foregroundStyle(.secondary)
+            .lineLimit(2)
+    }
+}
+
+/// A finished run of tool calls as one line (ChatLines.swift); a click opens it to the calls.
+struct ToolRun: View {
+    let tools: [ChatItem]
+    let open: Bool
+    let toggle: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button(action: toggle) {
+                HStack(spacing: 5) {
+                    Label(tools.toolSummary, systemImage: "wrench.adjustable")
+                        .lineLimit(1)
+                    Image(systemName: open ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .accessibilityHidden(true)
+                }
                 .font(.t12)
                 .foregroundStyle(.secondary)
-                .lineLimit(2)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("tool-run")
+            if open {
+                ForEach(tools) { tool in
+                    ToolLine(text: tool.text)
+                        .padding(.leading, 18)
+                }
+            }
         }
     }
 }
@@ -184,12 +235,6 @@ struct AssistantMessage: View {
     let item: ChatItem
     let bot: Bot?
     let showHead: Bool
-
-    /// Bold, italics, code and links, with the line breaks kept; headings and lists stay as written.
-    static func markdown(_ text: String) -> AttributedString {
-        let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        return (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)
-    }
 
     var body: some View {
         let todos = item.todoIds.compactMap { store.todo($0) }
@@ -204,18 +249,11 @@ struct AssistantMessage: View {
             if item.text.isEmpty && item.streaming {
                 BusyDots()
             } else if item.streaming {
-                // selectable text keeps the accessibility value it was created with, so a reply
-                // becomes selectable once it is whole
-                Text(item.text + " ▍")
-                    .font(.t13)
-                    .lineSpacing(3)
-                    .fixedSize(horizontal: false, vertical: true)
+                StreamingReply(id: item.id, text: item.text)
             } else {
-                Text(Self.markdown(item.text))
-                    .font(.t13)
-                    .lineSpacing(3)
+                // parsed once per text (MarkdownCache); a block at a time selects
+                MarkdownView(blocks: MarkdownCache.shared.document(item.id, item.text).blocks)
                     .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
             }
             if !todos.isEmpty {
                 VStack(spacing: 0) {

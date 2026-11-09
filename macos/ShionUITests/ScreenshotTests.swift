@@ -6,7 +6,7 @@ import XCTest
 /// .github/workflows/macos.yml), so the UI can be reviewed from pictures. The app pins its demo
 /// date and stills its animations in snapshot mode, so runs are comparable.
 final class ScreenshotTests: XCTestCase {
-    private let routes = ["today", "confirm", "todos", "calendar", "reports", "board", "desktop", "chat-shion"]
+    private let routes = ["today", "confirm", "todos", "calendar", "reports", "board", "desktop", "chat-shion", "chat-study"]
 
     @MainActor
     func testEveryPage() throws {
