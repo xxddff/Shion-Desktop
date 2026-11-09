@@ -80,6 +80,10 @@ public final class PlainWebSocketTransport: RFBTransport, @unchecked Sendable {
     public func receive() async throws -> [UInt8]? { try await pump.next() }
 
     public func close(_ code: RFBCloseCode) async {
+        if code == .abort {
+            socket.close()
+            return
+        }
         sendClose(code == .normal ? 1000 : 1001)
         // Give the server a moment to answer, then drop the socket.
         try? await Task.sleep(nanoseconds: 200_000_000)

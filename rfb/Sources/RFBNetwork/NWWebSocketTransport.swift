@@ -187,6 +187,10 @@ public final class NWWebSocketTransport: RFBTransport, @unchecked Sendable {
     }
 
     public func close(_ code: RFBCloseCode) async {
+        if code == .abort {
+            connection.forceCancel()
+            return
+        }
         let metadata = NWProtocolWebSocket.Metadata(opcode: .close)
         metadata.closeCode = .protocolCode(code == .normal ? .normalClosure : .goingAway)
         let context = NWConnection.ContentContext(identifier: "close", metadata: [metadata])

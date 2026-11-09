@@ -15,7 +15,7 @@ Shion 的「云桌面」要看、要接管 VPS 上助手的 Xfce 桌面。Hermes
 | 伪编码 | DesktopSize、ExtendedDesktopSize、LastRect；Cursor（接管用，默认不开） |
 | TigerVNC 扩展 | Fence（应答服务器的请求）、EnableContinuousUpdates、扩展剪贴板（UTF-8 文本） |
 | 输入消息 | KeyEvent、PointerEvent（含滚轮）、ClientCutText（Latin-1 和扩展剪贴板）。格式做对、测好了，还没接界面 |
-| 传输 | `URLSessionWebSocketTransport`（App 用，可带 Access 的请求头）、`PlainWebSocketTransport`（自带的 `ws://` 客户端，Linux 测试用）、`SocketTransport`（TCP / Unix socket，直连 Xvnc）、`RecordingTransport` / `ReplayTransport`（录样本、放样本） |
+| 传输 | `NWWebSocketTransport`（App 用：Network.framework，可带 Access 的请求头，有连接超时）、`URLSessionWebSocketTransport`（备用：服务器主动关闭时拿不到关闭码，见「探路发现」第 15 条）、`PlainWebSocketTransport`（自带的 `ws://` 客户端，Linux 测试用）、`SocketTransport`（TCP / Unix socket，直连 Xvnc）、`RecordingTransport` / `ReplayTransport`（录样本、放样本） |
 | 命令行 | `rfb-probe`：连上去、录下字节流、存一张 PNG |
 
 不做的：SetDesktopSize（会连助手的分辨率一起改）、QEMU 扩展键盘、Tight / JPEG、VNC 密码等认证、颜色表格式。客户端永远请求同一种像素格式：32 位、深度 24、小端，内存里是 B、G、R、X，正好是 IOSurface / CoreGraphics 的 BGRA，也是 Xvnc 在 `-depth 24` 下的原生格式，服务器不用转换。
@@ -28,7 +28,7 @@ rfb/
 ├ Sources/
 │ ├ CZlib/        系统 zlib 的 module map
 │ ├ RFB/          协议核心，不依赖 Foundation：握手、消息、解码、帧缓冲、PNG
-│ ├ RFBNetwork/   传输：URLSession WebSocket、自带 ws:// 客户端、TCP / Unix socket
+│ ├ RFBNetwork/   传输：Network.framework 和 URLSession 的 WebSocket、自带 ws:// 客户端、TCP / Unix socket
 │ └ rfb-probe/    命令行小程序
 ├ Tests/RFBTests/ 测试；Samples/ 是录下的 Xvnc 会话和对应的真实画面
 └ testbed/        测试环境：Xvnc + 画面桥（用 Hermes 自己的 rfb_filter.py）
@@ -43,11 +43,11 @@ import RFB
 import RFBNetwork
 
 // wss://<网关>/api/display/ws?display_ticket=<ticket>；ticket 一次性、30 秒，不写进日志
-var request = URLRequest(url: displayURL)
-request.setValue(accessClientID, forHTTPHeaderField: "CF-Access-Client-Id")
-request.setValue(accessClientSecret, forHTTPHeaderField: "CF-Access-Client-Secret")
-
-let client = RFBClient(transport: URLSessionWebSocketTransport(request: request))
+let transport = NWWebSocketTransport(url: displayURL, headers: [
+    ("CF-Access-Client-Id", accessClientID),
+    ("CF-Access-Client-Secret", accessClientSecret),
+])
+let client = RFBClient(transport: transport)
 let info = try await client.handshake()          // info.width, info.height, info.name（"hermes:<profile>"）
 
 let task = Task {
@@ -71,8 +71,10 @@ let task = Task {
         case .controlTaken: break                  // 4000：别人接管了，换新 ticket 回到只看
         case .badTicket: break                     // 4401：ticket 过期或用过了，重新 display.observe
         case .desktopGone: break                   // 4001：桌面没在运行
-        default: break                             // 其他（含 1006 网络断开）：重连，控制权还在你手里
+        default: break                             // 没有关闭码：看租约再决定，见下面
         }
+    } catch {
+        // 其他错误（连不上、网络断了）：同样看租约
     }
 }
 
@@ -84,6 +86,8 @@ await client.close(.normal)
 - **输入**（`sendKey`、`sendKeyPress`、`sendPointer`、`sendScroll`、`sendClipboard`、`paste`）可以在 `run` 运行时从任何地方调用。没拿到租约时，桥会把它们直接丢掉，不报错。`Keysym` 里有常用键的 keysym 和字符到 keysym 的换算。
 - **剪贴板**：`sendClipboard(text)` 先宣告有文字（Notify），等 Xvnc 来要（Request）时再把 UTF-8 文字交过去（Provide）。`paste(text)` 是「放进剪贴板 + 按 Ctrl+V」，⌘V 和输入法确认的文字都走它。远端程序处理 Ctrl+V 的那一刻 Xvnc 才来取文字，所以连接要一直开着。超过 256 KiB 直接抛 `RFBError.refusedToSend`，不会发出去让桥断开。
 - **光标**：接管时调 `setCursorShapeUpdates(true)`，交还时调 `false`。
+- **连接意外断了，先看租约再决定怎么办。** 关闭码 4000 能直接说明「别人接管了」，但不一定拿得到（第 15 条）。所以没有关闭码时，看 gateway 连接上最新的 `display.lease` 事件（或调 `display.status`）：持有者是别人（`viewer_hash` 不是自己的），就是被挤掉了，回到只看；还是自己，就是网络断了，带原来的 `viewer_id` 重连，控制权还在。
+- **关闭方式**：`close(.normal)`（1000）和 `.goingAway`（1001）都会让桥交还租约；`.abort` 直接断开、不发关闭帧，桥当成网络断开，租约留在你手里。客户端自己也用 `.abort`：发送失败后最多再读 2 秒（`sendFailureGrace`），等不到关闭原因就这样断开，不会误交还。
 - **只看时窗口不可见**：直接 `close(.normal)`，只留缩略图。`setContinuousUpdates(false)` 只是改成一问一答，连接开着，服务器仍当有人在看。
 
 ### 怎么保证只发桥认得的消息
@@ -116,6 +120,7 @@ swift run rfb-probe <url> [选项]
 - `--out 目录`：输出 `server.bin`（服务器发来的全部字节，也就是测试样本）、`client.bin`（我们发的）、`frame.png`（最后的画面）。
 - `--seconds N` / `--updates N`：看多久、收多少帧后停。
 - `--no-continuous`、`--no-pipeline`、`--no-extended-desktop-size`、`--encodings zrle,copyrect,raw`：对比用。
+- `--transport network|urlsession|plain`：默认在 Apple 平台上用 Network.framework，在 Linux 上用自带的 `ws://` 客户端。
 - `--paste 文本`：拿到画面后把文字放进远端剪贴板（要持有租约）。
 - `--type 文本`：拿到画面后用「剪贴板 + Ctrl+V」把文字打到远端光标处（要持有租约）。
 - `--cursor-after 秒数`、`--move-pointer X,Y`：试接管时的光标行为。
@@ -164,7 +169,8 @@ RFB_TESTBED_PYTHON=~/testbed-venv/bin/python3 swift test
 - **ZRLE**：每种子编码（raw、solid、2/3/16 色调色板、plain RLE、调色板 RLE）、64×64 分块和边缘的小块、跨矩形延续的 zlib 流、各种坏数据。
 - **消息**：每种客户端消息的字节、剪贴板大小限制、扩展剪贴板的来回、Fence 应答、连续更新只在服务器支持时打开、握手失败、流水线握手、光标形状。
 - **画面桥**：见上面「怎么保证只发桥认得的消息」。需要 python3。
-- **WebSocket 传输**：对 `replay_server.py` 跑：请求头、403、4000 传到调用方、我们关闭时发 1000。macOS 上同时测 `URLSessionWebSocketTransport` 和自带的客户端，Linux 上只测自带的（见下一节）。
+- **WebSocket 传输**：对 `replay_server.py` 跑：请求头、被拒的升级（403）、4000 传到调用方、我们关闭时发 1000。macOS 上测 `NWWebSocketTransport`、`URLSessionWebSocketTransport` 和自带的客户端，Linux 上只测自带的（见下一节）。两个 Apple 传输收 4000 的那一项标成了「已知问题」（第 15 条），它们实际报了什么会打印到 stderr。
+- **连接结束**：写的一侧先坏、读的一侧还排着关闭帧时，客户端照样读完、报出 4000；一直等不到原因时，2 秒后用 `.abort` 断开，不会误交还租约。
 
 ### 在 Linux 上编译
 
@@ -182,7 +188,7 @@ export PATH=$PWD/swift-6.4.2-RELEASE-ubuntu24.04/usr/bin:$PATH
 `.github/workflows/rfb.yml`，只在 `rfb/**` 或这个文件变化时跑：
 
 - **Linux**（ubuntu-24.04）：装 Swift（缓存）、`swift build`、`swift test`（含 WebSocket 测试），再装 Xvnc 跑 `testbed/smoke.sh`。
-- **macOS**（`xcode-27`）：`swift build`、`swift test`，主要确认 Apple 平台能编、`URLSessionWebSocketTransport` 的行为对。macOS 的分钟数有限，只在手动运行时勾选 macos，或提交说明里带 `[macos]` 时才跑。
+- **macOS**（`xcode-27`）：`swift build`、`swift test`，确认 Apple 平台能编，看两个 Apple WebSocket 传输的实际行为。macOS 的分钟数有限，只在手动运行时勾选 macos，或提交说明里带 `[macos]` 时才跑。这次任务跑了 3 次：编译和核心测试全过；传输层的结果见「探路发现」第 15 条。
 
 ## 探路发现
 
@@ -202,6 +208,11 @@ export PATH=$PWD/swift-6.4.2-RELEASE-ubuntu24.04/usr/bin:$PATH
 12. **接管期间缩略图是空的。** 有人持有租约时，`display.thumbnail` 返回 `data_url: null` 和 `suppressed`，因为画面上可能有正在输入的密码。缩略图和侧栏预览要处理这种情况。
 13. **Origin。** 桥只在请求带了 `http(s)` 的 Origin 时检查它是不是网关自己的域名，没有 Origin 就放行。`URLSessionWebSocketTask` 默认不带 Origin，应该没问题，还没在真服务器上确认。
 14. **桥会把 ClientInit 的共享标志强制改成 1**，Xvnc 也带 `-AlwaysShared`，所以不会因为我们连上去把助手或别人挤掉。
+15. **在 macOS 上，服务器主动关闭时不一定拿得到关闭码。** CI 的 macOS 上，用 `replay_server.py` 放完录像后用 4000 关闭：
+    - `URLSessionWebSocketTask`：读和写都只报 `ENOTCONN`（Socket is not connected），任务结束时 `closeCode` 还是 0，`didCloseWith` 根本没被调用。我们自己关闭时它能正确发出 1000、也能收到对方的 1000。升级被拒（403）时报 `-1011`，状态码从 `task.response` 能拿到。
+    - Network.framework（`NWConnection` + `NWProtocolWebSocket`）：我们自己关闭时能收到服务器回的关闭帧和 1000；这一次 4000 没拿到：客户端正在回一个 Fence，发送先失败了，当时的客户端一遇到发送失败就结束，没去读排在后面的关闭帧。升级被拒时它不给 HTTP 状态，只进入 `waiting(ECONNABORTED)`，所以加了连接超时，`waiting` 也当连不上。
+    - 已经改了客户端：自己回的消息发送失败时继续读，直到传输层报出关闭原因（最多再等 2 秒）。Linux 上用自带的客户端和一个「写坏了、读还在」的测试传输验证过。Apple 的两个传输在改动之后还没再在 macOS 上跑过（macOS 的分钟数有限），下次跑 macOS job 时看 stderr 里的 `run ended with …` 那一行就知道。
+    - 所以 App 用 `NWWebSocketTransport`，并且不只靠关闭码：没有关闭码时看租约（见「用法」）。官方桌面端用浏览器的 WebSocket，能拿到 4000，不受这个影响。
 
 ## 下一步
 
@@ -209,7 +220,7 @@ export PATH=$PWD/swift-6.4.2-RELEASE-ubuntu24.04/usr/bin:$PATH
 
 - 一个 layer-backed 的 `NSView`。按服务器尺寸建一块 BGRA 的 IOSurface（格式和帧缓冲一样，直接逐行拷）。在 `run` 的回调里只拷脏矩形，拷完通知主线程刷新 `CALayer` 的 `contents`。解码和拷贝都不在主线程。
 - 等比缩放，`contentsGravity = .resizeAspect`；收到 `.resized` 换一块 IOSurface。窗口大小只影响本地缩放，不发 SetDesktopSize。
-- 连接管理：只看时窗口不可见就关；4000 换新 ticket 回到只看（照官方，限制连续被挤掉的次数）；4401 重新 `display.observe`；4001 显示已停止；网络断开自动重连，带上原来的 `viewer_id`。
+- 连接管理：只看时窗口不可见就关；4000（或租约显示别人接管了）换新 ticket 回到只看（照官方，限制连续被挤掉的次数）；4401 重新 `display.observe`；4001 显示已停止；网络断开自动重连，带上原来的 `viewer_id`。
 
 ### 接管
 
@@ -244,11 +255,13 @@ targets:
         product: RFBNetwork
 ```
 
-- ticket 由 App 现有的 gateway 连接调 `display.observe` 拿（带 `profile`），WebSocket 地址用同一个网关的域名加返回的 `path`；Access 的两个头从钥匙串取，放进 `URLRequest`。
+- ticket 由 App 现有的 gateway 连接调 `display.observe` 拿（带 `profile`），WebSocket 地址用同一个网关的域名加返回的 `path`；Access 的两个头从钥匙串取，交给 `NWWebSocketTransport`。
+- 连接意外断开时，用 gateway 连接上的 `display.lease` 判断是被挤掉还是网络断了（第 15 条）。
 - App 默认 MainActor 隔离。`run` 的回调在客户端的 actor 上跑，回调里只碰线程安全的东西（IOSurface），要更新界面再切回主线程。
 - 以后搬到单独的仓库：`git subtree split --prefix=rfb -b rfb-split`，推到新仓库，App 改用 `.package(url:)`。包里的东西都自成一体，不用改。
 
 ## 还没验证
 
-- 真服务器：经 Cloudflare Tunnel + Access 的 `wss://`、真实的带宽和延迟、VPS 上的 TigerVNC 版本。`rfb-probe --gateway` 的 `/api/ws` JSON-RPC 调用是照源码写的，没在真的网关上跑过。
-- macOS 上 `URLSessionWebSocketTransport` 的行为靠 CI 的 macOS job 验证（`replay_server.py`），还没对真的网关跑过。
+- 真服务器：经 Cloudflare Tunnel + Access 的 `wss://`（Network.framework 走 TLS 加两个请求头）、真实的带宽和延迟、VPS 上的 TigerVNC 版本。`rfb-probe --gateway` 的 `/api/ws` JSON-RPC 调用是照源码写的，没在真的网关上跑过。
+- 客户端改成「发送失败后继续读」之后，Apple 的两个传输能不能报出 4000（第 15 条）。
+- `URLSessionWebSocketTask.cancel()`（`.abort` 用它）会不会仍然发关闭帧；Network.framework 用的是 `forceCancel()`。

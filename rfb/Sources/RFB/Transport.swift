@@ -15,10 +15,13 @@ public protocol RFBTransport: AnyObject, Sendable {
 
 /// How we close. Only matters on a WebSocket.
 public enum RFBCloseCode: Sendable, Equatable {
-    /// 1000: the viewer closed the screen on purpose.
+    /// 1000: the viewer closed the screen on purpose. Hermes' bridge hands the lease back.
     case normal
-    /// 1001: going away (app quitting).
+    /// 1001: going away (app quitting). The bridge treats it like 1000.
     case goingAway
+    /// No close handshake: just drop the connection, as a network failure would. The bridge then
+    /// keeps the lease with this viewer (it sees 1006), so control is not handed back.
+    case abort
 }
 
 /// The peer closed the connection, with the WebSocket close code and reason when there was one.

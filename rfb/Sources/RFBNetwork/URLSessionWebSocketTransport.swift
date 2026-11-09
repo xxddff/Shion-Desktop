@@ -68,7 +68,11 @@ public final class URLSessionWebSocketTransport: NSObject, RFBTransport, URLSess
     }
 
     public func close(_ code: RFBCloseCode) async {
-        task.cancel(with: code == .normal ? .normalClosure : .goingAway, reason: nil)
+        switch code {
+        case .normal: task.cancel(with: .normalClosure, reason: nil)
+        case .goingAway: task.cancel(with: .goingAway, reason: nil)
+        case .abort: task.cancel()  // no close code of ours; prefer NWWebSocketTransport for a hard drop
+        }
         session.finishTasksAndInvalidate()
     }
 

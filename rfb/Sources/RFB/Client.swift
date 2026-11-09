@@ -59,6 +59,9 @@ public struct RFBOptions: Sendable {
     /// three round trips before the first picture. A server that wants anything else (another
     /// version, real authentication) fails the handshake either way.
     public var pipelineHandshake = true
+    /// After a send of ours fails while running, keep reading this many seconds for the reason
+    /// (the close code usually waits on the read side), then drop the connection.
+    public var sendFailureGrace: Double = 2
     /// Encodings in preference order. Cursor is left out on purpose while only watching: Xvnc
     /// then paints the agent's pointer into the picture.
     public var encodings: [RFBEncoding] = [
@@ -98,6 +101,8 @@ public actor RFBClient {
     private var closed = false
     /// SetPixelFormat and SetEncodings already went out with a pipelined handshake.
     private var setupSent = false
+    /// The first failed send while running; the read side usually reports the close soon after.
+    private var sendFailure: Error?
     /// Cursor pseudo-encoding currently requested.
     public private(set) var cursorShapeUpdates = false
 
@@ -131,6 +136,27 @@ public actor RFBClient {
         let bytes = try message.encoded()
         statistics.bytesSent += bytes.count
         try await transport.send(bytes)
+    }
+
+    /// For what the client sends by itself while running (requests, fence answers, clipboard
+    /// replies). If the connection is going down, the write side often fails first, while the
+    /// reason (the bridge's close code) is still waiting on the read side; so a failed send does
+    /// not end `run`. Reading goes on until the transport reports the close. Should nothing come,
+    /// a half-open connection is closed after a grace period instead of waiting forever.
+    private func sendWhileRunning(_ message: ClientMessage) async {
+        do {
+            try await send(message)
+        } catch {
+            guard sendFailure == nil else { return }
+            sendFailure = error
+            let transport = self.transport
+            let grace = UInt64(max(options.sendFailureGrace, 0) * 1_000_000_000)
+            Task {
+                try? await Task.sleep(nanoseconds: grace)
+                // Not 1000/1001: those tell the bridge we left on purpose and hand the lease back.
+                await transport.close(.abort)
+            }
+        }
     }
 
     // MARK: - handshake
@@ -200,14 +226,19 @@ public actor RFBClient {
     public func run(onEvent: @Sendable (RFBEvent, Framebuffer) -> Void = { _, _ in }) async throws {
         if serverInit == nil { try await handshake() }
         if !setupSent {
-            try await send(.setPixelFormat(.bgrx))
-            try await send(.setEncodings(options.encodings))
+            await sendWhileRunning(.setPixelFormat(.bgrx))
+            await sendWhileRunning(.setEncodings(options.encodings))
             setupSent = true
         }
-        try await requestUpdate(incremental: false)
+        await sendWhileRunning(fullUpdateRequest(incremental: false))
 
         while true {
-            let type = try await u8()
+            let type: UInt8
+            do {
+                type = try await u8()
+            } catch RFBError.endOfStream where sendFailure != nil {
+                throw sendFailure!
+            }
             switch type {
             case 0: try await framebufferUpdate(onEvent)
             case 1: try await colourMapEntries()
@@ -235,8 +266,12 @@ public actor RFBClient {
     /// Requests an update of the whole screen. Only needed when continuous updates are off;
     /// `incremental: false` repaints everything.
     public func requestUpdate(incremental: Bool) async throws {
+        try await send(fullUpdateRequest(incremental: incremental))
+    }
+
+    private func fullUpdateRequest(incremental: Bool) -> ClientMessage {
         let (w, h) = fullScreen
-        try await send(.framebufferUpdateRequest(incremental: incremental, x: 0, y: 0, width: w, height: h))
+        return .framebufferUpdateRequest(incremental: incremental, x: 0, y: 0, width: w, height: h)
     }
 
     /// Whether the pointer comes as a shape to draw locally (Cursor pseudo-encoding) or is painted
@@ -330,7 +365,7 @@ public actor RFBClient {
         if resized { dirty = [RFBRect(x: 0, y: 0, width: framebuffer.width, height: framebuffer.height)] }
         onEvent(.framebufferUpdated(dirty: dirty), framebuffer)
         if !continuousUpdatesEnabled {
-            try await requestUpdate(incremental: true)
+            await sendWhileRunning(fullUpdateRequest(incremental: true))
         }
     }
 
@@ -341,7 +376,7 @@ public actor RFBClient {
         if continuousUpdatesEnabled {
             // The continuous-update area was the old screen; widen it to the new one.
             let (w, h) = fullScreen
-            try await send(.enableContinuousUpdates(enable: true, x: 0, y: 0, width: w, height: h))
+            await sendWhileRunning(.enableContinuousUpdates(enable: true, x: 0, y: 0, width: w, height: h))
         }
     }
 
@@ -368,23 +403,23 @@ public actor RFBClient {
         switch message.action {
         case .caps:
             serverClipboardCaps = message
-            try await send(.extendedClipboard(Self.clientClipboardCaps))
+            await sendWhileRunning(.extendedClipboard(Self.clientClipboardCaps))
             onEvent(.serverClipboardCapabilities(message), framebuffer)
         case .request:
             // Xvnc asks for the text we announced (an X client is pasting).
             if message.formats.contains(.text), let text = pendingClipboard {
-                try await send(.extendedClipboard(.provide(text: text)))
+                await sendWhileRunning(.extendedClipboard(.provide(text: text)))
             }
         case .notify:
             // The server has new clipboard data; ask for it. (Never with SendCutText=0.)
             if message.formats.contains(.text) {
-                try await send(.extendedClipboard(.request(.text)))
+                await sendWhileRunning(.extendedClipboard(.request(.text)))
             }
         case .provide:
             if let text = message.text { onEvent(.serverClipboard(text), framebuffer) }
         case .peek:
             // "Do you still have data?": answer with what we offer.
-            try await send(.extendedClipboard(.notify(pendingClipboard == nil ? [] : .text)))
+            await sendWhileRunning(.extendedClipboard(.notify(pendingClipboard == nil ? [] : .text)))
         }
     }
 
@@ -395,11 +430,11 @@ public actor RFBClient {
         continuousUpdatesEnabled = false
         if wasEnabled {
             onEvent(.continuousUpdates(false), framebuffer)
-            try await requestUpdate(incremental: true)
+            await sendWhileRunning(fullUpdateRequest(incremental: true))
         }
         if wantContinuousUpdates && !wasEnabled {
             let (w, h) = fullScreen
-            try await send(.enableContinuousUpdates(enable: true, x: 0, y: 0, width: w, height: h))
+            await sendWhileRunning(.enableContinuousUpdates(enable: true, x: 0, y: 0, width: w, height: h))
             continuousUpdatesEnabled = true
             onEvent(.continuousUpdates(true), framebuffer)
         }
@@ -414,7 +449,7 @@ public actor RFBClient {
         guard flags.contains(.request) else { return }  // an answer to a fence of ours; we send none
         // We handle messages strictly in order, so BlockBefore / BlockAfter hold by construction.
         // SyncNext is not supported, so it is left out of the answer (as noVNC does).
-        try await send(.fence(flags: flags.intersection([.blockBefore, .blockAfter]), payload: payload))
+        await sendWhileRunning(.fence(flags: flags.intersection([.blockBefore, .blockAfter]), payload: payload))
         statistics.fencesAnswered += 1
     }
 
