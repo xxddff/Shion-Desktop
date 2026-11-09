@@ -128,7 +128,10 @@ NEWS_TURNS = [
 
 def seed_news_transcript():
     """资讯's Bot Chat: the turns above, numbered and gone round, so a page has rows of every
-    height; the newest reply is last."""
+    height; the newest reply is last. Shaped as Hermes projects it (tui_gateway/session_history.py,
+    gateway/session_transcript_rows.py): tool rows carry no row_id, and a compaction whose carrier
+    also holds the ask that set it off shows as a compaction row with the carrier's row_id, just
+    before the carrier's own row."""
     start = time.time() - 3 * 86400
     rows, n = [], 0
 
@@ -136,9 +139,14 @@ def seed_news_transcript():
         nonlocal n
         n += 1
         rows.append({"row_id": n, "row_kind": "message", "timestamp": start + n * 300, **row})
+        if row["role"] == "tool":
+            del rows[-1]["row_id"]
 
     for turn in range(1, 45):
         question, tools, reply = NEWS_TURNS[(turn - 1) % len(NEWS_TURNS)]
+        if turn == 38:
+            rows.append({"row_id": n + 1, "row_kind": "compaction", "role": "system", "compacted_messages": 96,
+                         "text": "（之前 96 条的摘要）", "timestamp": start + (n + 1) * 300})
         add(role="user", text=f"第 {turn} 问：{question}")
         for name, context in tools:
             add(role="tool", name=name, context=context, text="")
