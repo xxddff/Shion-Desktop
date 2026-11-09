@@ -291,7 +291,7 @@ Shion 里的位置：
 
 | 能力 | 用在哪 |
 | --- | --- |
-| Liquid Glass：`.glassEffect`、`GlassEffectContainer`、`.buttonStyle(.glass)` / `.glassProminent`；27 起 `Glass.interactive()` 在 Mac 上响应点击 | 只给浮在内容上面的控件：输入框、⌘K 面板、云桌面的接管条、菜单栏弹出面板（规则见「界面原则」）。侧栏和工具栏系统自己会换成玻璃 |
+| Liquid Glass：`.glassEffect`、`GlassEffectContainer`、`.buttonStyle(.glass)` / `.glassProminent`；27 起 `Glass.interactive()` 在 Mac 上响应点击 | 只给浮在内容上面的控件：输入框、⌥Space 小窗、⌘K 面板、云桌面的接管条、菜单栏弹出面板（规则见「界面原则」）。侧栏和工具栏系统自己会换成玻璃 |
 | 同心圆角：SwiftUI 的 `GeometryProxy.concentricCornerRadii`，AppKit 的 `NSView.cornerConfiguration`（`.containerConcentric`） | 云桌面画面（AppKit 视图）的圆角和窗口同心 |
 | `ToolbarSpacer` | 工具栏按钮分组，「跟詩音说」单独一组 |
 | 任意容器里的轻扫和拖动排序：`swipeActions` + `swipeActionsContainer()`，`.reorderable()` + `reorderContainer(for:isEnabled:move:)` | 待办行轻扫完成或推迟，今天的待办拖动排序；不用为了这些换成 `List` |
@@ -342,8 +342,9 @@ macOS 上是 SwiftUI 加 AppKit（UIKit 是 iOS 的；Mac Catalyst 做菜单栏�
 | 复制消息 | 每条消息 `.textSelection(.enabled)`（排好的回复一块一块地选），再加一个「复制」按钮；不做跨多条消息的连续选中 | 低 |
 | 菜单栏常驻和弹出面板 | AppKit `NSStatusItem`，面板里放 SwiftUI，用 `expandedInterfaceDelegate` 管键盘焦点；橙色数字角标画成图片 | 中 |
 | 可直接回复的系统通知 | `UNUserNotificationCenter` + `UNTextInputNotificationAction` | 低 |
-| ⌥Space 全局唤出 | 系统没有 SwiftUI 接口；用 Carbon 的 `RegisterEventHotKey`（不需要辅助功能权限），或 KeyboardShortcuts 这类封装库 | 中 |
-| ⌘K 浮动输入框（像 Spotlight） | AppKit `NSPanel`（不激活主窗口）里放 SwiftUI，背景用 `.glassEffect` | 中 |
+| ⌥Space 全局唤出 | 系统没有 SwiftUI 接口；用 KeyboardShortcuts（底下是 Carbon 的 `RegisterEventHotKey`，不需要辅助功能权限），见下面「快捷呼出」 | 中 |
+| ⌥Space 小窗（像 Spotlight） | AppKit `NSPanel`（不激活，浮在别的 App 上面）里放 SwiftUI，背景用 `.glassEffect` | 中 |
+| ⌘K 快速跳转 | 主窗口上面浮一块 SwiftUI 的玻璃面板，输入框是 `NSTextField`，好拿到 ↑↓ 和回车又不抢输入法的键 | 低 |
 | 应用使用记录 | `NSWorkspace` 的前台应用通知，不需要权限，只记应用名和时长；专注检查读窗口标题用辅助功能接口 | 低 |
 | 本机提醒事项（以后） | EventKit，申请提醒事项的完整访问权限 | 低 |
 | 开机启动、常驻 | `SMAppService`；关掉窗口后留在菜单栏 | 低 |
@@ -369,16 +370,30 @@ macOS 上是 SwiftUI 加 AppKit（UIKit 是 iOS 的；Mac Catalyst 做菜单栏�
 
   代价是不能跨块连续选中，只能一块一块地选。包用 XcodeGen 的 `packages` 加在 `macos/project.yml`，版本限在 0.9.x。
 
+### 快捷呼出
+
+- **⌥Space 小窗**：在任何 App 里按 ⌥Space（「设置 → 快捷键」里能改），鼠标所在那块屏幕的上方约五分之一处浮出一个玻璃小窗：输入一句话回车，这句话进总秘书（`chiefId`，默认是詩音）的 Bot Chat，和在主窗口里说的一样；她的回复在小窗里流式显示，用的是对话页的同一套行（工具调用折成一行、看板卡片、Markdown），这一轮里她要你批准或回答的也列在下面，能直接点。输入框右边的按钮（⌘O）打开完整对话；Esc 或再按一次快捷键收起。小窗是不激活 Shion 的 `NSPanel`：键盘到它这里，前台的 App 不变，收起后键盘回到原处；它浮在所有窗口上面，也能出现在全屏 App 上，点别处不会自己消失。收起时这一问已经答完的，下次打开是空的；还在等回复的，下次打开接着显示。小窗开着、显示着这一问时，她的回复、批准和提问不再另发系统通知。发之前先接上她的 Bot Chat 并读最近一页（和打开对话页一样：`session.resume`、`session.transcript`，没有就新建），流式回复才有地方落。没连服务器时，这句话留在她的对话里，小窗下面写「未连接服务器」；连不上时先记成待办草稿（见「本机模型」）还没做。
+- **⌘1…⌘7、⌘K**：菜单栏多了「前往」：⌘1…⌘7 依次是今天、等你确认、待办、日程、日报、看板、云桌面，然后是 ⌘K「快速跳转…」和「跟詩音说…」（标着全局快捷键）。⌘K 在主窗口上面浮一块玻璃：没输入时列出页面和助手；输入后搜页面、助手（名字、简介、profile 名）和没做完的待办的标题（最多 6 条），↑↓ 选，回车打开，待办打开在「待办」页右边的详情里；什么都没搜到时只剩一行「跟詩音说「…」」，回车把这句话交给她并打开她的对话。全角字母、大小写不影响匹配；输入法选字时的回车和方向键归输入法。原来「跟詩音说」按钮上的 ⌘K 让给了快速跳转，按钮本身不变。
+- **选型**（2026 年 11 月）：
+
+  | | 结论 |
+  | --- | --- |
+  | sindresorhus/KeyboardShortcuts | **用这个**（MIT）。2026 年还在发版：3.0.0（6 月）、3.1.0（9 月，含 macOS 27 的兼容修正）；底下就是 Carbon 的 `RegisterEventHotKey`，不弹权限；自带录快捷键的控件（有简体中文），录的时候提示和系统快捷键（聚焦搜索、切换输入法等）或菜单撞了，录的时候还会先放开已注册的快捷键；App 自己的菜单开着时也能触发。快捷键 Shion 自己存（`UserDefaults` 的 `QuickAskShortcut`，不是密钥），用它的 binding 版控件和 `events(for:)`；截图模式不读不写，只在内存里用 ⌥Space。包加在 `macos/project.yml`，版本限在 3.1.x |
+  | 直接用 Carbon 的 `RegisterEventHotKey` | 注册本身不到一百行，但录快捷键的控件、按键盘布局显示键名、和系统快捷键查重都得自己写 |
+
+  ⌥Space 只用了 Option 一个修饰键。macOS 15.0、15.1 上沙盒 App 不能注册只带 Option（或 Option+Shift）的全局快捷键，15.2 起又放开了；Shion 本来就不开沙盒（专注检查要读别的 App 的窗口标题），不受影响。Raycast、Alfred 这类启动器的默认快捷键也常是 ⌥Space，先被它们占了的话这里按了没反应；注册失败时 KeyboardShortcuts 不告诉调用方，Shion 也就没法提示，只能在设置里写明。
+- **Hermes 那边**（按 `tui_gateway/contracts/canonical_sessions.py`、`gateway/session_surface.py`、`agent/prompt_builder.py` 核对）：`prompt.submit` 不认识的参数一律拒绝（`extra="forbid"`）；它有个 `surface` 参数，`hud` 是官方桌面端浮动 HUD 用的，只在会话有 `read_window_below`（读 HUD 下面那个 App 的窗口）这个工具时，给模型添一句「这条来自 HUD，"这个""这里"多半指下面那个 App」，没有这个工具就什么都不加。VPS 上的詩音读不到这台 Mac 的窗口，所以小窗不带 `surface`，发的和对话页一样：`profile`、`session_id`、`text`、`submission_id`。
+
 ## 界面原则（SwiftUI 版照这个来）
 
 - **层级靠字号和留白，不靠框。** 只有需要你动手的东西才放进框里：「需要你」托盘、看板卡片、确认卡片、云桌面画面。其余都是标题加列表。
 - **颜色只表达三件事。** 紫色（詩音的主题色）表示选中和主操作；暖橙表示在等你；红色表示逾期、"此刻"、你在操作云桌面。领域和助手的颜色只出现在小圆点、头像和日程色条上。
-- **玻璃只给浮在内容上面的控件**：输入框、⌘K 面板、云桌面的接管条、菜单栏弹出面板；同一处的几个玻璃控件放进一个 `GlassEffectContainer`。列表、看板卡片、确认卡片这些内容层不用玻璃，玻璃上也不叠玻璃。只有主操作按钮用 `.glassProminent` 染成紫色。
+- **玻璃只给浮在内容上面的控件**：输入框、⌥Space 小窗、⌘K 面板、云桌面的接管条、菜单栏弹出面板；同一处的几个玻璃控件放进一个 `GlassEffectContainer`。列表、看板卡片、确认卡片这些内容层不用玻璃，玻璃上也不叠玻璃。只有主操作按钮用 `.glassProminent` 染成紫色。
 - **字号五档**：11（角标）、12（次要信息）、13（正文）、15（小节标题）、20（详情标题），外加今天页 30 号的日期。
 - **说明只写在设置里。** 发什么、不发什么，一个功能怎么运作，写在设置里对应开关的下面。主窗口和菜单栏只放状态和操作，不加解释性的注释、提示，也不加"仅本机可见"这类标注。
 - **界面里不出现编号和协议词。** 任务卡编号、profile、模型名只放在详情底部的技术信息里。工具步骤默认折叠成一行。
 - **动的东西只有两种**：助手在做事时的三个呼吸点，和流式输出的光标。系统控件自带的反馈（按下玻璃按钮、弹出层出现）照常保留，但不自己另加动画。
-- **一个入口找詩音**：今天页的输入框；其他页面右上角的「跟詩音说」按钮（⌘K）；在 Mac 任何地方按 ⌥Space。
+- **一个入口找詩音**：今天页的输入框；其他页面右上角的「跟詩音说」按钮；在 Mac 任何地方按 ⌥Space（设置里能改）；⌘K 里什么都没搜到时，回车也是交给她。
 - **詩音的标记**：一个写着「詩」的圆形标记，和她的头像同一个样子；出现这个标记的地方就是在跟她说话。菜单栏里用单色描边版，符合 macOS 菜单栏模板图标的习惯。
 
 ## 仓库结构
@@ -389,8 +404,8 @@ prototype/      UI 原型（Vite + React + TypeScript，示例数据）
   src/views/    今天、待办、日程、日报、等你确认、Bot Chat
 macos/          macOS App（SwiftUI + AppKit，最低 macOS 27），project.yml 由 XcodeGen 生成工程
   Shion/        App：Model（数据和示例数据）、Support（启动参数、格式、配色）、Views（各页面）
-  ShionUITests/ 截图测试（每个页面浅色、深色各一张），浏览器登录、看板、助手管理的端到端测试
-  ci/           CI 上替身用的假 Hermes（fake_hermes.py，看板 fake_kanban.py，profile fake_profiles.py，只用标准库）
+  ShionUITests/ 截图测试（每个页面浅色、深色各一张），浏览器登录、看板、助手管理、⌥Space 小窗的端到端测试
+  ci/           CI 上替身用的假 Hermes（fake_hermes.py，看板 fake_kanban.py，profile fake_profiles.py，小窗的回复 fake_quick.py，只用标准库）
 .github/workflows/macos.yml   在 macOS 27 runner 上编译、截图、跑登录测试
 hermes-plugin/  Hermes 的 shion 插件（服务器端）：待办、今天的汇总、日报、应用记录、专注检查；接口见 hermes-plugin/README.md
 .github/workflows/hermes-plugin.yml   在 ubuntu runner 上跑插件的 pytest
@@ -441,14 +456,15 @@ open Shion.xcodeproj
 - **开会话令牌登录**：在运行 `hermes gateway` 的环境里设 `HERMES_DASHBOARD_SESSION_TOKEN`（可以写进 `~/.hermes/.env`；也可以写成 `file:<路径>` 指向一个只放令牌的文件），确认 `dashboard.session_token_auth.enabled` 没设成 `false`，再重启 gateway。令牌用 `python3 -c "import secrets; print(secrets.token_urlsafe(32))"` 生成，至少 32 个字符。它能完全操作这台 Hermes，当密码保管；换了令牌，Shion 里也要换。
 - **现在能用的**：助手列表（每个 profile 一个助手）、每个助手的 Bot Chat（打开时先取最近 50 行，往上滑再一页一页取更早的；发消息、流式回复；工具调用在这一轮回复完成后折成一行，点开能看每一条；回复按 Markdown 显示，表格、列表、代码块都排好，见「对话的显示」）、批准和提问（连上后在后台接上每个助手已有的 Bot Chat，不取历史，所以没打开过的对话里的批准和提问也会到「等你确认」，侧栏也能看到谁在忙），系统通知（批准可以直接在通知里点「允许这一次」或「拒绝」，提问和回复可以直接在通知里回；对话或「等你确认」正开在眼前时不发；Dock 图标上是等你确认的件数）、看板（服务器的卡片、实时更新、拖动换列、新建、详情、评论署登录名、切换看板）、今天页的「助手在做」和对话里的卡片（取自所有看板）、设置里的看板上限（取自服务器）。服务器装了 `shion` 插件（`hermes-plugin/`，装法见那里的 README）时，今天页顶部詩音写的那段话、待办（勾掉、确认日期、新加都写回插件）和日报也来自服务器；助手经插件改了数据，Shion 一秒左右就收到推送，断线时漏掉的推送在重连时和每 5 分钟补一次。没装插件时这几页照旧是示例数据。日程和云桌面还是示例数据。
 - **助手**：设置（⌘,）的「助手」一栏选谁当总秘书、哪些助手在 Shion 里不显示（Hermes 自己的默认 profile 删不掉，不用就不显示），按服务器地址存在这台 Mac 上；没选过时名叫 `shion` 的 profile 当总秘书，没有就是默认 profile。总秘书决定今天页那段话、「跟詩音说」和 shion 插件在哪个 profile 里调用，换成没装插件的助手，今天、待办和日报回到示例数据。「新建助手…」（那一栏，或侧栏右键）经 `profiles.create` 建 profile：名字、显示名、简介、SOUL、模型，可以复制一个现有的；不复制时 Hermes 把服务器自己的密钥和模型给它。每个助手有自己的设置页（侧栏右键「助手设置…」，或对话页顶部的按钮）：显示名（写进 `ui_meta`，和 Bot Mode 同一处）、简介、SOUL、模型、MCP 服务器（添加、删除、开关、测试、OAuth 登录、从目录安装）、技能（开关，锁住的有标记）、工具，还有危险命令的审批方式、记忆、每轮步数上限；最下面删除这个助手（默认 profile 和总秘书除外）。每个请求都写明是哪个 profile：路径里带名字，或者 `?profile=`；Shion 从不调 `POST /api/profiles/active`。删除、替换 SOUL、服务器提醒要确认的模型都先问你。MCP 的令牌和环境变量用密码框输入，只在添加时发给服务器，Shion 不显示、不保存，也不调 `/api/env/reveal`。
+- **快捷键**：在任何 App 里按 ⌥Space 跟詩音说一句话，回复在小窗里流式显示，⌘O 打开完整对话，Esc 收起；主窗口里 ⌘1…⌘7 切页面，⌘K 快速跳转（页面、助手、待办标题），都列在「前往」菜单里；全局快捷键在「设置 → 快捷键」里改。见「快捷呼出」。
 - **连接方式**照官方桌面端连远端的做法：`wss://<地址>/api/ws?token=<登录凭证或会话令牌>`，不带子协议，每个请求带 Cloudflare Access 的两个头；连上后等 `gateway.ready`、发 `client.capabilities`，按服务器要求每 15 秒 `gateway.ping`；连上过又断了会自动重连，并重新打开刚才的对话。登录凭证被拒时先续一次再试，续不上才算登录过期。
 
 ### 原生 App 的界面检查
 
 界面靠 CI 截图来看，不在本地开模拟器：
 - **什么时候跑**：只有 `macos/` 或这个工作流改了才跑，也可以在 Actions 里手动触发；同一分支上新的提交会取消还没跑完的那次。
-- **跑什么**：在 `xcode-27` runner（macOS 27、Apple 芯片）上生成工程、编译，再跑 `ShionUITests`：每个页面用启动参数直接打开（`-ShionSnapshot YES -ShionRoute today -ShionAppearance dark`），等界面稳定后截窗口（对话截詩音和课程的两段：折起来的工具调用，排好的表格、列表、代码块、引用和任务列表；`assistant-shion` 是詩音的助手设置页，示例数据）；另外点开菜单栏面板截整个屏幕，按 ⌘, 截设置窗口（还有已登录和会话令牌两种设置）。
-- **浏览器登录、看板和助手的端到端测试**：runner 上没有真的 Cloudflare 和 Hermes，`macos/ci/fake_hermes.py` 两个都演：Access 按严格 service token 认证来（带 token 的请求只看 token、不发 cookie，错的 token 直接 403；不带 token 的浏览器转去另一个域名上的 Access 登录页，登录后靠 cookie 放行）；登录页自己填用户名密码提交；检查 PKCE、回调地址和 state；发登录凭证；`/api/ws` 说 JSON-RPC。替身还照 Hermes 的接口检查参数：`session.resume`、`session.transcript`、`session.create` 不认识的键一律 `invalid_params`，`source` 和 `client` 也照规则查。`SignInTests` 在设置里填好地址，点「用浏览器登录…」，等登录完、连上、助手列表换成服务器的；先到「等你确认」：没打开过的课程的对话发来一个批准，点「允许这一次」，替身记下回答；再看今天、待办、日报是不是插件里的（替身里的插件在 `macos/ci/fake_shion.py`）：勾掉一条待办，等课程经插件加的那条推过来；再打开詩音的对话（135 行，先只来最近 50 行；照 Hermes 的样子，压缩行和存它的那条消息共用 `row_id`，工具行没有 `row_id`），发一句、等回复，往上滑到第一条，看压缩行、第一条都在，后面那轮的两次工具调用折成了一行；打开通勤的对话（新建）；最后看设置里的看板上限是不是服务器的值。每一步截一张（`signin-*.png`）。替身还演看板插件（`macos/ci/fake_kanban.py`：两块看板，`/workflow` 的移动规则、400 和 409 的拒绝、做完后把子卡升到就绪、`/events` 的 WebSocket，调了 `/dispatch` 会在记录里标出来）；`BoardTests` 登录后打开看板，看服务器的卡和每种「在等什么」，点开卡住的卡看评论和运行记录，留一条言（替身记下作者，要显示成「你」）并让它继续，把一张卡拖到「完成」（拖不动就用右键菜单），新建一张；再到詩音的对话里说「派一张卡」，替身照 Hermes 的样子演她调 `kanban_create`（开始时带参数，结束时结果里有卡的编号），几秒后课程做完，替身发看板的通知行，再让詩音接着说一句：对话里要先出现那张卡，再变成「完成」，通知行也显示成卡；在设置里断开再连上，对话从服务器重新读一遍（对话记录只留调用、不留结果），两张卡都还在、都是「完成」；然后换到另一块看板，再看今天页的「助手在做」列出两块看板上在做的卡；最后回到詩音的对话说「列一下这周的作业」，替身照 Hermes 的样子演一轮：三次工具调用（中间隔一会儿，跑着的时候能看到），再一段一段地回一张表：表格的格子要单独显示出来（不是带竖线的原文），回复完成后三次调用折成一行，点开能看到每一条（`board-*.png`）。替身还演 profile 这一套（`macos/ci/fake_profiles.py`：`profiles.list`、`profiles.create`、`profiles.configure` 照 Hermes 的参数检查和拒绝方式，`ui_meta` 按版本号比对，贵的模型要确认；`/api/profiles`、SOUL、简介、`/api/mcp/*`、`/api/skills`、`/api/tools/toolsets`、`/api/config?profile=`；删默认 profile 照 Hermes 返回 400；shion 插件只装在詩音的 profile 里；比 Hermes 严的一处：按 profile 的接口不带 `?profile=` 直接拒绝）；`BotsTests` 登录后把总秘书换成课程（今天页回到示例数据）再换回詩音，看默认 profile 的设置页上删不了，在设置里把它设成不显示，从侧栏右键新建一个助手，改它的简介和 SOUL（替换前要确认），加一个 MCP 服务器并测试，关掉一个技能，重新打开这一页看这些都从服务器读回来了，最后删掉它（`bots-*.png`）。每个测试各用一个新起的替身，课程的批准、它加的待办这类只发一次的事不会被前一个测试用掉，`BotsTests` 改过的 profile 也不会留给别的测试。替身的请求记录（`fake_hermes-SignInTests.log`、`fake_hermes-BoardTests.log`、`fake_hermes-BotsTests.log`，密钥只记名字）也在附件里。这一步失败只报警告，截图和安装包照样出。
+- **跑什么**：在 `xcode-27` runner（macOS 27、Apple 芯片）上生成工程、编译，再跑 `ShionUITests`：每个页面用启动参数直接打开（`-ShionSnapshot YES -ShionRoute today -ShionAppearance dark`），等界面稳定后截窗口（对话截詩音和课程的两段：折起来的工具调用，排好的表格、列表、代码块、引用和任务列表；`assistant-shion` 是詩音的助手设置页，示例数据）；另外点开菜单栏面板截整个屏幕，按 ⌘, 截设置窗口（还有已登录和会话令牌两种设置，和「快捷键」一栏）；截 ⌥Space 小窗（整个屏幕：带一问一答的示例、从「前往」菜单打开的空小窗、没连服务器时发了一句），⌘K（没输入、搜「课」，再用 ↓ 和回车打开一条待办），并检查 ⌘1、⌘2、⌘6 切到的页面和 Esc 收起小窗（`quick-*`、`jump-*`、`settings-shortcut-*`）。
+- **浏览器登录、看板、助手和小窗的端到端测试**：runner 上没有真的 Cloudflare 和 Hermes，`macos/ci/fake_hermes.py` 两个都演：Access 按严格 service token 认证来（带 token 的请求只看 token、不发 cookie，错的 token 直接 403；不带 token 的浏览器转去另一个域名上的 Access 登录页，登录后靠 cookie 放行）；登录页自己填用户名密码提交；检查 PKCE、回调地址和 state；发登录凭证；`/api/ws` 说 JSON-RPC。替身还照 Hermes 的接口检查参数：`session.resume`、`session.transcript`、`session.create`、`prompt.submit` 不认识的键一律 `invalid_params`，`source` 和 `client` 也照规则查。`SignInTests` 在设置里填好地址，点「用浏览器登录…」，等登录完、连上、助手列表换成服务器的；先到「等你确认」：没打开过的课程的对话发来一个批准，点「允许这一次」，替身记下回答；再看今天、待办、日报是不是插件里的（替身里的插件在 `macos/ci/fake_shion.py`）：勾掉一条待办，等课程经插件加的那条推过来；再打开詩音的对话（135 行，先只来最近 50 行；照 Hermes 的样子，压缩行和存它的那条消息共用 `row_id`，工具行没有 `row_id`），发一句、等回复，往上滑到第一条，看压缩行、第一条都在，后面那轮的两次工具调用折成了一行；打开通勤的对话（新建）；最后看设置里的看板上限是不是服务器的值。每一步截一张（`signin-*.png`）。替身还演看板插件（`macos/ci/fake_kanban.py`：两块看板，`/workflow` 的移动规则、400 和 409 的拒绝、做完后把子卡升到就绪、`/events` 的 WebSocket，调了 `/dispatch` 会在记录里标出来）；`BoardTests` 登录后打开看板，看服务器的卡和每种「在等什么」，点开卡住的卡看评论和运行记录，留一条言（替身记下作者，要显示成「你」）并让它继续，把一张卡拖到「完成」（拖不动就用右键菜单），新建一张；再到詩音的对话里说「派一张卡」，替身照 Hermes 的样子演她调 `kanban_create`（开始时带参数，结束时结果里有卡的编号），几秒后课程做完，替身发看板的通知行，再让詩音接着说一句：对话里要先出现那张卡，再变成「完成」，通知行也显示成卡；在设置里断开再连上，对话从服务器重新读一遍（对话记录只留调用、不留结果），两张卡都还在、都是「完成」；然后换到另一块看板，再看今天页的「助手在做」列出两块看板上在做的卡；最后回到詩音的对话说「列一下这周的作业」，替身照 Hermes 的样子演一轮：三次工具调用（中间隔一会儿，跑着的时候能看到），再一段一段地回一张表：表格的格子要单独显示出来（不是带竖线的原文），回复完成后三次调用折成一行，点开能看到每一条（`board-*.png`）。替身还演 profile 这一套（`macos/ci/fake_profiles.py`：`profiles.list`、`profiles.create`、`profiles.configure` 照 Hermes 的参数检查和拒绝方式，`ui_meta` 按版本号比对，贵的模型要确认；`/api/profiles`、SOUL、简介、`/api/mcp/*`、`/api/skills`、`/api/tools/toolsets`、`/api/config?profile=`；删默认 profile 照 Hermes 返回 400；shion 插件只装在詩音的 profile 里；比 Hermes 严的一处：按 profile 的接口不带 `?profile=` 直接拒绝）；`BotsTests` 登录后把总秘书换成课程（今天页回到示例数据）再换回詩音，看默认 profile 的设置页上删不了，在设置里把它设成不显示，从侧栏右键新建一个助手，改它的简介和 SOUL（替换前要确认），加一个 MCP 服务器并测试，关掉一个技能，重新打开这一页看这些都从服务器读回来了，最后删掉它（`bots-*.png`）。`QuickAskTests` 登录后先把访达切到前台，在访达里按 ⌥Space（只有系统的全局快捷键做得到，「前往」菜单里那份只在 Shion 在前台时有用），看小窗出来、再按一次收起；再回到 Shion 按 ⌥Space（到不了小窗时改用「前往」菜单），说「小窗：明天几点出门？」，替身（`macos/ci/fake_quick.py`）照 Hermes 的样子一段一段地回「收到：…」，每 0.6 秒三个字：小窗里要先看到光标、后看到整句；点「打开完整对话」，小窗收起，主窗口打开詩音的对话，这一问一答都在；再按 ⌥Space，小窗是空的，Esc 收起（`quick-*.png`）。每个测试各用一个新起的替身，课程的批准、它加的待办这类只发一次的事不会被前一个测试用掉，`BotsTests` 改过的 profile 也不会留给别的测试。替身的请求记录（`fake_hermes-SignInTests.log`、`fake_hermes-BoardTests.log`、`fake_hermes-BotsTests.log`、`fake_hermes-QuickAskTests.log`，密钥只记名字）也在附件里。这一步失败只报警告，截图和安装包照样出。
 - **截图模式**：日期固定在 2026 年 11 月 9 日（周一）10:52，外观对整个 App 生效（菜单栏面板也跟着变），呼吸点不动。动画停下来 App 才算空闲，XCTest 不用干等，一次运行从 4.3 分钟降到 2.3 分钟。
 - **runner 的屏幕**：1024×768、1 倍，所以窗口截出来是 1024×674，比默认窗口小，正好看窄窗口下的布局。
 - **看哪里**：截图打包成这次运行的 `shots` 附件（保留 14 天），文件名是「页面-外观.png」。编译失败时，最后一步会列出错误；编译警告（xcodebuild 的警告不会自己变成注解）由「Compiler warnings」一步列成这次运行的注解，所以一次运行没有注解，就是没有警告。端到端测试失败时，那一步从结果包里打出失败的断言和消息（`-quiet` 不打）；XCTest 在找不到元素时存的界面层级（「App UI hierarchy」）也在附件里，同名的按新旧编号，不互相覆盖。
