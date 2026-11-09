@@ -111,7 +111,10 @@ final class ScreenshotTests: XCTestCase {
             app.typeKey(",", modifierFlags: .command)
             let settings = app.windows.matching(NSPredicate(format: "identifier CONTAINS[c] 'settings'")).firstMatch
             if settings.waitForExistence(timeout: 5) {
-                settings.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "服务器体检")).firstMatch.click()
+                let tabs = [settings.toolbarButtons["服务器体检"], settings.toolbars.buttons["服务器体检"], settings.buttons["服务器体检"],
+                            settings.radioButtons["服务器体检"]]
+                (tabs.first(where: { $0.exists })
+                    ?? settings.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "服务器体检")).firstMatch).click()
                 Thread.sleep(forTimeInterval: 1)
                 keep(settings.screenshot(), name: "settings-check-\(appearance)")
             } else {

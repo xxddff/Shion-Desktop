@@ -24,7 +24,7 @@ struct ServerCheckView: View {
                     .accessibilityIdentifier("check-again")
                 }
             } footer: {
-                Text("从这台 Mac 依次查：Cloudflare Access 放不放行（/api/status）；登录凭证有没有效、多久到期（/api/auth/me）；/api/ws 是不是 hermes gateway 的 Canonical 协议，runtime.describe 报了哪些能力；每个助手的 profile 里有没有 shion 插件（plugin.shion.info）；看板插件在不在（/api/plugins/kanban/boards）；看板同时进行的上限（/api/config）；这台 Mac 允不允许 Shion 发通知。后四项要先连上服务器。只读，不改服务器上的任何东西，也不会替你申请通知权限。")
+                Text("从这台 Mac 依次查：Cloudflare Access 放不放行（/api/status）；登录凭证有没有效、多久到期（/api/auth/me）；/api/ws 是不是 hermes gateway 的 Canonical 协议，runtime.describe 报了哪些能力；每个助手的 profile 里有没有 shion 插件（plugin.shion.info），服务器有没有时区数据（它报的 tz_database）；看板插件在不在（/api/plugins/kanban/boards）；看板同时进行的上限（/api/config）；这台 Mac 允不允许 Shion 发通知。协议、能力、插件、时区数据和看板上限要先连上服务器。只读，不改服务器上的任何东西，也不会替你申请通知权限。")
                     .font(.t12)
                     .foregroundStyle(.secondary)
             }

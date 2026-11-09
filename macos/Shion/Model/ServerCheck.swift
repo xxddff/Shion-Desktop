@@ -34,7 +34,7 @@ final class ServerCheck {
 
     static let titles: [(id: String, title: String)] = [
         ("access", "Cloudflare Access"), ("login", "登录凭证"), ("protocol", "Canonical 协议"),
-        ("capabilities", "服务器能力"), ("plugin", "shion 插件"), ("kanban", "看板插件"),
+        ("capabilities", "服务器能力"), ("plugin", "shion 插件"), ("timezone", "时区数据"), ("kanban", "看板插件"),
         ("limits", "看板上限"), ("notifications", "系统通知"),
     ]
 
@@ -220,20 +220,29 @@ final class ServerCheck {
     /// `plugin.shion.info` in every assistant's profile: the plugin is installed and enabled per
     /// profile, and -32601 means it is not loaded there.
     private func checkPlugin(_ store: AppStore, capabilities: Set<String>?) async {
-        guard let capabilities else { return set("plugin", .skipped, "连上后检查") }
+        guard let capabilities else {
+            set("timezone", .skipped, "连上后检查")
+            return set("plugin", .skipped, "连上后检查")
+        }
         guard capabilities.contains("plugin-rpc-v1") else {
+            set("timezone", .skipped, "要先有 shion 插件")
             return set("plugin", .fail, "服务器不支持插件 RPC（没有 plugin-rpc-v1）",
                        fix: "升级服务器上的 Hermes（hermes update），再重启 gateway。")
         }
-        guard store.live else { return set("plugin", .skipped, "还没从服务器读到助手") }
+        guard store.live else {
+            set("timezone", .skipped, "要先有 shion 插件")
+            return set("plugin", .skipped, "还没从服务器读到助手")
+        }
         var lines: [Line] = []
         var missing: [String] = []
+        var first: JSONValue?
         for bot in store.bots {
             do {
                 let info = try await store.gateway.call("plugin.shion.info", ["profile": .string(bot.id)])
                 let version = info["plugin_version"]?.string ?? "?"
                 let today = info["today"]?.string ?? ""
                 lines.append(Line(id: bot.id, title: bot.name, level: .ok, text: "\(version) · 今天是 \(today)"))
+                first = first ?? info
             } catch GatewayError.rpc(let code, _, let reason) where code == -32601 || reason == "unknown_method" {
                 missing.append(bot.id)
                 lines.append(Line(id: bot.id, title: bot.name, level: .fail, text: "没装或没启用"))
@@ -242,6 +251,7 @@ final class ServerCheck {
                 lines.append(Line(id: bot.id, title: bot.name, level: .fail, text: error.localizedDescription))
             }
         }
+        checkTimezone(first)
         if missing.isEmpty {
             set("plugin", .ok, "\(lines.count) 个助手都装了", lines: lines)
         } else {
@@ -250,6 +260,31 @@ final class ServerCheck {
                 lines: lines)
         }
     }
+
+    /// The plugin's `tz_database`: whether the server has the IANA time zone database. Hermes's
+    /// image (Debian 13, packages without recommends) may not bring tzdata; without it the plugin
+    /// still gets the zones that keep one offset all year right, and refuses the others.
+    private func checkTimezone(_ info: JSONValue?) {
+        guard let info else { return set("timezone", .skipped, "要先有 shion 插件") }
+        let zone = info["timezone"]?.string ?? ""
+        switch info["tz_database"]?.bool {
+        case true?:
+            set("timezone", .ok, zone.isEmpty ? "有" : "有 · 插件用 \(zone)")
+        case false?:
+            let note = Self.fixedZones.contains(zone)
+                ? "插件现在用的 \(zone) 一年到头时差不变，不受影响；换成有夏令时的时区会被拒。"
+                : "插件现在用的 \(zone) 有夏令时，算不对日期，会被拒。"
+            set("timezone", Self.fixedZones.contains(zone) ? .warn : .fail, "服务器缺时区数据",
+                fix: note + "修法：在容器里装 tzdata（apt-get install tzdata；重建镜像会丢，要写进自己的 Dockerfile），或者用没有夏令时的时区（Asia/Tokyo、Asia/Shanghai、UTC 等）。")
+        case nil:
+            set("timezone", .skipped, "插件没报（旧版本）",
+                fix: "更新 shion 插件（hermes -p <profile> plugins update shion），再重启 gateway。")
+        }
+    }
+
+    /// The zones the plugin gets right without the database (hermes-plugin/shion/timeutil.py).
+    static let fixedZones: Set<String> = ["Asia/Tokyo", "Asia/Seoul", "Asia/Shanghai", "Asia/Hong_Kong",
+                                          "Asia/Taipei", "Asia/Singapore", "UTC", "Etc/UTC"]
 
     /// `GET /api/plugins/kanban/boards`: the board plugin answers there, with the server's boards.
     private func checkKanban(_ settings: ServerSettings, reachable: Bool, store: AppStore) async {
@@ -340,6 +375,7 @@ final class ServerCheck {
                 Line(id: "study", title: "课程", level: .ok, text: "0.3.0 · 今天是 2026-11-09"),
                 Line(id: "commute", title: "通勤", level: .fail, text: "没装或没启用"),
             ])
+        set("timezone", .ok, "有 · 插件用 Asia/Tokyo")
         set("kanban", .ok, "在 · 2 块看板")
         set("limits", .warn, "整台服务器 4 件（按内存推算） · 每个助手 不限",
             fix: "每个助手只有一块云桌面和一套浏览器登录，同一个助手的两张卡同时跑会抢屏幕。在 config.yaml 里设 kanban.max_in_progress_per_profile: 1，重启 gateway。")

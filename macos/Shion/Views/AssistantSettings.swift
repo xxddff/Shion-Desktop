@@ -1,17 +1,35 @@
 import SwiftUI
 
 /// The Settings window: the server, the assistants on it, and the server check (ServerCheckView.swift).
+/// The window remembers its tab, across launches too; screenshot and test runs keep it to themselves
+/// and always open on 服务器, so one run's tab does not carry into the next.
 struct SettingsTabs: View {
+    @State private var tab = 0
+
     var body: some View {
-        TabView {
-            Tab("服务器", systemImage: "network") {
-                SettingsView()
+        if LaunchOptions.current.snapshot {
+            TabView(selection: $tab) {
+                Tab("服务器", systemImage: "network", value: 0) {
+                    SettingsView()
+                }
+                Tab("助手", systemImage: "person.2", value: 1) {
+                    AssistantSettings()
+                }
+                Tab("服务器体检", systemImage: "stethoscope", value: 2) {
+                    ServerCheckView()
+                }
             }
-            Tab("助手", systemImage: "person.2") {
-                AssistantSettings()
-            }
-            Tab("服务器体检", systemImage: "stethoscope") {
-                ServerCheckView()
+        } else {
+            TabView {
+                Tab("服务器", systemImage: "network") {
+                    SettingsView()
+                }
+                Tab("助手", systemImage: "person.2") {
+                    AssistantSettings()
+                }
+                Tab("服务器体检", systemImage: "stethoscope") {
+                    ServerCheckView()
+                }
             }
         }
     }

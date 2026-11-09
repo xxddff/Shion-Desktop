@@ -42,7 +42,7 @@ final class ChatControlTests: XCTestCase {
         }
 
         // 服务器体检: every check against the stand-in
-        label("服务器体检", in: settings).click()
+        tab("服务器体检", in: settings).click()
         let notifications = element("check-notifications", in: settings)
         let done = NSPredicate(format: "label != %@ AND value != %@", "检查中…", "检查中…")
         let checked = notifications.waitForExistence(timeout: 10)
@@ -57,9 +57,10 @@ final class ChatControlTests: XCTestCase {
         expect("check-plugin", in: settings, endsWith: "个助手没有")
         expect("check-plugin-commute", in: settings, "没装或没启用")
         expect("check-plugin-shion", in: settings, startsWith: "ci · 今天是 ")
+        expect("check-timezone", in: settings, "服务器缺时区数据")
         expect("check-kanban", in: settings, "在 · 2 块看板")
         expect("check-limits", in: settings, "整台服务器 4 件（按内存推算） · 每个助手 1 件")
-        label("服务器", in: settings).click()
+        tab("服务器", in: settings).click()
         app.typeKey("w", modifierFlags: .command)
 
         // a long reply, stopped with ⌘. part way: what had come stays, marked 已停止
@@ -105,9 +106,13 @@ final class ChatControlTests: XCTestCase {
         // ⌘F over the rows loaded: 第 120 to 129 条 are on the newest page
         app.typeKey("f", modifierFlags: .command)
         let field = element("find-field", in: app)
-        guard field.waitForExistence(timeout: 5) else {
+        if !field.waitForExistence(timeout: 5) {
             keep(app.windows.firstMatch.screenshot(), "chatctl-5-no-find")
-            return XCTFail("⌘F did not open the find bar")
+            XCTFail("⌘F did not open the find bar")
+            element("find", in: app).click()
+        }
+        guard field.waitForExistence(timeout: 5) else {
+            return XCTFail("the toolbar's find button did not open the find bar either")
         }
         field.click()
         field.typeText("第 12")
@@ -135,7 +140,7 @@ final class ChatControlTests: XCTestCase {
         app.typeKey(",", modifierFlags: .command)
         let prefs = settingsWindow(app)
         XCTAssertTrue(prefs.waitForExistence(timeout: 5))
-        label("服务器", in: prefs).click()
+        tab("服务器", in: prefs).click()
         prefs.buttons["断开"].click()
         let offline = element("connection-state", in: prefs)
         XCTAssertEqual(XCTWaiter().wait(for: [phase("未连接，现在是上次的数据", of: offline)], timeout: 10), .completed,
@@ -179,10 +184,13 @@ final class ChatControlTests: XCTestCase {
         root.descendants(matching: .any).matching(identifier: identifier).firstMatch
     }
 
-    /// A tab, button or text by what it says.
+    /// A Settings tab by its name (a toolbar button, a button or a radio button, as BotsTests finds it).
     @MainActor
-    private func label(_ text: String, in root: XCUIElement) -> XCUIElement {
-        root.descendants(matching: .any).matching(NSPredicate(format: "label == %@", text)).firstMatch
+    private func tab(_ name: String, in settings: XCUIElement) -> XCUIElement {
+        let tabs = [settings.toolbarButtons[name], settings.toolbars.buttons[name], settings.buttons[name],
+                    settings.radioButtons[name]]
+        return tabs.first(where: { $0.exists })
+            ?? settings.descendants(matching: .any).matching(NSPredicate(format: "label == %@", name)).firstMatch
     }
 
     private func phase(_ prefix: String, of element: XCUIElement) -> XCTNSPredicateExpectation {
