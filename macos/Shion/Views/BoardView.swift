@@ -5,10 +5,11 @@ struct BoardView: View {
     @Environment(AppStore.self) private var store
 
     var body: some View {
-        ScrollView(.horizontal) {
+        ScrollView {
             HStack(alignment: .top, spacing: 14) {
                 ForEach(CardStatus.allCases, id: \.self) { status in
                     BoardColumn(status: status, cards: cards(in: status))
+                        .frame(minWidth: 160, maxWidth: .infinity, alignment: .topLeading)
                 }
             }
             .padding(24)
@@ -46,7 +47,6 @@ struct BoardColumn: View {
                 Text("没有").font(.t12).foregroundStyle(.tertiary).padding(.horizontal, 4)
             }
         }
-        .frame(width: 236, alignment: .topLeading)
     }
 }
 

@@ -15,6 +15,7 @@ final class AppStore {
     var chats: [String: [ChatItem]]
     var reports: [Report]
     var screens: [BotScreen]
+    var focus: FocusStatus
     var activityLog = true
     var focusCheck = true
 
@@ -29,6 +30,12 @@ final class AppStore {
         chats = demo.chats
         reports = demo.reports
         screens = demo.screens
+        focus = FocusStatus(planTitle: "机器学习 课前小测", plannedAt: demo.at(0, 10, 45), onTrack: false)
+    }
+
+    /// The next thing on today's calendar that is not a commute.
+    var nextEvent: CalEvent? {
+        events(on: now).first { $0.start > now && $0.kind != .commute }
     }
 
     func bot(_ id: String) -> Bot? { bots.first { $0.id == id } }

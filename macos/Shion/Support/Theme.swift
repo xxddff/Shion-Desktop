@@ -54,13 +54,18 @@ struct Mark: View {
 }
 
 /// The breathing dots of an assistant at work: one of the only two moving things in the app.
+/// Still in screenshot mode, so the app goes idle and every run renders the same frame.
 struct BusyDots: View {
     var body: some View {
-        Image(systemName: "ellipsis")
+        let dots = Image(systemName: "ellipsis")
             .font(.system(size: 12, weight: .bold))
             .foregroundStyle(Palette.accent)
-            .symbolEffect(.pulse, options: .repeating)
             .accessibilityLabel("在做")
+        if LaunchOptions.current.snapshot {
+            dots
+        } else {
+            dots.symbolEffect(.pulse, options: .repeating)
+        }
     }
 }
 

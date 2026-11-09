@@ -156,6 +156,13 @@ struct Report: Identifiable, Hashable {
     let blocks: [ReportBlock]
 }
 
+/// The focus check: what you planned to be doing now, and whether the window in front matches.
+struct FocusStatus: Hashable {
+    var planTitle: String
+    var plannedAt: Date
+    var onTrack: Bool
+}
+
 /// An assistant's own desktop on the VPS (Hermes Bot Screen).
 struct BotScreen: Hashable {
     let botId: String

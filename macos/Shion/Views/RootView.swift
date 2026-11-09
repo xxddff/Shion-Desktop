@@ -2,15 +2,19 @@ import SwiftUI
 
 struct RootView: View {
     @Environment(AppStore.self) private var store
+    @FocusState private var sidebarFocused: Bool
 
     var body: some View {
         @Bindable var store = store
         NavigationSplitView {
             Sidebar(selection: $store.route)
+                .focused($sidebarFocused)
                 .navigationSplitViewColumnWidth(min: 200, ideal: 216, max: 280)
         } detail: {
             DetailView(route: store.route ?? .today)
         }
+        // keyboard focus starts in the sidebar, not in the first text field of the page
+        .defaultFocus($sidebarFocused, true)
         .frame(minWidth: 960, minHeight: 620)
     }
 }
@@ -40,7 +44,9 @@ struct Sidebar: View {
         List(selection: $selection) {
             Section {
                 Label("今天", systemImage: "sun.max").tag(Route.today)
-                Label("等你确认", systemImage: "hand.raised").badge(store.asks.count).tag(Route.confirm)
+                Label("等你确认", systemImage: "hand.raised")
+                    .badge(store.asks.isEmpty ? nil : Text("\(store.asks.count)").foregroundStyle(Palette.warm).fontWeight(.semibold))
+                    .tag(Route.confirm)
                 Label("待办", systemImage: "checklist").badge(store.todayTodos.count).tag(Route.todos)
                 Label("日程", systemImage: "calendar").tag(Route.calendar)
                 Label("日报", systemImage: "doc.text").tag(Route.reports)

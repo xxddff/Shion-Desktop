@@ -1,9 +1,10 @@
 import AppKit
 import XCTest
 
-/// Opens every page in light and dark and keeps a screenshot of the window for each. CI exports
-/// the attachments as PNGs (see .github/workflows/macos.yml), so the UI can be reviewed from
-/// pictures. The app pins its demo date in snapshot mode, so runs are comparable.
+/// Opens every page in light and dark and keeps a screenshot of the window for each, plus the
+/// menu bar panel and Settings. CI exports the attachments as PNGs (see
+/// .github/workflows/macos.yml), so the UI can be reviewed from pictures. The app pins its demo
+/// date and stills its animations in snapshot mode, so runs are comparable.
 final class ScreenshotTests: XCTestCase {
     private let routes = ["today", "confirm", "todos", "calendar", "reports", "board", "desktop", "chat-shion"]
 
@@ -15,13 +16,50 @@ final class ScreenshotTests: XCTestCase {
         }
         for appearance in ["light", "dark"] {
             for route in routes {
-                capture(route: route, appearance: appearance)
+                let app = launch(route: route, appearance: appearance)
+                let window = app.windows.firstMatch
+                if window.waitForExistence(timeout: 20) {
+                    Thread.sleep(forTimeInterval: 1)
+                    keep(window.screenshot(), name: "\(route)-\(appearance)")
+                } else {
+                    XCTFail("No window for \(route) (\(appearance))")
+                }
+                app.terminate()
             }
         }
     }
 
     @MainActor
-    private func capture(route: String, appearance: String) {
+    func testMenuBarAndSettings() throws {
+        continueAfterFailure = true
+        for appearance in ["light", "dark"] {
+            let app = launch(route: "today", appearance: appearance)
+            _ = app.windows.firstMatch.waitForExistence(timeout: 20)
+
+            let item = app.descendants(matching: .statusItem).firstMatch
+            if item.waitForExistence(timeout: 5) {
+                item.click()
+                Thread.sleep(forTimeInterval: 1.5)
+                keep(XCUIScreen.main.screenshot(), name: "menubar-\(appearance)")
+                app.typeKey(.escape, modifierFlags: [])
+            } else {
+                XCTFail("No status item")
+            }
+
+            app.typeKey(",", modifierFlags: .command)
+            let settings = app.windows.matching(NSPredicate(format: "identifier CONTAINS[c] 'settings'")).firstMatch
+            if settings.waitForExistence(timeout: 5) {
+                Thread.sleep(forTimeInterval: 1)
+                keep(settings.screenshot(), name: "settings-\(appearance)")
+            } else {
+                keep(XCUIScreen.main.screenshot(), name: "settings-\(appearance)-screen")
+            }
+            app.terminate()
+        }
+    }
+
+    @MainActor
+    private func launch(route: String, appearance: String) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = [
             "-ShionSnapshot", "YES",
@@ -30,18 +68,13 @@ final class ScreenshotTests: XCTestCase {
             "-ApplePersistenceIgnoreState", "YES",
         ]
         app.launch()
-        let window = app.windows.firstMatch
-        guard window.waitForExistence(timeout: 20) else {
-            XCTFail("No window for \(route) (\(appearance))")
-            app.terminate()
-            return
-        }
-        // let the first layout, fonts and materials settle
-        Thread.sleep(forTimeInterval: 1.5)
-        let attachment = XCTAttachment(screenshot: window.screenshot())
-        attachment.name = "\(route)-\(appearance)"
+        return app
+    }
+
+    private func keep(_ screenshot: XCUIScreenshot, name: String) {
+        let attachment = XCTAttachment(screenshot: screenshot)
+        attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)
-        app.terminate()
     }
 }
