@@ -71,10 +71,10 @@ final class BoardTests: XCTestCase {
         let commented = waitForText("验证码是 246810（CI）", in: app, timeout: 10)
         // the stand-in numbers comments per board: 课程's is 1, this one 2
         let author = element("comment-author-2", in: app)
-        let yours = author.waitForExistence(timeout: 5) && author.label == "你"
+        let yours = author.waitForExistence(timeout: 5) && says(author, "你")
         keep(window.screenshot(), "board-3a-commented")
         XCTAssertTrue(commented, "the comment did not show")
-        XCTAssertTrue(yours, "the comment is not shown as yours: \(author.label)")
+        XCTAssertTrue(yours, "the comment is not shown as yours: \(author.label) / \(String(describing: author.value))")
 
         // drag 「下载第8回课件」 from 排队 to 完成; its child then queues behind 课程's running card
         let card = element("card-t_dl8", in: app)
@@ -129,10 +129,7 @@ final class BoardTests: XCTestCase {
         keep(window.screenshot(), "board-8-card-in-chat")
         XCTAssertTrue(handed, "the card 詩音 made did not show in her chat")
         let finished = waitForText("课程把笔记整理好了。", in: app, timeout: 15)
-        let doneCard = NSPredicate(format: "label CONTAINS %@ AND label CONTAINS %@", "整理第8回笔记（CI）", "完成")
-        let shownDone = waitUntil(timeout: 10) {
-            app.descendants(matching: .any).matching(doneCard).firstMatch.exists
-        }
+        let shownDone = waitUntil(timeout: 10) { self.chatCards("整理第8回笔记（CI）", saying: "完成", in: app) >= 1 }
         keep(window.screenshot(), "board-9-card-done")
         XCTAssertTrue(finished, "no turn after the board's notice")
         XCTAssertTrue(shownDone, "the card in the chat does not show it is done")
@@ -141,9 +138,7 @@ final class BoardTests: XCTestCase {
         element("nav-todos", in: app).click()
         Thread.sleep(forTimeInterval: 1)
         element("bot-shion", in: app).click()
-        let reread = waitUntil(timeout: 10) {
-            app.descendants(matching: .any).matching(doneCard).count >= 2
-        }
+        let reread = waitUntil(timeout: 10) { self.chatCards("整理第8回笔记（CI）", saying: "完成", in: app) >= 2 }
         keep(window.screenshot(), "board-10-chat-reread")
         XCTAssertTrue(reread, "after reading the chat again, the call and the notice are not both the card")
         XCTAssertFalse(waitForText("Kanban t_", in: app, timeout: 1), "the board's notice shows as text after reading again")
@@ -183,6 +178,27 @@ final class BoardTests: XCTestCase {
         field.click()
         field.typeKey("a", modifierFlags: .command)
         field.typeText(text)
+    }
+
+    @MainActor
+    private func says(_ element: XCUIElement, _ text: String) -> Bool {
+        element.label == text || (element.value as? String) == text
+    }
+
+    /// How many cards in the chat show `title` and say `status` (labels only: a value can be a
+    /// number, which a string predicate would throw on).
+    @MainActor
+    private func chatCards(_ title: String, saying status: String, in app: XCUIApplication) -> Int {
+        let chips = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "chat-card-"))
+        var count = 0
+        for index in 0..<chips.count {
+            let parts = chips.element(boundBy: index).descendants(matching: .any)
+            if parts.matching(NSPredicate(format: "label CONTAINS %@", title)).firstMatch.exists,
+               parts.matching(NSPredicate(format: "label == %@", status)).firstMatch.exists {
+                count += 1
+            }
+        }
+        return count
     }
 
     @MainActor

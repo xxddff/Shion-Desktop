@@ -222,7 +222,7 @@ struct CardChip: View {
         .padding(.vertical, 9)
         .background(Palette.card, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Palette.line))
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("chat-card-\(card.id)")
     }
 
