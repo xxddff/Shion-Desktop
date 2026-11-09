@@ -1,3 +1,4 @@
+import AppKit
 import Observation
 import SwiftUI
 
@@ -44,6 +45,9 @@ final class AppStore {
     @ObservationIgnored private var serverCapabilities: Set<String> = []
     /// bot id → how many of its rows came before the attach that is waiting for its first page
     @ObservationIgnored private var attachMarks: [String: Int] = [:]
+    /// Bot ids whose rows are loaded: chats opened on this connection. The other Bot Chats are
+    /// attached only for their approvals, questions and busy state.
+    @ObservationIgnored private var loadedChats: Set<String> = []
     @ObservationIgnored private var demoBots: [Bot] = []
     @ObservationIgnored private var demoChats: [String: [ChatItem]] = [:]
     @ObservationIgnored private var demoAsks: [Ask] = []
@@ -74,6 +78,9 @@ final class AppStore {
         gateway.credential = { [weak self] settings, renew in
             guard let self else { throw GatewayError.offline }
             return try await self.credential(for: settings, renew: renew)
+        }
+        if !LaunchOptions.current.snapshot {
+            Notifier.shared.start(self)
         }
         if canConnect(serverSettings) && !LaunchOptions.current.snapshot {
             Task { await connect() }
@@ -127,6 +134,7 @@ final class AppStore {
 
     func answer(_ ask: Ask, with option: AskOption) {
         asks.removeAll { $0.id == ask.id }
+        Notifier.shared.withdraw(ask.id)
         if let remote = ask.remote {
             respond(to: ask, remote: remote, with: option)
             return
@@ -187,6 +195,34 @@ extension AppStore {
         await describeRuntime()
         await loadProfiles()
         await loadBoardLimits()
+        await attachAll()
+    }
+
+    /// Attaches every assistant's existing Bot Chat, without its rows, so approvals, questions and
+    /// busy states come from all of them, not only from the chats you open. A Bot Chat is only
+    /// created when you open the chat. Needs the paged transcript (an attach without rows).
+    private func attachAll() async {
+        guard pagesTranscripts else { return }
+        for bot in bots where sessions[bot.id] == nil {
+            guard live, gateway.phase == .online else { return }
+            guard let id = try? await findBotChat(bot.id), sessions[bot.id] == nil,
+                  let snapshot = try? await gateway.call("session.resume", resumeParams(bot.id, id)),
+                  sessions[bot.id] == nil  // opened meanwhile
+            else { continue }
+            attach(bot.id, snapshot: snapshot)
+        }
+    }
+
+    /// The assistant's Bot Chat: the session titled "Bot Chat" in its profile, if there is one.
+    private func findBotChat(_ botId: String) async throws -> String? {
+        let listed = try await gateway.call("session.list", [
+            "profile": .string(botId), "title": "Bot Chat", "limit": 200, "include_hidden": true,
+        ])
+        let row = (listed["sessions"]?.array ?? []).first(where: { candidate in
+            let root = candidate["root_title"]?.string
+            return root == "Bot Chat" || (root == nil && candidate["title"]?.string == "Bot Chat")
+        })
+        return row.flatMap { $0["resolved_id"]?.string ?? $0["id"]?.string ?? $0["session_id"]?.string }
     }
 
     /// `GET /api/config` (the configured values) and the server's memory (`/api/status`), which
@@ -345,31 +381,34 @@ extension AppStore {
         loadingOlder = []
         olderErrors = [:]
         attachMarks = [:]
+        loadedChats = []
+        Notifier.shared.withdrawAll()
     }
 
     /// Finds the assistant's Bot Chat (the session titled "Bot Chat" in its profile), creates it
     /// when there is none, and attaches this connection to it.
     func openChat(_ botId: String) async {
-        guard live, gateway.phase == .online, sessions[botId] == nil, !openingChats.contains(botId) else { return }
+        guard live, gateway.phase == .online, !loadedChats.contains(botId), !openingChats.contains(botId) else { return }
         openingChats.insert(botId)
         defer { openingChats.remove(botId) }
         chatErrors[botId] = nil
         do {
-            let listed = try await gateway.call("session.list", [
-                "profile": .string(botId), "title": "Bot Chat", "limit": 200, "include_hidden": true,
-            ])
-            let row = (listed["sessions"]?.array ?? []).first(where: { candidate in
-                let root = candidate["root_title"]?.string
-                return root == "Bot Chat" || (root == nil && candidate["title"]?.string == "Bot Chat")
-            })
-            let snapshot: JSONValue
-            if let row, let id = row["resolved_id"]?.string ?? row["id"]?.string ?? row["session_id"]?.string {
-                snapshot = try await gateway.call("session.resume", resumeParams(botId, id))
+            if sessions[botId] != nil {
+                // attached in the background: only the rows are missing
+                try await loadLatestPage(botId)
             } else {
-                snapshot = try await gateway.call("session.create", createParams(botId))
+                let snapshot: JSONValue
+                if let id = try await findBotChat(botId) {
+                    snapshot = try await gateway.call("session.resume", resumeParams(botId, id))
+                } else {
+                    snapshot = try await gateway.call("session.create", createParams(botId))
+                }
+                attach(botId, snapshot: snapshot)
+                if snapshot["messages_omitted"]?.bool == true {
+                    try await loadLatestPage(botId)
+                }
             }
-            attach(botId, snapshot: snapshot)
-            try await loadLatestPage(botId, snapshot: snapshot)
+            loadedChats.insert(botId)
         } catch {
             chatErrors[botId] = error.localizedDescription
         }
@@ -421,8 +460,8 @@ extension AppStore {
 
     /// The newest page of a resumed transcript (`session.transcript`, latest first), in place of
     /// whatever was held, keeping what streamed in since the attach.
-    private func loadLatestPage(_ botId: String, snapshot: JSONValue) async throws {
-        guard snapshot["messages_omitted"]?.bool == true, let sessionId = sessions[botId] else { return }
+    private func loadLatestPage(_ botId: String) async throws {
+        guard let sessionId = sessions[botId] else { return }
         let page = try await gateway.call("session.transcript", [
             "profile": .string(botId), "session_id": .string(sessionId),
             "order": "latest", "limit": .number(Double(Self.pageSize)),
@@ -479,15 +518,17 @@ extension AppStore {
         }
     }
 
-    /// Attachments are per socket: after a reconnect every open Bot Chat resumes, from its
-    /// newest page again.
+    /// Attachments are per socket: after a reconnect every attached Bot Chat resumes, and the ones
+    /// open on screen start again from their newest page.
     private func reattach() {
         let open = sessions
         Task {
             for (botId, sessionId) in open {
                 guard let snapshot = try? await gateway.call("session.resume", resumeParams(botId, sessionId)) else { continue }
                 attach(botId, snapshot: snapshot)
-                try? await loadLatestPage(botId, snapshot: snapshot)
+                if loadedChats.contains(botId), snapshot["messages_omitted"]?.bool == true {
+                    try? await loadLatestPage(botId)
+                }
             }
         }
     }
@@ -524,21 +565,31 @@ extension AppStore {
 
     private func apply(_ type: String, sessionId: String?, payload: JSONValue) {
         guard let sessionId, let botId = sessionBots[sessionId] else { return }
+        // a chat not opened yet has no rows to add to: its first page brings them
+        let shown = loadedChats.contains(botId)
         switch type {
         case "message.start":
-            beginReply(botId)
+            if shown { beginReply(botId) }
         case "message.delta":
-            if let text = payload["text"]?.string {
+            if shown, let text = payload["text"]?.string {
                 appendReply(botId, text)
             }
         case "message.interim":
-            if payload["already_streamed"]?.bool != true, let text = payload["text"]?.string {
+            if shown, payload["already_streamed"]?.bool != true, let text = payload["text"]?.string {
                 appendReply(botId, text)
                 endReply(botId)
             }
         case "message.complete":
-            completeReply(botId, payload)
+            var text = payload["text"]?.string ?? ""
+            if shown {
+                completeReply(botId, payload)
+                if text.isEmpty {
+                    text = chats[botId]?.last(where: { $0.role == .assistant })?.text ?? ""
+                }
+            }
+            notifyReply(botId, text)
         case "tool.start":
+            guard shown else { break }
             endReply(botId)
             let name = payload["name"]?.string ?? payload["tool_name"]?.string ?? "tool"
             append(ChatItem(id: UUID().uuidString, role: .tool, at: Date(), text: toolLine(name, payload["context"]?.string ?? "")), to: botId)
@@ -551,6 +602,7 @@ extension AppStore {
         case "approval.settled", "clarify.settled":
             if let promptId = payload["prompt_id"]?.string {
                 asks.removeAll { $0.id == promptId }
+                Notifier.shared.withdraw(promptId)
             }
         default:
             break
@@ -642,6 +694,22 @@ extension AppStore {
                 remote: RemotePrompt(sessionId: sessionId, generation: generation, isClarify: false)
             ), at: 0)
         }
+        if let ask = asks.first, ask.id == promptId {
+            notifyAsk(ask)
+        }
+    }
+
+    /// Unless 等你确认 or the assistant's chat is in front of you.
+    private func notifyAsk(_ ask: Ask) {
+        guard !(NSApp.isActive && (route == .confirm || route == .chat(ask.botId))) else { return }
+        Notifier.shared.ask(ask, from: bot(ask.botId)?.name ?? ask.botId)
+    }
+
+    /// Unless the assistant's chat is in front of you.
+    private func notifyReply(_ botId: String, _ text: String) {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, !(NSApp.isActive && route == .chat(botId)) else { return }
+        Notifier.shared.reply(text, from: bot(botId)?.name ?? botId, botId: botId)
     }
 
     private func approvalLabel(_ choice: String) -> String {

@@ -4,6 +4,7 @@ import SwiftUI
 /// next thing on the calendar.
 struct MenuBarLabel: View {
     let store: AppStore
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         HStack(spacing: 4) {
@@ -11,6 +12,14 @@ struct MenuBarLabel: View {
             if let next = store.nextEvent {
                 Text("\(Fmt.hm(next.start)) \(next.title.replacing(#/ 第\d+回/#, with: ""))")
             }
+        }
+        // the label lives as long as the app: it keeps the Dock badge (asks waiting on you) and
+        // lets a clicked notification reopen a closed main window
+        .onChange(of: store.asks.count, initial: true) { _, count in
+            NSApp.dockTile.badgeLabel = count > 0 ? "\(count)" : nil
+        }
+        .onAppear {
+            Notifier.shared.openMainWindow = { openWindow(id: "main") }
         }
     }
 }

@@ -51,6 +51,7 @@ struct Sidebar: View {
             Section {
                 Label("今天", systemImage: "sun.max").tag(Route.today)
                 Label("等你确认", systemImage: "hand.raised")
+                    .accessibilityIdentifier("nav-confirm")
                     .badge(confirmBadge)
                     .tag(Route.confirm)
                 Label("待办", systemImage: "checklist").badge(store.todayTodos.count).tag(Route.todos)

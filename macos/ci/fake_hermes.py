@@ -50,8 +50,14 @@ pending = {}  # broker -> {challenge, redirect_uri, state}
 codes = {}  # code -> challenge
 access_tokens = {}  # token -> expiry
 refresh_tokens = set()
-sessions = {"shion": "sess-shion"}  # profile -> its Bot Chat (課程 has none until opened)
+# profile -> its Bot Chat. 詩音's is long; 课程's exists and raises an approval once Shion attaches
+# to it, without its chat being opened; 通勤 has none until its chat is opened (created then).
+sessions = {"shion": "sess-shion", "study": "sess-study"}
 transcripts = {}  # session id -> rows, oldest first, shaped like session.transcript rows
+approvals_raised = set()  # session ids that already asked
+APPROVAL = {"prompt_id": "ap-moodle", "execution_generation": 1, "command": "open https://moodle.example/login",
+            "description": "要在课程的云桌面上登录 Moodle 吗？", "choices": ["once", "session", "always", "deny"]}
+RESPOND_KEYS = {"profile", "session_id", "execution_generation", "prompt_id", "choice", "answer"}
 
 
 def seed_transcripts():
@@ -66,6 +72,8 @@ def seed_transcripts():
     rows.append({"row_id": 200, "row_kind": "message", "role": "assistant", "text": "CI 替身服务器连上了。",
                  "timestamp": time.time()})
     transcripts["sess-shion"] = rows
+    transcripts["sess-study"] = [{"row_id": 1, "row_kind": "message", "role": "assistant",
+                                  "text": "课程的 Bot Chat。", "timestamp": start}]
 
 
 seed_transcripts()
@@ -353,6 +361,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.flush()
         log("  ws: open")
+        self.write_lock = threading.Lock()
         self.close_connection = True
         self.event("gateway.ready", None, {"session_authority": True, "heartbeat": True})
         try:
@@ -400,6 +409,14 @@ class Handler(BaseHTTPRequestHandler):
             if fin:
                 return first, message
 
+    def raise_approval(self, session_id):
+        log(f"  -> approval.request on {session_id}")
+        try:
+            self.event("session.info", session_id, {"running": True})
+            self.event("approval.request", session_id, APPROVAL)
+        except OSError:
+            pass
+
     def send_frame(self, opcode, data):
         head = bytearray([0x80 | opcode])
         if len(data) < 126:
@@ -410,8 +427,10 @@ class Handler(BaseHTTPRequestHandler):
         else:
             head.append(127)
             head += struct.pack(">Q", len(data))
-        self.wfile.write(bytes(head) + data)
-        self.wfile.flush()
+        # replies come from the socket's thread, a timer's events from another
+        with self.write_lock:
+            self.wfile.write(bytes(head) + data)
+            self.wfile.flush()
 
     def send_json(self, value):
         self.send_frame(1, json.dumps(value, ensure_ascii=False).encode())
@@ -478,6 +497,8 @@ class Handler(BaseHTTPRequestHandler):
                 {"name": "shion", "display_name": "詩音", "description": "", "is_default": True, "ui_meta": {}},
                 {"name": "study", "display_name": "study", "description": "课程", "is_default": False,
                  "ui_meta": {"hermes-bots": {"title": "课程（CI）"}}},
+                {"name": "commute", "display_name": "通勤（CI）", "description": "通勤", "is_default": False,
+                 "ui_meta": {}},
             ]}
         elif method == "runtime.describe":
             if params:
@@ -498,6 +519,10 @@ class Handler(BaseHTTPRequestHandler):
             if unknown:
                 return self.refuse(rid, unknown)
             result = self.snapshot(params.get("session_id", ""), params)
+            if params.get("session_id") == "sess-study" and "sess-study" not in approvals_raised:
+                # 课程 wants a login on its cloud desktop, a moment after Shion attaches
+                approvals_raised.add("sess-study")
+                threading.Timer(2.0, self.raise_approval, args=("sess-study",)).start()
         elif method == "session.create":
             unknown = sorted(set(params) - CREATE_KEYS)
             if unknown:
@@ -524,6 +549,17 @@ class Handler(BaseHTTPRequestHandler):
             result, bad = self.transcript(params)
             if bad:
                 return self.refuse(rid, bad)
+        elif method in ("approval.respond", "clarify.respond"):
+            unknown = sorted(set(params) - RESPOND_KEYS)
+            if unknown:
+                return self.refuse(rid, unknown)
+            log(f"    answered {params.get('prompt_id')} for {params.get('profile')}: "
+                f"{params.get('choice', params.get('answer'))!r}")
+            self.send_json({"jsonrpc": "2.0", "id": rid, "result": {"accepted": True}})
+            kind = "approval.settled" if method == "approval.respond" else "clarify.settled"
+            self.event(kind, params.get("session_id"), {"prompt_id": params.get("prompt_id")})
+            self.event("session.info", params.get("session_id"), {"running": False})
+            return
         elif method == "prompt.submit":
             self.send_json({"jsonrpc": "2.0", "id": rid, "result": {"accepted": True}})
             session_id, text = params.get("session_id"), params.get("text", "")

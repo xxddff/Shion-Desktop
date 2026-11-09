@@ -57,7 +57,7 @@ final class SignInTests: XCTestCase {
             return XCTFail("Not connected: \(state.label) / \(String(describing: state.value))")
         }
 
-        // the assistants now come from the stand-in: 詩音 and 课程（CI）
+        // the assistants now come from the stand-in: 詩音, 课程（CI） and 通勤（CI）
         app.typeKey("w", modifierFlags: .command)
         let chief = element("bot-shion", in: app)
         guard chief.waitForExistence(timeout: 10) else {
@@ -65,6 +65,21 @@ final class SignInTests: XCTestCase {
             return XCTFail("No assistants from the server")
         }
         XCTAssertTrue(element("bot-study", in: app).exists)
+
+        // 课程's Bot Chat was never opened, yet its approval reaches 等你确认: every Bot Chat is
+        // attached in the background once Shion connects
+        element("nav-confirm", in: app).click()
+        let approval = waitForText("要在课程的云桌面上登录 Moodle 吗", in: app, timeout: 15)
+        keep(app.windows.firstMatch.screenshot(), "signin-4a-approval")
+        XCTAssertTrue(approval, "the approval from an unopened chat did not arrive")
+        if approval {
+            app.buttons["允许这一次"].firstMatch.click()
+            let gone = NSPredicate(format: "exists == false")
+            let settled = XCTNSPredicateExpectation(predicate: gone, object: app.buttons["允许这一次"].firstMatch)
+            XCTAssertEqual(XCTWaiter().wait(for: [settled], timeout: 10), .completed, "the approval stayed after answering")
+            keep(app.windows.firstMatch.screenshot(), "signin-4b-approved")
+        }
+
         chief.click()
         let opened = waitForText("CI 替身服务器连上了", in: app, timeout: 15)
         keep(app.windows.firstMatch.screenshot(), "signin-4-chat")
@@ -116,9 +131,9 @@ final class SignInTests: XCTestCase {
         keep(window.screenshot(), "signin-6-oldest")
         XCTAssertTrue(reachedTop, "older pages did not load on scrolling up")
 
-        // 课程 has no Bot Chat on the stand-in yet: Shion creates one (the stand-in checks the
+        // 通勤 has no Bot Chat on the stand-in yet: Shion creates one (the stand-in checks the
         // fields against Hermes's, and logs which interface the assistant would be told)
-        element("bot-study", in: app).click()
+        element("bot-commute", in: app).click()
         let created = waitForText("新的 Bot Chat。", in: app, timeout: 15)
         keep(window.screenshot(), "signin-7-new-chat")
         XCTAssertTrue(created, "the new Bot Chat did not open")

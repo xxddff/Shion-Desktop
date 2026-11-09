@@ -6,7 +6,7 @@ struct ShionApp: App {
     @State private var store = AppStore(now: Clock.demoNow)
 
     var body: some Scene {
-        WindowGroup("Shion") {
+        WindowGroup("Shion", id: "main") {
             RootView()
                 .environment(store)
                 .preferredColorScheme(LaunchOptions.current.colorScheme)
