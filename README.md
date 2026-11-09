@@ -327,6 +327,10 @@ macOS 上是 SwiftUI 加 AppKit（UIKit 是 iOS 的；Mac Catalyst 做菜单栏�
 prototype/      UI 原型（Vite + React + TypeScript，示例数据）
   src/data/     模型、示例数据、模拟器（课后整理、核查、催促会自己播放）
   src/views/    今天、待办、日程、日报、等你确认、Bot Chat
+macos/          macOS App（SwiftUI + AppKit，最低 macOS 27），project.yml 由 XcodeGen 生成工程
+  Shion/        App：Model（数据和示例数据）、Support（启动参数、格式、配色）、Views（各页面）
+  ShionUITests/ 截图测试：每个页面浅色、深色各截一张
+.github/workflows/macos.yml   在 macOS 27 runner 上编译并截图
 ```
 
 ```bash
@@ -335,11 +339,26 @@ npm install
 npm run dev        # http://localhost:1420
 ```
 
+```bash
+brew install xcodegen
+cd macos
+xcodegen           # 生成 Shion.xcodeproj（不进仓库）
+open Shion.xcodeproj
+```
+
+### 原生 App 的界面检查
+
+界面靠 CI 截图来看，不在本地开模拟器：
+- **什么时候跑**：只有 `macos/` 或这个工作流改了才跑，也可以在 Actions 里手动触发；同一分支上新的提交会取消还没跑完的那次。
+- **跑什么**：在 `xcode-27` runner（macOS 27、Apple 芯片）上生成工程、编译，再跑 `ShionUITests`：每个页面用启动参数直接打开（`-ShionSnapshot YES -ShionRoute today -ShionAppearance dark`），等界面稳定后截窗口。截图模式下日期固定在 2026 年 11 月 9 日（周一）10:52，每次的图可以直接对比。
+- **看哪里**：截图打包成这次运行的 `shots` 附件（保留 14 天），文件名是「页面-外观.png」。编译失败时，最后一步会列出错误。
+- **省时间**：macOS runner 的分钟数有限，攒够一批改动再推；只改 README 这类文件不会触发。
+
 ## 路线图
 
 1. **对齐界面**（现在）：用原型把信息结构和关键流程定下来。
 2. **协议探路**：一个命令行小程序，经 Cloudflare Tunnel 用 Access service token 连上 VPS，跑通握手、`profiles.list`、打开 Bot Chat、流式消息、回答审批，同时验证风险 1–4，再走一遍风险 5 的探路（画面 WebSocket 的 RFB 握手）。
-3. **SwiftUI 骨架**：`NavigationSplitView` 主窗口、Bot Chat、等你确认、可回复的系统通知、`MenuBarExtra`、全局快捷键；云桌面先做缩略图和接管、交还，再做实时画面。
+3. **SwiftUI 骨架**（已开始，`macos/`）：主窗口和各页面先用示例数据做出来；接着是可回复的系统通知、菜单栏、全局快捷键；云桌面先做缩略图和接管、交还，再做实时画面。
 4. **`shion` 插件和助手团队**：插件提供待办、今天汇总、日报、应用记录；把詩音和各助手的 profile、SOUL、例行任务做成一套可一键部署的模板。
 5. **今天 / 待办 / 日程 / 日报** 接真实数据，加上 Mac 应用使用记录。
 6. 以后：接入这台 Mac 让助手在本机做事；全天录音。
