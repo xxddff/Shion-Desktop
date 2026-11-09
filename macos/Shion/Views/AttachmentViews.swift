@@ -82,7 +82,8 @@ struct AttachmentTray: View {
 
 /// One attachment: a ring while it goes up, red with the reason on hover when it cannot (a click
 /// tries again when trying again can help), and a × to take it out. To accessibility it is one
-/// element, its name and where it is, with 移除 (and 再试一次) as its actions.
+/// element named for the file and where it is (in the label: macOS reads no value off a plain
+/// group), with 移除 (and 再试一次) as its actions.
 struct DraftChip: View {
     @Environment(AppStore.self) private var store
     let botId: String
@@ -111,8 +112,7 @@ struct DraftChip: View {
             }
             .help(helpText)
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel(draft.name)
-            .accessibilityValue(stateText)
+            .accessibilityLabel(draft.name + "，" + stateText)
             .accessibilityIdentifier(draft.kind == .image ? "draft-picture" : "draft-file")
             .accessibilityActions {
                 if retryable {

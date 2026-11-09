@@ -265,6 +265,7 @@ struct MediaPicture: View {
                         .lineLimit(1)
                 }
                 .accessibilityElement(children: .ignore)
+                .accessibilityAddTraits(.isImage)
                 .accessibilityLabel(media.caption ?? "网上的图片")
                 .accessibilityValue("点了才显示")
                 .accessibilityIdentifier("web-picture")
@@ -314,6 +315,7 @@ struct MediaPicture: View {
                 }
             }
             .accessibilityElement(children: .ignore)
+            .accessibilityAddTraits(.isImage)
             .accessibilityLabel(media.caption ?? AppStore.displayName(media.name))
             .accessibilityValue(value)
             .accessibilityIdentifier(identifier)
@@ -412,10 +414,10 @@ struct FileCard: View {
             }
         }
         .quickLookPreview($previewing)
+        // what the card shows, both lines: macOS reads no value off a button
         .accessibilityElement(children: .ignore)
         .accessibilityAddTraits(.isButton)
-        .accessibilityLabel(name)
-        .accessibilityValue(saved ? "已下载" : detail)
+        .accessibilityLabel(name + "，" + detail)
         .accessibilityIdentifier("file-card")
     }
 

@@ -47,7 +47,7 @@ final class MediaTests: XCTestCase {
         XCTAssertTrue(chip.waitForExistence(timeout: 10), "the pasted picture is not in the composer")
         let ready = waitUntil(timeout: 20) { send.isEnabled }
         keep(window.screenshot(), "media-1-picture-ready")
-        XCTAssertTrue(ready, "the picture did not finish uploading: \(String(describing: chip.value))")
+        XCTAssertTrue(ready, "the picture did not finish uploading: \(chip.label)")
         composer.click()
         composer.typeText("看看这张图（CI）")
         send.click()
@@ -66,9 +66,10 @@ final class MediaTests: XCTestCase {
         let files = app.descendants(matching: .any).matching(identifier: "draft-file")
         XCTAssertTrue(waitUntil(timeout: 10) { files.count == 3 }, "the pasted files are not in the composer: \(files.count)")
         let refused = files.matching(NSPredicate(format: "label CONTAINS %@", "重试")).firstMatch
-        let failed = waitUntil(timeout: 20) { (refused.value as? String)?.hasPrefix("没传上去") == true }
+        // a chip says where it is in its label
+        let failed = waitUntil(timeout: 20) { refused.label.contains("没传上去") }
         keep(window.screenshot(), "media-3-file-refused")
-        XCTAssertTrue(failed, "the file the stand-in refuses does not say so: \(String(describing: refused.value))")
+        XCTAssertTrue(failed, "the file the stand-in refuses does not say so: \(refused.label)")
         refused.click()
         let allUp = waitUntil(timeout: 30) { send.isEnabled }
         keep(window.screenshot(), "media-4-files-ready")
@@ -109,9 +110,9 @@ final class MediaTests: XCTestCase {
         XCTAssertTrue(waits, "the web picture is not waiting for a click")
         XCTAssertFalse(waitForText("MEDIA:", in: app, timeout: 1), "a MEDIA: tag shows as text")
         slides.click()
-        let saved = waitUntil(timeout: 15) { (slides.value as? String) == "已下载" }
+        let saved = waitUntil(timeout: 15) { slides.label.contains("已存到「下载」") }
         keep(window.screenshot(), "media-8-saved")
-        XCTAssertTrue(saved, "the PDF was not saved: \(String(describing: slides.value))")
+        XCTAssertTrue(saved, "the PDF was not saved: \(slides.label)")
 
         // 5. read again from the server: the transcript has the pictures' notes and the files'
         // references, not the screenshot, which only the Mac has now
@@ -237,9 +238,11 @@ final class MediaTests: XCTestCase {
         return waitUntil(timeout: 2, condition)
     }
 
+    /// A file card, by its name: its label goes on with what its second line says.
     @MainActor
     private func card(_ name: String, in app: XCUIApplication) -> XCUIElement {
-        app.descendants(matching: .any).matching(identifier: "file-card").matching(NSPredicate(format: "label == %@", name)).firstMatch
+        app.descendants(matching: .any).matching(identifier: "file-card")
+            .matching(NSPredicate(format: "label BEGINSWITH %@", name + "，")).firstMatch
     }
 
     @MainActor
