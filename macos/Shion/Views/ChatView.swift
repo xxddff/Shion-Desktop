@@ -113,8 +113,15 @@ struct AssistantMessage: View {
             }
             if item.text.isEmpty && item.streaming {
                 BusyDots()
+            } else if item.streaming {
+                // selectable text keeps the accessibility value it was created with, so a reply
+                // becomes selectable once it is whole
+                Text(item.text + " ▍")
+                    .font(.t13)
+                    .lineSpacing(3)
+                    .fixedSize(horizontal: false, vertical: true)
             } else {
-                Text(item.streaming ? item.text + " ▍" : item.text)
+                Text(item.text)
                     .font(.t13)
                     .lineSpacing(3)
                     .textSelection(.enabled)

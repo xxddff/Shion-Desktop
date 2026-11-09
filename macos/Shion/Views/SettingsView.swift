@@ -90,7 +90,7 @@ struct AccountRow: View {
             if store.account.state == .signingIn {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
-                    Text("在弹出的窗口里登录").foregroundStyle(.secondary)
+                    Text("登录中…").foregroundStyle(.secondary)
                     Button("取消") { store.account.cancelSignIn() }
                 }
             } else if let tokens = store.account.tokens(for: draft.trimmed) {
@@ -134,6 +134,9 @@ struct ConnectionState: View {
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
+                // selectable text keeps the accessibility value it was created with: a new
+                // line of text gets a new view, so VoiceOver reads what is on screen
+                .id(text)
                 .accessibilityIdentifier("connection-state")
         }
     }
