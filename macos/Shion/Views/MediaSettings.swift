@@ -17,20 +17,22 @@ struct MediaSettings: View {
                 Text("关着时，回复里网上的图片先是一块占位，写着网站名，点「显示图片」才去取：去取时，那个网站会知道你的 IP 和看的时间。取的时候不带 Cookie、不发来源页，只收图片，最多 20 MB；本机和局域网里的地址一律不取。")
             }
             LabeledContent("Mac 上的副本") {
-                HStack(spacing: 8) {
-                    Text(usage)
-                        .foregroundStyle(.secondary)
-                        .accessibilityIdentifier("media-cache")
-                    Button("清除取回的") {
-                        Task { await store.media.clear(keptToo: false) }
-                    }
-                    Button("全部清除…") {
-                        confirmingAll = true
-                    }
-                }
+                Text(usage)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("media-cache")
             }
             .task {
                 await store.media.refreshUsage()
+            }
+            // a row of their own: beside the sizes they left no room for them in a narrow window
+            HStack(spacing: 8) {
+                Spacer()
+                Button("清除取回的") {
+                    Task { await store.media.clear(keptToo: false) }
+                }
+                Button("全部清除…") {
+                    confirmingAll = true
+                }
             }
         } header: {
             Text("图片和文件")

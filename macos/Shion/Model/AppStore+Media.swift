@@ -471,20 +471,21 @@ extension AppStore {
     }
 
     /// A web picture, as privately as it can be had: no cookies, no referrer, `image/*` only and
-    /// no SVG, 20 MB at most, never from this Mac or its network. Off the main thread.
+    /// no SVG, 20 MB at most, never from this Mac or its network, not even by a redirect
+    /// (WebRedirects). Off the main thread.
     private nonisolated static func fetchWebPicture(_ url: URL) async throws -> Data {
-        guard let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http",
-              let host = url.host, !isLocal(host)
-        else { throw MediaError.localAddress }
+        guard isWeb(url) else { throw MediaError.localAddress }
         return try await Task.detached(priority: .userInitiated) {
-            let session = URLSession(configuration: .ephemeral)
+            let session = URLSession(configuration: .ephemeral, delegate: WebRedirects(), delegateQueue: nil)
             defer { session.finishTasksAndInvalidate() }
             var request = URLRequest(url: url, timeoutInterval: 20)
             request.httpShouldHandleCookies = false
             request.setValue("image/*", forHTTPHeaderField: "Accept")
             let (bytes, response) = try await session.bytes(for: request)
             guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-                throw MediaError.refused((response as? HTTPURLResponse)?.statusCode ?? 0, "")
+                let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+                // a redirect WebRedirects did not follow
+                throw (300..<400).contains(status) ? MediaError.localAddress : MediaError.refused(status, "")
             }
             if let final = http.url?.host, isLocal(final) {
                 throw MediaError.localAddress
@@ -500,6 +501,12 @@ extension AppStore {
             }
             return data
         }.value
+    }
+
+    /// An http(s) address out on the web.
+    nonisolated static func isWeb(_ url: URL) -> Bool {
+        guard let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http", let host = url.host else { return false }
+        return !isLocal(host)
     }
 
     /// This Mac, its network, and names that only mean something there.
@@ -598,5 +605,18 @@ extension AppStore {
         }
         return FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads", isDirectory: true)
+    }
+}
+
+/// A web picture's redirects are followed on the web only: none to this Mac or its network, none
+/// off http(s). The first address is checked before the request goes (fetchWebPicture).
+nonisolated final class WebRedirects: NSObject, URLSessionTaskDelegate, Sendable {
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
+        if let url = request.url, AppStore.isWeb(url) {
+            completionHandler(request)
+        } else {
+            completionHandler(nil)
+        }
     }
 }
