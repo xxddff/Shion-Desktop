@@ -133,6 +133,10 @@ struct ChatItem: Identifiable, Hashable {
     let at: Date
     var text = ""
     var cardId: String?
+    /// A card made in the chat (kanban_create): what it was made with, to find it on the board
+    /// when the transcript does not say its id.
+    var cardTitle: String?
+    var cardAssignee: String?
     var todoIds: [String] = []
     /// An assistant reply still arriving.
     var streaming = false

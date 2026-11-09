@@ -199,24 +199,35 @@ struct CardRow: View {
     }
 }
 
-/// A kanban card inside a conversation: what was handed to whom, and how it is going.
+/// A kanban card inside a conversation: what was handed to whom, and how it is going (left out
+/// while the board does not know the card yet).
 struct CardChip: View {
     @Environment(AppStore.self) private var store
     let card: Card
+    var showsStatus = true
 
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: "rectangle.split.3x1").foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 2) {
                 Text(card.title).font(.t13).lineLimit(1)
-                Text("交给「\(store.bot(card.assignee)?.name ?? "")」").font(.t12).foregroundStyle(.secondary)
+                Text(handedTo).font(.t12).foregroundStyle(.secondary)
             }
             Spacer(minLength: 8)
-            CardStateTag(status: card.status)
+            if showsStatus {
+                CardStateTag(status: card.status)
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
         .background(Palette.card, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Palette.line))
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("chat-card-\(card.id)")
+    }
+
+    private var handedTo: String {
+        guard !card.assignee.isEmpty else { return "还没交给助手" }
+        return "交给「\(store.bot(card.assignee)?.name ?? card.assignee)」"
     }
 }

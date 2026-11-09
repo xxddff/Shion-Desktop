@@ -57,6 +57,9 @@ final class AppStore {
     @ObservationIgnored var demoReports: [Report] = []
     /// bot id → how many of its rows came before the attach that is waiting for its first page
     @ObservationIgnored private var attachMarks: [String: Int] = [:]
+    /// A kanban_create call shown as a card, waiting for its result to say the card's id:
+    /// tool id → (bot id, chat row id).
+    @ObservationIgnored private var madeCards: [String: (botId: String, itemId: String)] = [:]
     /// Bot ids whose rows are loaded: chats opened on this connection. The other Bot Chats are
     /// attached only for their approvals, questions and busy state.
     @ObservationIgnored private var loadedChats: Set<String> = []
@@ -211,7 +214,7 @@ extension AppStore {
         await loadProfiles()
         await loadPluginData()
         await loadBoardLimits()
-        board.start(serverSettings, credential: gateway.credential)
+        board.start(serverSettings, credential: gateway.credential, author: signedInName)
         await attachAll()
     }
 
@@ -298,6 +301,15 @@ extension AppStore {
         if !LaunchOptions.current.snapshot {
             serverSettings.save()
         }
+    }
+
+    /// The name you signed in with in the browser (Hermes's `user_id`: the user name, for a user
+    /// name and password); a session token has none.
+    private var signedInName: String? {
+        guard serverSettings.login == .browser,
+              let name = account.tokens(for: serverSettings)?.userId, !name.isEmpty
+        else { return nil }
+        return name
     }
 
     private func credential(for settings: ServerSettings, renew: Bool) async throws -> Credential {
@@ -468,7 +480,7 @@ extension AppStore {
             attachMarks[botId] = chats[botId]?.count ?? 0
         } else {
             let rows = snapshot["display_messages"]?.array ?? snapshot["messages"]?.array ?? []
-            chats[botId] = uniqued(rows.compactMap(chatItem(from:)))
+            chats[botId] = uniqued(rows.flatMap(chatItems(from:)))
             olderPages[botId] = nil
         }
         setRunning(botId, snapshot["running"]?.bool ?? false)
@@ -532,11 +544,11 @@ extension AppStore {
     /// were folded into a summary. Hermes gives it the `row_id` of the message it was stored on,
     /// which shows as its own row right after it when it holds real content too: their ids differ.
     private func transcriptItems(_ page: JSONValue) -> [ChatItem] {
-        uniqued((page["rows"]?.array ?? []).compactMap { row in
-            guard row["row_kind"]?.string == "compaction" else { return chatItem(from: row) }
+        uniqued((page["rows"]?.array ?? []).flatMap { row -> [ChatItem] in
+            guard row["row_kind"]?.string == "compaction" else { return chatItems(from: row) }
             let at = row["timestamp"]?.number.map { Date(timeIntervalSince1970: $0) } ?? Date()
             let id = row["row_id"]?.int.map { "compaction-\($0)" } ?? UUID().uuidString
-            return ChatItem(id: id, role: .system, at: at, text: "更早的对话压缩成了摘要")
+            return [ChatItem(id: id, role: .system, at: at, text: "更早的对话压缩成了摘要")]
         })
     }
 
@@ -574,26 +586,92 @@ extension AppStore {
         }
     }
 
-    private func chatItem(from row: JSONValue) -> ChatItem? {
+    /// A transcript row as the chat shows it: usually one item, none for a row that is not for you,
+    /// one card per line for the board's notices.
+    private func chatItems(from row: JSONValue) -> [ChatItem] {
         let at = row["timestamp"]?.number.map { Date(timeIntervalSince1970: $0) } ?? Date()
         // Hermes's tool rows have no row_id; their call's id keeps them the same across reads
         let id = row["row_id"]?.int.map { "row-\($0)" } ?? row["row_id"]?.string
             ?? row["tool_call_id"]?.string.map { "tool-\($0)" } ?? UUID().uuidString
         switch row["role"]?.string {
         case "user":
-            guard row["display_kind"]?.string != "hidden" else { return nil }
+            guard row["display_kind"]?.string != "hidden" else { return [] }
+            let body = text(of: row)
             // the plugin's focus-check line that woke 詩音: for her, not for the transcript
-            guard !text(of: row).hasPrefix("［专注检查］") else { return nil }
-            return ChatItem(id: id, role: .user, at: at, text: text(of: row))
+            guard !body.hasPrefix("［专注检查］") else { return [] }
+            // the board's word on cards this chat made: Hermes sends it as a turn in your name
+            let notices = Self.kanbanNotices(body)
+            guard notices.isEmpty else {
+                return notices.enumerated().map { index, notice in
+                    ChatItem(id: index == 0 ? id : "\(id)-card\(index + 1)", role: .card, at: at, text: notice.line,
+                             cardId: notice.taskId, cardAssignee: notice.assignee)
+                }
+            }
+            return [ChatItem(id: id, role: .user, at: at, text: body)]
         case "assistant":
             let body = text(of: row)
-            return body.isEmpty ? nil : ChatItem(id: id, role: .assistant, at: at, text: body)
+            return body.isEmpty ? [] : [ChatItem(id: id, role: .assistant, at: at, text: body)]
         case "tool":
             let name = row["name"]?.string ?? row["tool_name"]?.string ?? "tool"
-            return ChatItem(id: id, role: .tool, at: at, text: toolLine(name, row["context"]?.string ?? ""))
+            if let made = Self.madeCard(name, args: row["args"]) {
+                return [ChatItem(id: id, role: .card, at: at, cardTitle: made.title, cardAssignee: made.assignee)]
+            }
+            return [ChatItem(id: id, role: .tool, at: at, text: toolLine(name, row["context"]?.string ?? ""))]
         default:
-            return nil
+            return []
         }
+    }
+
+    /// A kanban_create call's card: the title it was made with and who it was handed to.
+    private static func madeCard(_ name: String, args: JSONValue?) -> (title: String, assignee: String?)? {
+        guard name == "kanban_create", let title = args?["title"]?.string, !title.isEmpty else { return nil }
+        let assignee = args?["assignee"]?.string ?? ""
+        return (title, assignee.isEmpty ? nil : assignee)
+    }
+
+    /// The id of the card a kanban_create call made, from its result (`{"ok": true, "task_id": …}`,
+    /// as an object or as its JSON text).
+    private static func madeCardId(_ payload: JSONValue) -> String? {
+        for value in [payload["result"], payload["result_text"]] {
+            if let id = value?["task_id"]?.string { return id }
+            if let text = value?.string, let parsed = try? JSONValue.parse(text), let id = parsed["task_id"]?.string {
+                return id
+            }
+        }
+        return nil
+    }
+
+    /// The board's notices about cards a chat made (tui_gateway/session_notifications.py, worded
+    /// as on Telegram): "✔ [study] @study Kanban t_ab12 done — …", one per line; a line after a
+    /// notice that is not one (a give-up's error) belongs to it. Empty when the text is not notices.
+    static func kanbanNotices(_ text: String) -> [(line: String, taskId: String, assignee: String?)] {
+        var notices: [(line: String, taskId: String, assignee: String?)] = []
+        for line in text.split(separator: "\n").map(String.init) {
+            guard let notice = kanbanNotice(line) else {
+                if notices.isEmpty { return [] }
+                notices[notices.count - 1].line += "\n" + line
+                continue
+            }
+            notices.append((line, notice.taskId, notice.assignee))
+        }
+        return notices
+    }
+
+    /// One notice line: a mark, the board in brackets, @ the assignee, "Kanban" and the card's id.
+    private static func kanbanNotice(_ line: String) -> (taskId: String, assignee: String?)? {
+        var words = line.split(separator: " ", omittingEmptySubsequences: false)[...]
+        guard let mark = words.first, (1...2).contains(mark.count) else { return nil }
+        words = words.dropFirst()
+        if let board = words.first, board.hasPrefix("["), board.hasSuffix("]") {
+            words = words.dropFirst()
+        }
+        var assignee: String?
+        if let who = words.first, who.hasPrefix("@"), who.count > 1 {
+            assignee = String(who.dropFirst())
+            words = words.dropFirst()
+        }
+        guard words.first == "Kanban", let id = words.dropFirst().first, !id.isEmpty else { return nil }
+        return (String(id), assignee)
     }
 
     private func text(of row: JSONValue) -> String {
@@ -640,7 +718,29 @@ extension AppStore {
             guard shown else { break }
             endReply(botId)
             let name = payload["name"]?.string ?? payload["tool_name"]?.string ?? "tool"
-            append(ChatItem(id: UUID().uuidString, role: .tool, at: Date(), text: toolLine(name, payload["context"]?.string ?? "")), to: botId)
+            if let made = Self.madeCard(name, args: payload["args"]) {
+                let id = UUID().uuidString
+                if let call = payload["tool_id"]?.string {
+                    madeCards[call] = (botId, id)
+                }
+                append(ChatItem(id: id, role: .card, at: Date(), cardTitle: made.title, cardAssignee: made.assignee), to: botId)
+            } else {
+                append(ChatItem(id: UUID().uuidString, role: .tool, at: Date(), text: toolLine(name, payload["context"]?.string ?? "")), to: botId)
+            }
+        case "tool.complete":
+            // a kanban_create call's result names the card it made
+            guard let call = payload["tool_id"]?.string, let made = madeCards.removeValue(forKey: call),
+                  let cardId = Self.madeCardId(payload),
+                  let index = chats[made.botId]?.firstIndex(where: { $0.id == made.itemId })
+            else { break }
+            chats[made.botId]?[index].cardId = cardId
+        case "status.update":
+            // the board's word on a card this chat made, just before the turn it starts
+            guard shown, payload["kind"]?.string == "process", let text = payload["text"]?.string else { break }
+            for notice in Self.kanbanNotices(text) {
+                append(ChatItem(id: UUID().uuidString, role: .card, at: Date(), text: notice.line,
+                                cardId: notice.taskId, cardAssignee: notice.assignee), to: botId)
+            }
         case "session.info":
             if let running = payload["running"]?.bool {
                 setRunning(botId, running)

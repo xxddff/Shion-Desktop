@@ -59,8 +59,8 @@ struct Sidebar: View {
                 Label("日报", systemImage: "doc.text").accessibilityIdentifier("nav-reports").tag(Route.reports)
             }
             Section("工作区") {
-                Label("看板", systemImage: "rectangle.split.3x1").tag(Route.board)
-                Label("云桌面", systemImage: "display").tag(Route.desktop)
+                Label("看板", systemImage: "rectangle.split.3x1").accessibilityIdentifier("nav-board").tag(Route.board)
+                Label("云桌面", systemImage: "display").accessibilityIdentifier("nav-desktop").tag(Route.desktop)
             }
             Section("助手") {
                 ForEach(store.bots) { bot in

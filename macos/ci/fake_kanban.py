@@ -106,6 +106,31 @@ def event(board, task_id, kind, payload=None, at=None):
     return row
 
 
+def assistant_creates(slug, title, assignee, creator, body=None):
+    """A card an assistant makes with its kanban_create tool: ready for its assignee, made by its profile."""
+    with lock:
+        board = boards[slug]
+        tid = "t_" + secrets.token_hex(4)
+        t = _task(tid, title, assignee, "ready", 0, body=body)
+        t["created_by"] = creator
+        board["tasks"][tid] = t
+        event(board, tid, "created", {"assignee": assignee, "status": "ready"})
+    _log(f"  kanban: {creator} made {tid} for {assignee} on {slug}")
+    return tid
+
+
+def worker_completes(slug, tid, summary):
+    """The assignee's worker ran the card and finished it, handing off a summary."""
+    with lock:
+        board = boards[slug]
+        t = board["tasks"][tid]
+        now = int(time.time())
+        t.update(status="done", started_at=t["started_at"] or now - 2, completed_at=now, latest_summary=summary)
+        event(board, tid, "completed", {"summary": summary})
+        recompute_ready(board)
+    _log(f"  kanban: {tid} done on {slug}")
+
+
 def counts(board):
     out = {}
     for t in board["tasks"].values():
@@ -229,10 +254,12 @@ def handle(method, path, board, slug, body):
             text = (body.get("body") or "").strip()
             if not text:
                 return 400, {"detail": "body is required"}
+            author = body.get("author") or "dashboard"
+            _log(f"  kanban comment on {tid} by {author}")
             board["comments"].append({"id": len(board["comments"]) + 1, "task_id": tid,
-                                      "author": body.get("author") or "dashboard", "body": text,
+                                      "author": author, "body": text,
                                       "created_at": int(time.time())})
-            event(board, tid, "commented", {"author": body.get("author") or "dashboard"})
+            event(board, tid, "commented", {"author": author})
             return 200, {"ok": True}
         if method == "PATCH" and len(rest) == 1:
             return patch(board, t, body)

@@ -347,7 +347,9 @@ struct BoardInspector: View {
                     Avatar(bot: store.bot(comment.author), size: 20)
                     VStack(alignment: .leading, spacing: 2) {
                         HStack(spacing: 6) {
-                            Text(store.boardAuthor(comment.author)).font(.t12.weight(.semibold))
+                            Text(store.boardAuthor(comment.author))
+                                .font(.t12.weight(.semibold))
+                                .accessibilityIdentifier("comment-author-\(comment.id)")
                             if let at = comment.at {
                                 Text(Ago.text(at, now: now)).font(.t11).foregroundStyle(.secondary)
                             }

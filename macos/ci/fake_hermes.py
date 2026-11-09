@@ -446,6 +446,52 @@ class Handler(BaseHTTPRequestHandler):
             if fin:
                 return first, message
 
+    def hand_over(self, session_id, text):
+        """詩音 hands a card to 课程 with kanban_create, streamed as Hermes streams a tool call: its
+        args at the start, its result (the card's id, as the tool's JSON text) at the end. The
+        transcript keeps the call without its result, as Hermes's does. A few seconds later 课程's
+        worker finishes the card, and the chat's subscription to it brings the board's notice: a
+        status line, then a turn of its own in the user's name."""
+        title, assignee, call = "整理第8回笔记（CI）", "study", "call-ci-kanban"
+        args = {"title": title, "assignee": assignee, "body": "把第8回的录音和课件整理成笔记。"}
+        tid = fake_kanban.assistant_creates("study", title, assignee, "shion", body=args["body"])
+        reply = "交给课程了。"
+        with lock:
+            rows = transcripts.setdefault(session_id, [])
+            rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "user", "text": text,
+                         "timestamp": time.time()})
+            rows.append({"row_kind": "message", "role": "tool", "name": "kanban_create", "context": title,
+                         "args": args, "tool_call_id": call, "timestamp": time.time()})
+            rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "assistant", "text": reply,
+                         "timestamp": time.time()})
+        self.event("message.start", session_id, {})
+        self.event("tool.start", session_id, {"tool_id": call, "name": "kanban_create", "context": title, "args": args})
+        self.event("tool.complete", session_id, {
+            "tool_id": call, "name": "kanban_create",
+            "result": json.dumps({"ok": True, "task_id": tid, "status": "ready", "gated": False})})
+        self.event("message.delta", session_id, {"text": reply})
+        self.event("message.complete", session_id, {"text": reply, "status": "complete"})
+        threading.Timer(4.0, self.card_done, args=(session_id, tid, title)).start()
+
+    def card_done(self, session_id, tid, title):
+        fake_kanban.worker_completes("study", tid, "笔记整理好了。")
+        notice = f"✔ [study] @study Kanban {tid} done — {title}"
+        reply = "课程把笔记整理好了。"
+        with lock:
+            rows = transcripts.setdefault(session_id, [])
+            rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "user", "text": notice,
+                         "timestamp": time.time()})
+            rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "assistant", "text": reply,
+                         "timestamp": time.time()})
+        log(f"  -> kanban notice on {session_id}: {notice}")
+        try:
+            self.event("status.update", session_id, {"kind": "process", "text": notice})
+            self.event("message.start", session_id, {})
+            self.event("message.delta", session_id, {"text": reply})
+            self.event("message.complete", session_id, {"text": reply, "status": "complete"})
+        except OSError:
+            pass
+
     def raise_approval(self, session_id):
         log(f"  -> approval.request on {session_id}")
         try:
@@ -602,6 +648,8 @@ class Handler(BaseHTTPRequestHandler):
         elif method == "prompt.submit":
             self.send_json({"jsonrpc": "2.0", "id": rid, "result": {"accepted": True}})
             session_id, text = params.get("session_id"), params.get("text", "")
+            if "派一张卡" in text:
+                return self.hand_over(session_id, text)
             with lock:
                 rows = transcripts.setdefault(session_id, [])
                 rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "user", "text": text,

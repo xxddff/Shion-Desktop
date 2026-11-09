@@ -61,6 +61,21 @@ final class BoardTests: XCTestCase {
         XCTAssertTrue(detail, "the card's comments did not show")
         XCTAssertTrue(waitForText("停下来等你", in: app, timeout: 3), "no runs")
 
+        // you answer it: the comment goes out under the name you signed in with (the stand-in
+        // keeps the author it is sent) and shows as yours; 让它继续 puts the card back in the queue
+        let field = element("card-comment", in: app)
+        XCTAssertTrue(field.waitForExistence(timeout: 5), "no comment field")
+        field.click()
+        field.typeText("验证码是 246810（CI）")
+        element("card-comment-send", in: app).click()
+        let commented = waitForText("验证码是 246810（CI）", in: app, timeout: 10)
+        // the stand-in numbers comments per board: 课程's is 1, this one 2
+        let author = element("comment-author-2", in: app)
+        let yours = author.waitForExistence(timeout: 5) && author.label == "你"
+        keep(window.screenshot(), "board-3a-commented")
+        XCTAssertTrue(commented, "the comment did not show")
+        XCTAssertTrue(yours, "the comment is not shown as yours: \(author.label)")
+
         // drag 「下载第8回课件」 from 排队 to 完成; its child then queues behind 课程's running card
         let card = element("card-t_dl8", in: app)
         let done = element("board-column-done", in: app)
@@ -100,6 +115,41 @@ final class BoardTests: XCTestCase {
         keep(window.screenshot(), "board-6-created")
         XCTAssertTrue(created, "the new card did not show")
 
+        // a card 詩音 hands over in her chat shows there as the board's card: at once from the call's
+        // result, then with its status as the board moves; 课程 finishes it a few seconds later
+        // and the board's notice comes in as a card, not as words in your name
+        element("bot-shion", in: app).click()
+        let composer = element("composer", in: app)
+        XCTAssertTrue(composer.waitForExistence(timeout: 10), "詩音's chat did not open")
+        Thread.sleep(forTimeInterval: 1)
+        composer.click()
+        composer.typeText("派一张卡（CI）")
+        element("send", in: app).click()
+        let handed = waitForText("整理第8回笔记（CI）", in: app, timeout: 10)
+        keep(window.screenshot(), "board-8-card-in-chat")
+        XCTAssertTrue(handed, "the card 詩音 made did not show in her chat")
+        let finished = waitForText("课程把笔记整理好了。", in: app, timeout: 15)
+        let doneCard = NSPredicate(format: "label CONTAINS %@ AND label CONTAINS %@", "整理第8回笔记（CI）", "完成")
+        let shownDone = waitUntil(timeout: 10) {
+            app.descendants(matching: .any).matching(doneCard).firstMatch.exists
+        }
+        keep(window.screenshot(), "board-9-card-done")
+        XCTAssertTrue(finished, "no turn after the board's notice")
+        XCTAssertTrue(shownDone, "the card in the chat does not show it is done")
+        XCTAssertFalse(waitForText("Kanban t_", in: app, timeout: 1), "the board's notice shows as text")
+        // read again from the transcript, which keeps the call but not the card's id
+        element("nav-todos", in: app).click()
+        Thread.sleep(forTimeInterval: 1)
+        element("bot-shion", in: app).click()
+        let reread = waitUntil(timeout: 10) {
+            app.descendants(matching: .any).matching(doneCard).count >= 2
+        }
+        keep(window.screenshot(), "board-10-chat-reread")
+        XCTAssertTrue(reread, "after reading the chat again, the call and the notice are not both the card")
+        XCTAssertFalse(waitForText("Kanban t_", in: app, timeout: 1), "the board's notice shows as text after reading again")
+        element("nav-board", in: app).click()
+        XCTAssertTrue(waitForText("整理第8回录音（CI）", in: app, timeout: 10), "back on the board")
+
         // the other board
         let picker = element("board-picker", in: app)
         if picker.waitForExistence(timeout: 5) {
@@ -115,6 +165,15 @@ final class BoardTests: XCTestCase {
             keep(window.screenshot(), "board-7-no-picker")
             XCTFail("no board picker")
         }
+
+        // 今天's 助手在做 is the server's: what runs on either board, not the demo cards
+        element("nav-today", in: app).click()
+        let both = waitUntil(timeout: 15) {
+            self.findText("整理副业发票（CI）", in: app) != nil && self.findText("整理第8回录音（CI）", in: app) != nil
+        }
+        keep(window.screenshot(), "board-11-today")
+        XCTAssertTrue(both, "助手在做 does not list the cards running on both boards")
+        XCTAssertFalse(waitForText("整理「数据结构与算法 第7回」录音", in: app, timeout: 0.5), "demo cards on 今天")
         app.terminate()
     }
 

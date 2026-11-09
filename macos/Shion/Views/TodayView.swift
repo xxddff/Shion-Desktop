@@ -138,7 +138,7 @@ struct TodayView: View {
     }
 
     private var working: some View {
-        let cards = store.cards.filter { $0.status == .running || $0.status == .waiting }
+        let cards = store.workingCards
         return VStack(alignment: .leading, spacing: 6) {
             HStack {
                 SectionTitle(title: "助手在做", count: cards.count)

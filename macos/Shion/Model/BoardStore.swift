@@ -26,9 +26,17 @@ final class BoardStore {
     private(set) var assigneeNames: [String] = []
     /// assignee → its cards running on this board (the per-assistant limit counts per board)
     private(set) var runningByAssignee: [String: Int] = [:]
+    /// The other boards' cards, by board, for 今天's 助手在做 and the cards in chats: the page
+    /// shows one board at a time, the rest is read once a minute.
+    private(set) var elsewhere: [String: [KanbanTask]] = [:]
+    /// Details of the other boards' blocked cards, for their reasons.
+    private(set) var elsewhereDetails: [String: KanbanDetail] = [:]
     /// Why the last change did not go through.
     var actionError: String?
 
+    /// The name you signed in with, sent as your comments' author; without it (a session token)
+    /// Hermes records them as `dashboard`. Cards you make are always `dashboard`'s: the server sets that.
+    @ObservationIgnored private(set) var author: String?
     @ObservationIgnored private var client: KanbanClient?
     /// Bumped by start, stop and a board switch: work begun for an older one stops.
     @ObservationIgnored private var generation = 0
@@ -55,8 +63,9 @@ final class BoardStore {
 
     // MARK: starting and stopping
 
-    func start(_ settings: ServerSettings, credential: KanbanClient.Signer?) {
+    func start(_ settings: ServerSettings, credential: KanbanClient.Signer?, author: String?) {
         stop()
+        self.author = author
         guard let credential else { return }
         client = KanbanClient(settings: settings, credential: credential)
         active = true
@@ -83,6 +92,8 @@ final class BoardStore {
         details = [:]
         assigneeNames = []
         runningByAssignee = [:]
+        elsewhere = [:]
+        elsewhereDetails = [:]
         actionError = nil
         stale = []
         focus = nil
@@ -105,6 +116,7 @@ final class BoardStore {
             await self.reload()
             guard token == self.generation else { return }
             self.listen(token)
+            await self.readElsewhere(token)
         }
     }
 
@@ -117,12 +129,15 @@ final class BoardStore {
         await reload()
         guard token == generation else { return }
         listen(token)
-        // other boards' cards only reach the server-wide count through /boards: read it now and then
+        await readElsewhere(token)
+        // other boards have no event stream here: their counts (the server-wide limit) and cards
+        // are read now and then
         poller = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(60))
                 guard let self, token == self.generation else { return }
                 await self.reload()
+                await self.readElsewhere(token)
             }
         }
     }
@@ -164,10 +179,37 @@ final class BoardStore {
         await fetchDetails(token)
     }
 
-    private func apply(_ reply: JSONValue, assignees: JSONValue?) {
-        tasks = (reply["columns"]?.array ?? [])
+    /// A `/board` reply's cards, less the archived ones.
+    private static func tasks(in reply: JSONValue) -> [KanbanTask] {
+        (reply["columns"]?.array ?? [])
             .filter { $0["name"]?.string != KanbanWorkflow.archived }
             .flatMap { column in (column["tasks"]?.array ?? []).compactMap { KanbanTask($0) } }
+    }
+
+    /// The other boards' cards, and the reasons their blocked ones give; a board with no cards is
+    /// not read.
+    private func readElsewhere(_ token: Int) async {
+        guard let client else { return }
+        var cards: [String: [KanbanTask]] = [:]
+        var blocked: [String: KanbanDetail] = [:]
+        for info in boards where info.slug != slug && info.counts.values.contains(where: { $0 > 0 }) {
+            guard let reply = try? await client.get("/board", board: info.slug) else { continue }
+            guard token == generation else { return }
+            let found = Self.tasks(in: reply)
+            cards[info.slug] = found
+            for task in found where task.status == "blocked" {
+                if let detail = try? await client.get("/tasks/\(KanbanClient.encode(task.id))", board: info.slug) {
+                    blocked[task.id] = KanbanDetail(detail)
+                }
+            }
+        }
+        guard token == generation else { return }
+        elsewhere = cards
+        elsewhereDetails = blocked
+    }
+
+    private func apply(_ reply: JSONValue, assignees: JSONValue?) {
+        tasks = Self.tasks(in: reply)
         if let now = reply["now"]?.number {
             skew = Date(timeIntervalSince1970: now).timeIntervalSinceNow
         }
@@ -357,7 +399,9 @@ final class BoardStore {
         guard let client else { return }
         let path = "/tasks/\(KanbanClient.encode(id))"
         do {
-            try await client.request("POST", path + "/comments", board: slug, body: ["body": .string(text)])
+            var comment: [String: JSONValue] = ["body": .string(text)]
+            if let author { comment["author"] = .string(author) }
+            try await client.request("POST", path + "/comments", board: slug, body: .object(comment))
             if resume {
                 try await client.request("PATCH", path, board: slug, body: ["status": "ready"])
             }
@@ -375,7 +419,7 @@ final class BoardStore {
     /// parents, its assistant's own limit, the server's, or the dispatcher's next tick. Hermes
     /// keeps no record of the two limits, so they are worked out from the running counts.
     func line(_ task: KanbanTask, limits: BoardLimits?, name: (String) -> String) -> String {
-        let detail = details[task.id]
+        let detail = details[task.id] ?? elsewhereDetails[task.id]
         switch task.status {
         case "running":
             guard let start = task.runStartedAt ?? task.startedAt else { return "在做" }
@@ -592,10 +636,74 @@ extension AppStore {
         return try await board.create(title: title, body: body, assignee: assignee)
     }
 
-    /// Who wrote a comment or made a card: a profile is its assistant; the dashboard is you.
+    /// 今天's 助手在做: what the assistants are doing and what waits on you, on every board while
+    /// connected (waiting on you first, then the newest); the demo cards otherwise.
+    var workingCards: [Card] {
+        guard board.active else { return cards.filter { $0.status == .running || $0.status == .waiting } }
+        return serverCards.map(\.card)
+            .filter { $0.status == .running || $0.status == .waiting }
+            .sorted { a, b in
+                if (a.status == .waiting) != (b.status == .waiting) { return a.status == .waiting }
+                return a.updatedAt > b.updatedAt
+            }
+    }
+
+    /// The card a chat row stands for: in the demo, a demo card; connected, the server's card by
+    /// its id, or else by the title and assignee it was made with (a transcript keeps the
+    /// kanban_create call, not its result). `known` is false when the server has no such card
+    /// (yet): the row's own title and assignee, without a status.
+    func chatCard(_ item: ChatItem) -> (card: Card, known: Bool)? {
+        guard board.active else { return item.cardId.flatMap { card($0) }.map { (card: $0, known: true) } }
+        let all = serverCards
+        if let id = item.cardId, let found = all.first(where: { $0.id == id }) {
+            return (card: found.card, known: true)
+        }
+        guard let title = item.cardTitle, !title.isEmpty else { return nil }
+        let named = all.filter { $0.title == title && (item.cardAssignee == nil || $0.assignee == item.cardAssignee) }
+        // the same title twice: the one made closest after the call
+        let made = named.filter { $0.createdAt.map { $0 >= item.at.addingTimeInterval(-60) } ?? false }
+        if let found = (made.min { ($0.createdAt ?? .distantFuture) < ($1.createdAt ?? .distantFuture) } ?? named.first) {
+            return (card: found.card, known: true)
+        }
+        let unknown = Card(id: item.id, title: title, assignee: item.cardAssignee ?? "", status: .queued, line: "", updatedAt: item.at)
+        return (card: unknown, known: false)
+    }
+
+    /// Every board's cards as 今天 and the chats show them.
+    private var serverCards: [ServerCard] {
+        (board.tasks + board.elsewhere.values.joined()).map { task in
+            ServerCard(
+                card: Card(
+                    id: task.id,
+                    title: task.title,
+                    assignee: task.assignee ?? "",
+                    status: CardStatus(key: task.status),
+                    line: board.line(task, limits: boardLimits) { self.bot($0)?.name ?? $0 },
+                    updatedAt: task.runStartedAt ?? task.startedAt ?? task.createdAt ?? .distantPast
+                ),
+                createdAt: task.createdAt
+            )
+        }
+    }
+
+    /// Who wrote a comment or made a card: a profile is its assistant; the dashboard, and the name
+    /// you signed in with, are you.
     func boardAuthor(_ name: String?) -> String {
         guard let name, !name.isEmpty else { return "" }
-        if ["dashboard", "user", "you", "shion-app"].contains(name) { return "你" }
+        if ["dashboard", "user", "you", "shion-app"].contains(name) || name == board.author { return "你" }
         return bot(name)?.name ?? name
     }
+}
+
+/// A server card as 今天 and the chats show it, with when it was made (to tell apart two cards an
+/// assistant made with the same title).
+struct ServerCard {
+    let card: Card
+    let createdAt: Date?
+
+    var id: String { card.id }
+    var title: String { card.title }
+    var assignee: String { card.assignee }
+    var status: CardStatus { card.status }
+    var updatedAt: Date { card.updatedAt }
 }

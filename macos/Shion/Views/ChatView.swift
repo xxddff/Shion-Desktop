@@ -148,8 +148,14 @@ struct ChatRow: View {
                 .foregroundStyle(.tertiary)
                 .frame(maxWidth: .infinity)
         case .card:
-            if let id = item.cardId, let card = store.card(id) {
-                CardChip(card: card)
+            if let found = store.chatCard(item) {
+                CardChip(card: found.card, showsStatus: found.known)
+            } else if !item.text.isEmpty {
+                // the board's notice about a card it no longer lists
+                Text(item.text)
+                    .font(.t12)
+                    .foregroundStyle(.tertiary)
+                    .frame(maxWidth: .infinity)
             }
         case .user:
             HStack {
