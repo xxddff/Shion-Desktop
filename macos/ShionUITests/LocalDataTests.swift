@@ -7,8 +7,10 @@ import XCTest
 /// focus block under way, a cat video in front for the last 7 minutes, a usage record from earlier
 /// today. Checks that the calendar is there with or without a server, that 詩音 hears she was left
 /// (and back) through `focus.report` without the plugin's line showing in her chat, that 回顾 writes
-/// the uploaded screen time into today's life report without the excluded app, and that unticking a
-/// calendar takes its events away. A picture at each step (`local-*.png`).
+/// the uploaded screen time into today's life report without the excluded app, that unticking a
+/// calendar takes its events away, and that the plugin wakes whoever is chosen 总秘书 on this Mac
+/// (its `chief_profile` follows: 通勤 has the plugin on the stand-in). A picture at each step
+/// (`local-*.png`).
 final class LocalDataTests: XCTestCase {
     private let server = "http://127.0.0.1:8765"
 
@@ -95,7 +97,7 @@ final class LocalDataTests: XCTestCase {
         XCTAssertFalse(waitForText("1Password", in: app, timeout: 1), "an excluded app reached the server")
 
         // Settings → 这台 Mac: what 詩音 was told last, the upload, and the calendars
-        guard let local = openLocalSettings(app, waitingFor: "focus-check") else {
+        guard let local = openSettings(app, tab: "这台 Mac", waitingFor: "focus-check") else {
             keep(XCUIScreen.main.screenshot(), "local-7-no-settings")
             return XCTFail("no 这台 Mac tab in Settings")
         }
@@ -131,23 +133,67 @@ final class LocalDataTests: XCTestCase {
         if Calendar.current.isDateInToday(Date().addingTimeInterval(100 * 60)) {
             XCTAssertTrue(waitForText("CI：线性代数", in: app, timeout: 2), "the ticked calendars' events went too")
         }
+
+        // 通勤 becomes 总秘书 in Settings → 助手: Shion sets the plugin's chief_profile in 通勤's
+        // profile, and the focus check says the plugin wakes 通勤; then back to 詩音
+        guard let assistants = openSettings(app, tab: "助手", waitingFor: "chief-picker") else {
+            keep(XCUIScreen.main.screenshot(), "local-10-no-assistants")
+            return XCTFail("no 助手 tab in Settings")
+        }
+        choose("通勤（CI）", in: "chief-picker", window: assistants, app: app)
+        select("这台 Mac", in: assistants)
+        let chief = element("focus-chief", in: assistants)
+        let commute = reveal(chief, in: assistants) && waitUntil(timeout: 10) { self.says(chief, "通勤（CI）") }
+        keep(assistants.screenshot(), "local-10-chief-commute")
+        XCTAssertTrue(commute, "the focus check does not say the plugin wakes 通勤: \(chief.label) / \(String(describing: chief.value))")
+        select("助手", in: assistants)
+        choose("詩音", in: "chief-picker", window: assistants, app: app)
+        select("这台 Mac", in: assistants)
+        let shion = reveal(chief, in: assistants) && waitUntil(timeout: 10) { self.says(chief, "詩音") }
+        keep(assistants.screenshot(), "local-11-chief-shion")
+        XCTAssertTrue(shion, "the focus check does not say the plugin wakes 詩音 again: \(chief.label) / \(String(describing: chief.value))")
+        select("服务器", in: assistants)
+        XCTAssertTrue(assistants.textFields["server-address"].waitForExistence(timeout: 5), "Settings not back on 服务器")
+        app.typeKey("w", modifierFlags: .command)
         app.terminate()
     }
 
-    /// Settings, on its 这台 Mac tab (the window opens on the tab used last); nil without it,
-    /// with Settings put back on 服务器.
+    /// Settings, on that tab (the window opens on the tab used last); nil without it, with Settings
+    /// put back on 服务器.
     @MainActor
-    private func openLocalSettings(_ app: XCUIApplication, waitingFor identifier: String) -> XCUIElement? {
+    private func openSettings(_ app: XCUIApplication, tab: String, waitingFor identifier: String) -> XCUIElement? {
         app.typeKey(",", modifierFlags: .command)
         let settings = app.windows.matching(NSPredicate(format: "identifier CONTAINS[c] 'settings'")).firstMatch
         guard settings.waitForExistence(timeout: 5) else { return nil }
         let mine = element(identifier, in: settings)
         if !mine.waitForExistence(timeout: 1) {
-            select("这台 Mac", in: settings)
+            select(tab, in: settings)
         }
         if mine.waitForExistence(timeout: 10) { return settings }
         select("服务器", in: settings)
         return nil
+    }
+
+    /// A picker's item, from its pop-up menu.
+    @MainActor
+    private func choose(_ item: String, in identifier: String, window: XCUIElement, app: XCUIApplication) {
+        let picker = element(identifier, in: window)
+        XCTAssertTrue(picker.waitForExistence(timeout: 5), "no \(identifier)")
+        picker.click()
+        let entry = app.menuItems[item].firstMatch
+        XCTAssertTrue(entry.waitForExistence(timeout: 3), "no \(item) in \(identifier)")
+        entry.click()
+        Thread.sleep(forTimeInterval: 0.5)
+    }
+
+    @MainActor
+    private func waitUntil(timeout: TimeInterval, _ condition: () -> Bool) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            if condition() { return true }
+            Thread.sleep(forTimeInterval: 0.5)
+        } while Date() < deadline
+        return false
     }
 
     /// A Settings tab, by its name. Back on 服务器 before a test lets go, so a test after it finds the

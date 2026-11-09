@@ -110,7 +110,8 @@ def seed():
     shion["mcp"]["notion-ci"] = {"url": "https://mcp.notion.example/mcp", "auth": "oauth"}
     study = profile("study", "study", "课程", ui_meta={"hermes-bots": {"title": "课程（CI）", "color": "#4f8a5b"}},
                     revisions={"hermes-bots": 3})
-    commute = profile("commute", "通勤（CI）", "通勤")
+    # 通勤 has the shion plugin too, so LocalDataTests can make it 总秘书 (课程 has none, for BotsTests)
+    commute = profile("commute", "通勤（CI）", "通勤", plugins={"shion"})
     # Bot Mode hid this one: Shion starts it hidden the first time it sees it
     archive = profile("archive-ci", "archive-ci", "归档",
                       ui_meta={"hermes-bots": {"title": "归档（CI）", "hidden": True, "color": "#8b5cf6", "shape": "hexagon"}},

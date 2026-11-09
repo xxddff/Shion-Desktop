@@ -229,6 +229,8 @@ extension AppStore {
         await describeRuntime()
         await loadProfiles()
         await loadPluginData()
+        // the plugin wakes the 总秘书 chosen on this Mac (AppStore+Local.swift)
+        await local.syncChief()
         await loadBoardLimits()
         board.start(serverSettings, credential: gateway.credential, author: signedInName)
         await attachAll()
@@ -599,6 +601,7 @@ extension AppStore {
             }
             // the plugin's pushes are not replayed: catch up on what changed while away
             await syncPluginData()
+            await local.syncChief()
         }
     }
 

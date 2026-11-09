@@ -23,15 +23,51 @@ protocol LocalHost: AnyObject {
     func sendUsage(_ segments: [UsageSegment]) async throws
     /// The calendars or their events changed.
     func calendarChanged()
+    /// 总秘书 as chosen on this Mac, while connected; nil when no choice was made here (the
+    /// server's setting stands) or the chosen profile is gone.
+    var chosenChief: ChiefChoice? { get }
+    /// The plugin's `chief_profile` setting, asked in that profile. Throws `PluginCallError`.
+    func pluginChief(in profile: String) async throws -> String?
+    /// Sets the plugin's `chief_profile` to that profile, in that profile. Throws `PluginCallError`.
+    func setPluginChief(_ profile: String) async throws
 }
 
-/// The plugin's answer to a focus report: whether it woke 詩音, and why not.
+/// The plugin's answer to a focus report: whether it woke 总秘书, and why not.
 nonisolated struct FocusOutcome: Hashable, Sendable {
     var woke: Bool
     var reason: String?
+    /// 总秘书's name when the report went out.
+    var chief = ""
 }
 
-/// The last thing 詩音 was told.
+/// A 总秘书 chosen on this Mac: the profile, and the name Shion shows for it.
+nonisolated struct ChiefChoice: Hashable, Sendable {
+    let id: String
+    let name: String
+}
+
+/// Why a call to the plugin did not go through.
+nonisolated enum PluginCallError: Error, Hashable, Sendable {
+    /// That profile has no shion plugin: Hermes knows no such method there (-32601).
+    case notInstalled
+    /// Anything else, in words for Settings.
+    case failed(String)
+}
+
+/// Whether the plugin wakes the 总秘书 chosen on this Mac. The plugin wakes whoever its
+/// `chief_profile` setting names, one setting for every profile.
+nonisolated enum ChiefSync: Hashable, Sendable {
+    /// Nothing to do: not connected, or no choice made on this Mac.
+    case idle
+    /// The plugin wakes this one.
+    case synced(ChiefChoice)
+    /// That profile has no shion plugin, so the focus check cannot reach it.
+    case noPlugin(ChiefChoice)
+    /// The setting could not be changed; the next connection tries again.
+    case failed(ChiefChoice, String)
+}
+
+/// The last thing 总秘书 was told.
 nonisolated struct SentFocus: Hashable, Sendable {
     let at: Date
     let report: FocusReport
@@ -83,7 +119,7 @@ nonisolated struct LocalFiles: Sendable {
 }
 
 /// What this Mac knows that the server cannot: its calendars, the window in front (for the
-/// focus check) and which app was in front when. Window titles and the timeline stay here; 詩音
+/// focus check) and which app was in front when. Window titles and the timeline stay here; 总秘书
 /// only hears the focus check's verdict, 回顾 only gets which app was in front when.
 @Observable
 final class LocalData {
@@ -104,6 +140,8 @@ final class LocalData {
     private(set) var judgeStatus: JudgeStatus = .ready
     private(set) var pausedUntil: Date?
     private(set) var lastSent: SentFocus?
+    /// Whether the plugin wakes the 总秘书 chosen on this Mac.
+    private(set) var chiefSync: ChiefSync = .idle
 
     // app usage
     @ObservationIgnored private(set) var usage = UsageLog()
@@ -388,7 +426,7 @@ final class LocalData {
     }
 
     /// One look at what is in front, for the usage record and the focus check; then whatever is
-    /// due to 詩音. Looks never overlap: one asked for meanwhile runs right after.
+    /// due to 总秘书. Looks never overlap: one asked for meanwhile runs right after.
     func look() async {
         guard !looking else {
             lookAgain = true
@@ -455,7 +493,15 @@ final class LocalData {
         else { return }
         sending = true
         do {
-            let outcome = try await host.sendFocus(report)
+            var outcome = try await host.sendFocus(report)
+            if outcome.reason == "wrong_profile", host.chosenChief != nil {
+                // the plugin's 总秘书 is not this Mac's (a report that went out before the setting
+                // was changed on connecting): change it, and say it again where it is heard
+                await syncChief()
+                if case .synced = chiefSync {
+                    outcome = try await host.sendFocus(report)
+                }
+            }
             engine.sent(report)
             lastSent = SentFocus(at: now, report: report, outcome: outcome)
             dirty = true
@@ -467,13 +513,40 @@ final class LocalData {
         sending = false
     }
 
-    /// Tests: once 詩音 has heard you drifted off, the next window comes to the front.
+    /// Tests: once 总秘书 has heard you drifted off, the next window comes to the front.
     private func scriptNext() {
         Task { [weak self] in
             try? await Task.sleep(for: .seconds(6))
             guard let script = self?.front as? ScriptedFront else { return }
             script.advance()
         }
+    }
+
+    /// The plugin wakes whoever its `chief_profile` setting names, so the focus check follows the
+    /// 总秘书 chosen on this Mac: after a choice, on connecting and after a reconnect, the setting is
+    /// changed where it differs. Without a choice made here the server's setting stands. A failure
+    /// stops nothing; the next connection tries again.
+    func syncChief() async {
+        guard let host, let choice = host.chosenChief else {
+            chiefSync = .idle
+            return
+        }
+        let result: ChiefSync
+        do {
+            if try await host.pluginChief(in: choice.id) != choice.id {
+                try await host.setPluginChief(choice.id)
+            }
+            result = .synced(choice)
+        } catch PluginCallError.notInstalled {
+            result = .noPlugin(choice)
+        } catch PluginCallError.failed(let why) {
+            result = .failed(choice, why)
+        } catch {
+            result = .failed(choice, error.localizedDescription)
+        }
+        // chosen again meanwhile: that choice's own sync says how it went
+        guard host.chosenChief == choice else { return }
+        chiefSync = result
     }
 
     // MARK: - app usage

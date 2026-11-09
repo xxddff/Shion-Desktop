@@ -1,8 +1,9 @@
 """The shion plugin's RPCs for the CI stand-in (fake_hermes.py), shaped like hermes-plugin/README.md.
 
 Covers what Shion calls: info, sync.state, changes.since, todos.list/add/update/delete, today.get,
-reports.list/get, and what the Mac sends of its own data: usage.upload, usage.day, focus.report,
-focus.latest. Every call must name a profile (the plugin lives in the assistants' profiles);
+reports.list/get, settings.get/update, and what the Mac sends of its own data: usage.upload,
+usage.day, focus.report, focus.latest. Every call must name a profile (the plugin lives in the
+assistants' profiles, and they share one store, settings included);
 unknown or missing parameters are refused the way the plugin refuses them, and usage.upload's
 segments and focus.report's values are checked as hermes-plugin/shion/store.py checks them
 (check_fake_shion.py runs both on the same inputs). A `session_id` is checked first, as Hermes
@@ -11,11 +12,13 @@ session of that profile. Writes bump the revision and push `plugin.shion.changed
 with an empty session id, as the plugin's watcher does. A few seconds after the first sync, 课程
 adds a todo through "its tool", so the push path is exercised.
 
-Two assistants answer what the Mac sends, as they would on a real server: a focus report puts
-the plugin's line in 詩音's Bot Chat (`inject_message`) and she replies there (the line itself is
-stored, as Hermes stores it, and Shion must not show it); an upload makes 回顾 write today's life
-report with the screen time it adds up from the segments.
+Two assistants answer what the Mac sends, as they would on a real server: a focus report, made
+in the profile the `chief_profile` setting names (any other answers `wrong_profile`), puts the
+plugin's line in that assistant's Bot Chat (`inject_message`) and the assistant replies there (the
+line itself is stored, as Hermes stores it, and Shion must not show it); an upload makes 回顾 write
+today's life report with the screen time it adds up from the segments.
 """
+import re
 import sys
 import threading
 import time
@@ -28,7 +31,9 @@ usage = {}  # (device, bundle_id, start as stored: UTC to the second) -> segment
 focus_log = []  # focus.report's records, oldest first
 ACTIVITIES = ("study", "work", "life", "fun", "social", "other")
 ACTIVITY_LABELS = {"study": "学习", "work": "工作", "life": "生活", "fun": "娱乐", "social": "社交", "other": "别的事"}
-CHIEF = "shion"  # the plugin's chief_profile
+# the plugin's settings (store.py's DEFAULT_SETTINGS), one set for every profile
+settings = {"timezone": "Asia/Tokyo", "usage_retention_days": 30, "focus_retention_days": 7, "chief_profile": "shion"}
+PROFILE_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 
 
 def iso(dt):
@@ -83,6 +88,8 @@ KEYS = {
     "usage.day": {"date"},
     "focus.report": {"plan", "off_minutes", "activity", "on_track"},
     "focus.latest": set(),
+    "settings.get": set(),
+    "settings.update": {"timezone", "usage_retention_days", "focus_retention_days", "chief_profile"},
 }
 # as rpc.py's _take: these must be there
 REQUIRED = {
@@ -142,13 +149,17 @@ def handle(conn, log, method, params, rid):
         missing = sorted(REQUIRED.get(name, set()) - set(args))
         if missing:
             raise ShionError("invalid_params", f"missing params: {', '.join(missing)}")
+        heard = name == "focus.report" and has_session_key(conn, settings["chief_profile"])
         with lock:
-            result, changed = call(name, args, params["profile"])
+            result, changed = call(name, args, params["profile"], heard)
         if name == "usage.upload":
             apps = sorted({seg["app_name"] for seg in args["segments"]})
             log(f"    plugin usage.upload {len(args['segments'])} segments ({', '.join(apps)}): {result}")
         elif name == "focus.report":
-            log(f"    plugin focus.report {args} session_id={session_id!r}: woke={result['woke']}")
+            log(f"    plugin focus.report in {params['profile']} {args} session_id={session_id!r}: "
+                f"woke={result['woke']} {result.get('reason', '')}".rstrip())
+        elif name == "settings.update":
+            log(f"    plugin settings.update in {params['profile']} {args}: {result['settings']}")
         else:
             log(f"    plugin {name} {args if name.startswith('todos.') and name != 'todos.list' else ''}".rstrip())
         conn.send_json({"jsonrpc": "2.0", "id": rid, "result": result})
@@ -294,7 +305,7 @@ def usage_day(day):
             "by_app": by_app, "by_category": by_category}
 
 
-def report_focus(args, profile):
+def report_focus(args, profile, heard):
     plan = text(args["plan"], "plan", max_len=200)
     off_minutes = integer(args["off_minutes"], "off_minutes", lo=0, hi=24 * 60)
     activity = choice(args["activity"], "activity", ACTIVITIES)
@@ -302,14 +313,57 @@ def report_focus(args, profile):
     record = {"at": iso(datetime.now(TOKYO)), "plan": plan, "off_minutes": off_minutes, "activity": activity,
               "on_track": on_track, "woke": False}
     result = {"recorded": True, "woke": False}
-    if profile != CHIEF:
+    if profile != settings["chief_profile"]:
         result["reason"] = "wrong_profile"
+    elif not heard:
+        # the chief's Bot Chat has had no turn yet, so the plugin has no routing key for it
+        result["reason"] = "no_session_key"
     else:
-        # 詩音's Bot Chat on the stand-in has had turns, so the plugin knows its routing key, and it
-        # is live while Shion is connected: inject_message takes the line
+        # the chief's Bot Chat is live while Shion is connected: inject_message takes the line
         record["woke"] = result["woke"] = True
     focus_log.append(record)
     return {**result, "latest": dict(record), "revision": bump()}, ["focus"]
+
+
+def has_session_key(conn, profile):
+    """Whether the plugin knows that profile's routing key: its pre_llm_call hook records it when the
+    Bot Chat has a turn, so on the stand-in, once its transcript has a turn of yours. Without
+    fake_hermes (check_fake_shion.py, which gives the plugin a key too), it does."""
+    hermes = hermes_of(conn)
+    if hermes is None:
+        return True
+    with hermes.lock:
+        session = hermes.sessions.get(profile)
+        return any(row.get("role") == "user" for row in hermes.transcripts.get(session, [])) if session else False
+
+
+def update_settings(args):
+    """store.py's update_settings, field by field."""
+    clean = {}
+    for key, value in args.items():
+        if key == "timezone":
+            name = text(value, key, max_len=64)
+            try:
+                from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+                try:
+                    ZoneInfo(name)
+                except (ZoneInfoNotFoundError, ValueError) as exc:
+                    raise ShionError("invalid_params", f"unknown time zone {name!r}") from exc
+            except ImportError:
+                pass
+            clean[key] = value.strip()
+        elif key == "usage_retention_days":
+            clean[key] = integer(value, key, lo=1, hi=365)
+        elif key == "focus_retention_days":
+            clean[key] = integer(value, key, lo=1, hi=90)
+        elif key == "chief_profile":
+            if not isinstance(value, str) or not PROFILE_RE.match(value):
+                raise ShionError("invalid_params", "chief_profile must be a profile name")
+            clean[key] = value
+    if not clean:
+        raise ShionError("invalid_params", "nothing to change")
+    settings.update(clean)
+    return {"settings": dict(settings), "revision": bump()}, ["settings"]
 
 
 def focus_message(report):
@@ -318,15 +372,20 @@ def focus_message(report):
     return f"［专注检查］「{report['plan']}」：已经偏离 {report['off_minutes']} 分钟，现在在做{ACTIVITY_LABELS[report['activity']]}。"
 
 
-def call(name, args, profile):
-    """(result, changed topics) for one call; the caller holds the lock."""
+def call(name, args, profile, heard=True):
+    """(result, changed topics) for one call; the caller holds the lock. `heard`: whether the plugin
+    knows the routing key of the chief's Bot Chat."""
     if name == "usage.upload":
         return upload_usage(args)
+    if name == "settings.get":
+        return {"settings": dict(settings)}, None
+    if name == "settings.update":
+        return update_settings(args)
     if name == "usage.day":
         day = date.fromisoformat(args["date"]) if "date" in args else today()
         return usage_day(day), None
     if name == "focus.report":
-        return report_focus(args, profile)
+        return report_focus(args, profile, heard)
     if name == "focus.latest":
         if not focus_log:
             return {"latest": None}, None
@@ -410,15 +469,16 @@ def assistant_adds(conn, log):
 
 
 def chief_answers(conn, log, report):
-    """The plugin's inject_message: its line goes into 詩音's Bot Chat as a turn of yours (stored, as
-    Hermes stores it), and she answers it there. Shion shows her answer, never the line."""
+    """The plugin's inject_message: its line goes into the chief's Bot Chat as a turn of yours (stored,
+    as Hermes stores it), and the chief answers it there. Shion shows the answer, never the line."""
     hermes = hermes_of(conn)
     line = focus_message(report)
     if report["on_track"]:
         reply = f"（CI）回来了就好，「{report['plan']}」接着做。"
     else:
         reply = f"（CI）「{report['plan']}」已经过了 {report['off_minutes']} 分钟，先回来做十五分钟吧？"
-    session_id = getattr(hermes, "sessions", {}).get(CHIEF, "sess-shion") if hermes else "sess-shion"
+    chief = settings["chief_profile"]
+    session_id = getattr(hermes, "sessions", {}).get(chief, f"sess-{chief}") if hermes else f"sess-{chief}"
     if hermes is not None:
         with hermes.lock:
             rows = hermes.transcripts.setdefault(session_id, [])

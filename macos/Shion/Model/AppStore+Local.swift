@@ -65,8 +65,8 @@ extension AppStore: LocalHost {
         pluginData && gateway.phase == .online
     }
 
-    /// `plugin.shion.focus.report` in 詩音's profile (the plugin's `chief_profile`), with her Bot
-    /// Chat's session id when it is attached: the plugin wakes her there. Only the plan, the
+    /// `plugin.shion.focus.report` in 总秘书's profile (the plugin's `chief_profile`), with that
+    /// Bot Chat's session id when it is attached: the plugin wakes 总秘书 there. Only the plan, the
     /// minutes and the kind of thing: never a window title or an app.
     func sendFocus(_ report: FocusReport) async throws -> FocusOutcome {
         var params: [String: JSONValue] = [
@@ -79,8 +79,42 @@ extension AppStore: LocalHost {
         if let session = botChatSession(chiefId) {
             params["session_id"] = .string(session)
         }
+        let name = chiefName
         let reply = try await gateway.call("plugin.shion.focus.report", .object(params))
-        return FocusOutcome(woke: reply["woke"]?.bool ?? false, reason: reply["reason"]?.string)
+        return FocusOutcome(woke: reply["woke"]?.bool ?? false, reason: reply["reason"]?.string, chief: name)
+    }
+
+    // MARK: who the plugin wakes
+
+    var chosenChief: ChiefChoice? {
+        guard live, gateway.phase == .online, let chosen = roster.prefs.chief, chosen == chiefId else { return nil }
+        return ChiefChoice(id: chosen, name: chiefName)
+    }
+
+    func pluginChief(in profile: String) async throws -> String? {
+        let reply = try await pluginRPC("settings.get", in: profile)
+        return reply["settings"]?["chief_profile"]?.string
+    }
+
+    func setPluginChief(_ profile: String) async throws {
+        _ = try await pluginRPC("settings.update", in: profile, ["chief_profile": .string(profile)])
+    }
+
+    /// A shion plugin call in that profile. Hermes answers -32601 where no plugin of that name is
+    /// loaded: not installed or not enabled there.
+    private func pluginRPC(_ method: String, in profile: String, _ params: [String: JSONValue] = [:]) async throws -> JSONValue {
+        guard serverCapabilities.contains("plugin-rpc-v1") else {
+            throw PluginCallError.failed("服务器不支持插件 RPC")
+        }
+        var fields = params
+        fields["profile"] = .string(profile)
+        do {
+            return try await gateway.call("plugin.shion." + method, .object(fields))
+        } catch GatewayError.rpc(let code, _, _) where code == -32601 {
+            throw PluginCallError.notInstalled
+        } catch {
+            throw PluginCallError.failed(error.localizedDescription)
+        }
     }
 
     /// `plugin.shion.usage.upload`: each segment is the app and its times, the four keys the plugin

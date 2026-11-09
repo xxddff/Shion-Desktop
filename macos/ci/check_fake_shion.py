@@ -2,8 +2,12 @@
 """Checks that the stand-in (fake_shion.py) takes and refuses what the shion plugin does.
 
 Runs the plugin itself (hermes-plugin/shion, without Hermes, as its own tests do) and the
-stand-in on the same usage.upload and focus.report calls, and compares their answers: both take
-it, or both refuse it with the same message. Run it after changing either; no CI step runs it.
+stand-in on the same usage.upload, focus.report and settings calls, and compares their answers:
+both take it, or both refuse it with the same message. A focus report also has to wake the same
+way (or say the same reason it did not), and the settings have to come back the same. The plugin
+runs in two profiles over one store, as on a server: 詩音's and 通勤's, so a report in the profile
+that is not `chief_profile` is `wrong_profile` on both sides. Run it after changing either; no CI
+step runs it.
 
     python3 macos/ci/check_fake_shion.py
 """
@@ -27,9 +31,9 @@ from shion.store import Store  # noqa: E402
 class Ctx:
     """The slice of Hermes's PluginContext the plugin uses."""
     plugin_id = "shion"
-    profile_name = "shion"
 
-    def __init__(self):
+    def __init__(self, profile_name="shion"):
+        self.profile_name = profile_name
         self.rpc = {}
 
     def register_rpc(self, name, handler):
@@ -71,20 +75,28 @@ class Conn:
         pass
 
 
+def summary(method, result):
+    """What has to be the same in an answer, beyond taking the call."""
+    if method == "focus.report":
+        return f"ok woke={result.get('woke')} reason={result.get('reason')}"
+    if method.startswith("settings."):
+        return "ok " + json.dumps(result.get("settings"), sort_keys=True)
+    return "ok"
+
+
 def plugin_answer(ctx, method, params):
     try:
-        ctx.rpc[method](dict(params, profile="shion"), session_id=None)
-        return "ok"
+        return summary(method, ctx.rpc[method](dict(params, profile=ctx.profile_name), session_id=None))
     except ShionError as error:
         return f"refused: {error}"
 
 
-def stand_in_answer(method, params):
+def stand_in_answer(method, params, profile):
     conn = Conn()
-    fake_shion.handle(conn, lambda *_: None, "plugin.shion." + method, dict(params, profile="shion"), 1)
+    fake_shion.handle(conn, lambda *_: None, "plugin.shion." + method, dict(params, profile=profile), 1)
     reply = next(frame for frame in conn.sent if frame.get("id") == 1)
     if "result" in reply:
-        return "ok"
+        return summary(method, reply["result"])
     detail = reply["error"].get("data", {}).get("detail", reply["error"]["message"])
     return "refused: " + detail.removeprefix("ShionError: ")
 
@@ -139,18 +151,52 @@ def main():
         ("focus.report", dict(focus, plan="长" * 201)),
         ("focus.report", dict(focus, title="猫のおもしろ動画まとめ")),
         ("focus.report", {key: value for key, value in focus.items() if key != "plan"}),
+        # who the plugin wakes: chief_profile, one setting for every profile
+        ("settings.get", {}),
+        ("settings.get", {"chief_profile": "commute"}),
+        ("settings.update", {}),
+        ("settings.update", {"chief": "commute"}),
+        ("settings.update", {"chief_profile": "Commute"}),
+        ("settings.update", {"chief_profile": "-commute"}),
+        ("settings.update", {"chief_profile": ""}),
+        ("settings.update", {"chief_profile": 5}),
+        ("settings.update", {"chief_profile": "c" * 65}),
+        ("settings.update", {"timezone": "Mars/Olympus"}),
+        ("settings.update", {"timezone": "  "}),
+        ("settings.update", {"usage_retention_days": 0}),
+        ("settings.update", {"focus_retention_days": 91}),
+        ("settings.update", {"focus_retention_days": True}),
+        ("settings.update", {"usage_retention_days": 60, "timezone": " Asia/Tokyo "}),
+        ("focus.report", focus, "commute"),
+        ("settings.update", {"chief_profile": "commute"}),
+        ("focus.report", focus),
+        ("focus.report", focus, "commute"),
+        ("focus.report", dict(focus, off_minutes=1441), "commute"),
+        ("settings.get", {}, "commute"),
+        ("settings.update", {"chief_profile": "shion"}, "commute"),
+        ("focus.report", focus),
+        ("focus.report", focus, "commute"),
     ]
     with tempfile.TemporaryDirectory() as folder:
-        ctx = Ctx()
-        ShionPlugin(ctx, hermes=Hermes, store=Store(Path(folder) / "shion.db")).register()
+        store = Store(Path(folder) / "shion.db")
+        plugins = {}
+        for profile in ("shion", "commute"):
+            ctx = Ctx(profile)
+            ShionPlugin(ctx, hermes=Hermes, store=store).register()
+            plugins[profile] = ctx
+            # each Bot Chat has had a turn: the plugin's hook has its routing key, as the stand-in assumes
+            store.remember_session_key(profile=profile, session_id=f"sess-{profile}", session_key=f"key-{profile}",
+                                       platform="local")
         mismatches = 0
-        for method, params in cases:
-            real = plugin_answer(ctx, method, params)
-            fake = stand_in_answer(method, params)
+        for case in cases:
+            method, params, profile = case if len(case) == 3 else (*case, "shion")
+            real = plugin_answer(plugins[profile], method, params)
+            fake = stand_in_answer(method, params, profile)
             same = real == fake
             mismatches += not same
             shown = json.dumps(params, ensure_ascii=False)
-            print(f"{'same' if same else 'DIFF'}  {method} {shown[:90]}{'…' if len(shown) > 90 else ''}")
+            where = "" if profile == "shion" else f" in {profile}"
+            print(f"{'same' if same else 'DIFF'}  {method}{where} {shown[:80]}{'…' if len(shown) > 80 else ''}  → {real[:60]}")
             if not same:
                 print(f"      plugin:   {real}\n      stand-in: {fake}")
     print(f"{len(cases) - mismatches} of {len(cases)} the same")

@@ -130,7 +130,7 @@ nonisolated struct FrontWindow: Hashable, Codable, Sendable {
 nonisolated enum ActivityKind: String, CaseIterable, Codable, Sendable {
     case study, work, life, fun, social, other
 
-    /// As the plugin words them for 詩音.
+    /// As the plugin words them for 总秘书.
     var label: String {
         switch self {
         case .study: return "学习"
@@ -179,7 +179,7 @@ nonisolated enum FocusCheckState: Equatable, Sendable {
     case off(FocusPlan, since: Date, kind: ActivityKind)
 }
 
-/// What 詩音 is told: `plugin.shion.focus.report`'s four values, and which stretch it is about.
+/// What 总秘书 is told: `plugin.shion.focus.report`'s four values, and which stretch it is about.
 nonisolated struct FocusReport: Hashable, Sendable {
     let plan: String
     let offMinutes: Int
@@ -189,10 +189,10 @@ nonisolated struct FocusReport: Hashable, Sendable {
     let since: Date
 }
 
-/// The focus check's memory: the windows seen and what 詩音 was last told. Off the plan for 5
-/// minutes, she hears it once; back on it, she hears that too. Being away is not being off.
+/// The focus check's memory: the windows seen and what 总秘书 was last told. Off the plan for 5
+/// minutes, 总秘书 hears it once; back on it, that too. Being away is not being off.
 nonisolated struct FocusEngine: Codable, Sendable {
-    /// Minutes off the plan before 詩音 hears of it.
+    /// Minutes off the plan before 总秘书 hears of it.
     static let reportAfter: TimeInterval = 5 * 60
     /// No keyboard or mouse input for this long: you are not at the Mac.
     static let awayAfter: TimeInterval = 5 * 60
@@ -206,7 +206,7 @@ nonisolated struct FocusEngine: Codable, Sendable {
     }
 
     private(set) var samples: [FocusSample] = []
-    /// The stretch off the plan 詩音 was told about, until she hears you are back on it.
+    /// The stretch off the plan 总秘书 was told about, until told you are back on it.
     private(set) var told: Told?
 
     init(samples: [FocusSample] = []) {
@@ -268,8 +268,8 @@ nonisolated struct FocusEngine: Codable, Sendable {
         return nil
     }
 
-    /// What to tell 詩音 at `now`, if anything: 5 minutes off the plan and not told yet; or back
-    /// on it after she was told. Not while the window in front is still being judged.
+    /// What to tell 总秘书 at `now`, if anything: 5 minutes off the plan and not told yet; or back
+    /// on it after that was told. Not while the window in front is still being judged.
     func due(plan: FocusPlan?, at now: Date) -> FocusReport? {
         guard samples.last?.judgement != nil else { return nil }
         switch state(plan: plan) {
@@ -288,7 +288,7 @@ nonisolated struct FocusEngine: Codable, Sendable {
         }
     }
 
-    /// 詩音 has been told.
+    /// 总秘书 has been told.
     mutating func sent(_ report: FocusReport) {
         told = report.onTrack ? nil : Told(planId: report.planId, since: report.since)
     }

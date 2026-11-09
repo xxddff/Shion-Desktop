@@ -632,7 +632,7 @@ class Handler(BaseHTTPRequestHandler):
             log(f"  rpc {method} {json.dumps(fake_profiles.loggable(method, params), ensure_ascii=False)[:160]}")
         if method.startswith("plugin.shion."):
             if params.get("profile") and not fake_profiles.has_plugin(params["profile"], "shion"):
-                # the plugin is installed in 詩音's profile only: elsewhere Hermes knows no such method
+                # the plugin is installed in 詩音's and 通勤's profiles only: elsewhere Hermes knows no such method
                 log(f"    no shion plugin in profile {params['profile']}")
                 return self.send_json({"jsonrpc": "2.0", "id": rid,
                                        "error": {"code": -32601, "message": f"no method {method}"}})

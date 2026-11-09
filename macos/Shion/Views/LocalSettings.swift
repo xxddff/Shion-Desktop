@@ -91,7 +91,7 @@ struct CalendarRow: View {
     }
 }
 
-/// The focus check: on or off, what it needs, and what 詩音 was last told.
+/// The focus check: on or off, what it needs, who hears it, and what was said last.
 struct FocusSettings: View {
     @Environment(AppStore.self) private var store
 
@@ -100,7 +100,7 @@ struct FocusSettings: View {
         Section {
             Toggle(isOn: Binding(get: { local.settings.focusCheck }, set: { local.setFocusCheck($0) })) {
                 Text("专注检查")
-                Text("发给詩音：此刻的计划、偏离了几分钟、在做哪类事。不发：窗口标题、应用名、本机的窗口记录。")
+                Text("发给\(store.chiefName)：此刻的计划、偏离了几分钟、在做哪类事。不发：窗口标题、应用名、本机的窗口记录。")
             }
             .accessibilityIdentifier("focus-check")
             LabeledContent("读窗口标题（辅助功能）") {
@@ -113,8 +113,16 @@ struct FocusSettings: View {
             LabeledContent("本机模型") {
                 Text(model).foregroundStyle(.secondary)
             }
+            if store.live, let chief = Self.chief(local.chiefSync) {
+                LabeledContent("插件叫醒") {
+                    Text(chief.text)
+                        .foregroundStyle(chief.problem ? Palette.alert : Color.secondary)
+                        .multilineTextAlignment(.trailing)
+                        .accessibilityIdentifier("focus-chief")
+                }
+            }
             if let sent = local.lastSent {
-                LabeledContent("最近告诉詩音") {
+                LabeledContent("最近告诉\(Self.recipient(sent) ?? store.chiefName)") {
                     Text(Self.describe(sent))
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.trailing)
@@ -129,7 +137,7 @@ struct FocusSettings: View {
         } header: {
             Text("专注检查")
         } footer: {
-            Text("到了计划的时间，看这台 Mac 前台的窗口和计划对不对得上。计划是勾上的日历里算作「课」或「专注时段」、此刻正在进行的那一项；没有的话，是服务器上今天执行时间已到、还没做完的待办。窗口标题用辅助功能读（第一次打开时系统会问；每装一个新版本，要在「隐私与安全性 → 辅助功能」里重新打开），由这台 Mac 上的 Apple 智能判断，同一个标题只判断一次。偏离满 5 分钟告诉詩音一次，回到计划上再告诉一次；锁屏、睡眠或键鼠 5 分钟没动算不在 Mac 前，不算偏离。窗口标题和这段记录只存在这台 Mac 上，保留 7 天。菜单栏里可以暂停 1 小时。")
+            Text("到了计划的时间，看这台 Mac 前台的窗口和计划对不对得上。计划是勾上的日历里算作「课」或「专注时段」、此刻正在进行的那一项；没有的话，是服务器上今天执行时间已到、还没做完的待办。窗口标题用辅助功能读（第一次打开时系统会问；每装一个新版本，要在「隐私与安全性 → 辅助功能」里重新打开），由这台 Mac 上的 Apple 智能判断，同一个标题只判断一次。偏离满 5 分钟告诉总秘书一次，回到计划上再告诉一次；锁屏、睡眠或键鼠 5 分钟没动算不在 Mac 前，不算偏离。插件只叫醒它设置里的总秘书（chief_profile）：在「助手」里选了总秘书，Shion 选的时候和每次连上服务器时把这一项改成同一个，那个助手的 profile 要装着 shion 插件，也要允许插件叫醒那个助手（插件说明里安装的第 3 步）。窗口标题和这段记录只存在这台 Mac 上，保留 7 天。菜单栏里可以暂停 1 小时。")
                 .font(.t12)
                 .foregroundStyle(.secondary)
         }
@@ -142,17 +150,34 @@ struct FocusSettings: View {
         }
     }
 
+    /// Who the plugin wakes, when a choice made on this Mac is in play; nil otherwise.
+    static func chief(_ sync: ChiefSync) -> (text: String, problem: Bool)? {
+        switch sync {
+        case .idle: return nil
+        case .synced(let chief): return (chief.name, false)
+        case .noPlugin(let chief): return ("叫不醒\(chief.name)：那个 profile 里没有 shion 插件", true)
+        case .failed(let chief, let why): return ("还没改成\(chief.name)（\(why)），下次连上再试", true)
+        }
+    }
+
+    /// 总秘书 as it was when the report went out.
+    static func recipient(_ sent: SentFocus) -> String? {
+        sent.outcome.chief.isEmpty ? nil : sent.outcome.chief
+    }
+
     static func describe(_ sent: SentFocus) -> String {
         let report = sent.report
+        let name = recipient(sent) ?? "总秘书"
         let what = report.onTrack
             ? "回到「\(report.plan)」上了"
             : "「\(report.plan)」偏离 \(report.offMinutes) 分钟，在做\(report.activity.label)"
         let heard: String
         switch sent.outcome.reason {
-        case .none: heard = sent.outcome.woke ? "" : "（没叫醒她）"
-        case .some("no_session_key"): heard = "（没叫醒她：她的 Bot Chat 还没回过话）"
-        case .some("inject_refused"): heard = "（没叫醒她：服务器没让插件进她的对话）"
-        case .some(let reason): heard = "（没叫醒她：\(reason)）"
+        case .none: heard = sent.outcome.woke ? "" : "（没叫醒\(name)）"
+        case .some("no_session_key"): heard = "（没叫醒：\(name)的 Bot Chat 还没回过话）"
+        case .some("inject_refused"): heard = "（没叫醒：服务器没让插件进\(name)的对话）"
+        case .some("wrong_profile"): heard = "（没叫醒：插件设置里的总秘书不是\(name)）"
+        case .some(let reason): heard = "（没叫醒\(name)：\(reason)）"
         }
         return "\(Fmt.hm(sent.at)) \(what)\(heard)"
     }
