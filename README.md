@@ -156,7 +156,7 @@ Shion 里的位置：
 2. 远端经 `hermes serve` 时，canonical 方法和插件 RPC 是否都能用。
 3. 官方 Bot Mode 把头像、分组等存在 profile 的 `ui_meta` 里。Shion 要读写同样的键，才能和命令行、手机端保持一致。
 4. **云桌面相关的方法不在 canonical 方法表里。** `display.*` 属于通用方法表，官方桌面端在远程连接上能用。要验证 Shion 经 Cloudflare 连上后，同一条连接能不能调到它们。
-5. **Swift 里要有 RFB（VNC）解码。** 候选是 RoyalVNCKit（Swift 写的 VNC 客户端库，MIT 许可，需要评估），需要给它换一个跑在 WebSocket 上的传输层。实在不行，就用一个只显示云桌面的 WKWebView 加 noVNC 作过渡，但它连不过 Access 的请求头，得先拿到 Access 的 cookie 再塞进去。
+5. **Swift 里要有 RFB（VNC）客户端。** RoyalVNCKit（MIT 许可，自带处理键鼠的 macOS 画面视图，支持 Tight、ZRLE 等编码）已在 2026-10-05 归档，变成只读，用它就得 fork 过来自己维护，还要给它加一个 WebSocket 传输层。另一条路是自己写一个精简客户端：Hermes 的画面桥已经做了鉴权，安全类型用 None 即可；编码做 ZRLE、CopyRect、Raw，再加光标和分辨率变化这两个伪编码，就能连上 TigerVNC。中文、日文输入要在 Mac 这边用输入法打完字，再按 Unicode keysym 发过去，需要实测。实在赶时间，就用一个只显示云桌面的 WKWebView 加 noVNC 作过渡，但它带不了 service token 的请求头，得先拿到 Access 的 cookie 塞进去。
 6. **Apple 提醒事项经云端读写不一定可靠。** iCloud 日历走 CalDAV 没问题；但按 BusyMac、2Do 的说明，iOS 13 / macOS Catalina 之后升级过的提醒事项列表不再走 CalDAV，有的 MCP 声称能读写，说法不一。先用实际要用的工具测一遍；不行的话，就由 Mac 上的 Shion 用 EventKit 读写提醒事项（这正好是"接入本机"的第一个用途），或者以 `shion` 插件里的待办为准，只往提醒事项单向同步。
 
 ## 技术栈：SwiftUI 还是 MyGo
@@ -172,6 +172,34 @@ Shion 里的位置：
 | 协议客户端 | 从 OpenRPC 生成 Swift 类型 | 从 OpenRPC 生成 Go 类型 |
 
 只做 macOS、又要深度用系统能力的话，选 SwiftUI。以后想出 Windows、Linux 版或者更想写 Go，就选 MyGo。
+
+### 原型到 SwiftUI 的对照
+
+macOS 上是 SwiftUI 加 AppKit（UIKit 是 iOS 的；Mac Catalyst 做菜单栏常驻、浮动面板都要绕路，不考虑）。建议最低支持 macOS 14，用得上 `@Observable`、`.inspector`、`.defaultScrollAnchor`、符号动画；在 macOS 26 及以上自动换成 Liquid Glass 外观。
+
+| 原型里的部分 | 原生实现 | 难度 |
+| --- | --- | --- |
+| 窗口、侧栏毛玻璃、工具栏、红绿灯 | `NavigationSplitView` + `.toolbar`，侧栏自带毛玻璃 | 低 |
+| 页面切换、深链接（`#card-…`） | 侧栏选中状态 + 自定义 URL scheme 和 `.onOpenURL`，通知点进来直接到卡片 | 低 |
+| 待办、等你确认、日报列表 | `List` / `LazyVStack`，`.contextMenu`，`.onHover` 显示「现在运行」 | 低 |
+| 任务详情、待办详情 | `.inspector` | 低 |
+| 看板拖卡片 | `.draggable` + `.dropDestination` | 低 |
+| 日程周视图、时间线 | 自定义 `Layout` 或 `Canvas` | 中 |
+| 屏幕时间图表 | Swift Charts（`BarMark`） | 低 |
+| 流式回复、呼吸点 | `Text` 增量更新；`ellipsis` 符号加 `.symbolEffect` | 低 |
+| 助手回复里的 Markdown | 系统自带只支持行内样式，列表、代码块要用第三方渲染库或自己写 | 中 |
+| 跨多条消息选中复制 | SwiftUI 只能在单个 `Text` 里选中；要连续选中得换成 `NSTextView` | 中 |
+| 菜单栏常驻和弹出面板 | `MenuBarExtra` + `.menuBarExtraStyle(.window)`；橙色数字角标要画成图片 | 低 |
+| 可直接回复的系统通知 | `UNUserNotificationCenter` + `UNTextInputNotificationAction` | 低 |
+| ⌥Space 全局唤出 | 系统没有 SwiftUI 接口；用 Carbon 的 `RegisterEventHotKey`（不需要辅助功能权限），或 KeyboardShortcuts 这类封装库 | 中 |
+| ⌘K 浮动输入框（像 Spotlight） | AppKit `NSPanel`（不激活主窗口）里放 SwiftUI | 中 |
+| 应用使用记录 | `NSWorkspace` 的前台应用通知，不需要权限；只记应用名和时长；要窗口标题才需要屏幕录制或辅助功能权限 | 低 |
+| 本机提醒事项（以后） | EventKit，macOS 14 起申请完整访问权限 | 低 |
+| 开机启动、常驻 | `SMAppService`；关掉窗口后留在菜单栏 | 低 |
+| 凭证 | 钥匙串 | 低 |
+| Gateway 连接 | `URLSessionWebSocketTask`（可以带 Access 和 Hermes 的请求头）+ 自己写的 JSON-RPC 层，类型从 OpenRPC 生成 | 中 |
+| 云桌面画面 | 见上面风险 5：RFB 客户端是整个项目里最大的一块 | 高 |
+| 点画面接管、点外面交还 | 画面视图成为第一响应者；`NSEvent.addLocalMonitorForEvents` 只看本 App 里的点击，所以切到别的 App 不会交还 | 中 |
 
 ## 界面原则（SwiftUI 版照这个来）
 
