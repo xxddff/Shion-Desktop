@@ -163,7 +163,7 @@ final class BotPageTests: XCTestCase {
 
         // a skill locked against the assistant's own edits
         reveal("skill-lock-arxiv", in: app)
-        let lock = element("skill-lock-arxiv", in: app)
+        let lock = switchOf("skill-lock-arxiv", in: app)
         XCTAssertEqual(isOn(lock), false, "arxiv starts locked: \(String(describing: lock.value))")
         lock.click()
         XCTAssertTrue(waitUntil(timeout: 10) { self.isOn(lock) == true }, "the skill was not locked: \(String(describing: lock.value))")
@@ -189,7 +189,7 @@ final class BotPageTests: XCTestCase {
         XCTAssertEqual(isOn(switchOf("assistant-user-profile", in: app)), false, "the user profile did not stay off")
         XCTAssertTrue(shows(reveal("assistant-max-turns", in: app), "60 步"), "the turn limit did not stay")
         reveal("skill-lock-arxiv", in: app)
-        XCTAssertEqual(isOn(element("skill-lock-arxiv", in: app)), true, "the lock did not stay")
+        XCTAssertEqual(isOn(switchOf("skill-lock-arxiv", in: app)), true, "the lock did not stay")
         keep(window.screenshot(), "page-7-again")
         app.terminate()
     }
@@ -307,7 +307,10 @@ final class BotPageTests: XCTestCase {
         let control = app.switches.matching(identifier: identifier).firstMatch
         if control.exists { return control }
         let box = app.checkBoxes.matching(identifier: identifier).firstMatch
-        return box.exists ? box : element(identifier, in: app)
+        if box.exists { return box }
+        // a toggle drawn as a button (a skill's lock)
+        let toggle = app.toggles.matching(identifier: identifier).firstMatch
+        return toggle.exists ? toggle : element(identifier, in: app)
     }
 
     /// A toggle's state: its value is a number (or its text) on macOS.
