@@ -19,7 +19,9 @@ hermes_cli/dashboard_auth and the Canonical Gateway Protocol:
   GET  /api/auth/me            the bearer's identity, or 401
   GET  /api/ws?token=…         JSON-RPC 2.0 over WebSocket: gateway.ready, runtime.describe,
                                profiles, Bot Chats (詩音's is long and paged with
-                               session.transcript; 课程's is created on first open)
+                               session.transcript; 课程's raises an approval; 资讯's has replies
+                               of every height, and its newest page comes late, as over a real
+                               network; 通勤's is created on first open)
 
 Like Hermes's contracts (extra="forbid"), session.resume and session.transcript refuse keys
 they do not know, so a client's wrong parameter fails here as it would on a real server.
@@ -51,9 +53,12 @@ codes = {}  # code -> challenge
 access_tokens = {}  # token -> expiry
 refresh_tokens = set()
 # profile -> its Bot Chat. 詩音's is long; 课程's exists and raises an approval once Shion attaches
-# to it, without its chat being opened; 通勤 has none until its chat is opened (created then).
-sessions = {"shion": "sess-shion", "study": "sess-study"}
+# to it, without its chat being opened; 通勤 has none until its chat is opened (created then);
+# 资讯's has replies of every height.
+sessions = {"shion": "sess-shion", "study": "sess-study", "news": "sess-news"}
 transcripts = {}  # session id -> rows, oldest first, shaped like session.transcript rows
+# session id -> seconds its newest page takes: over Cloudflare the rows come after the page is up
+slow_first_pages = {"sess-news": 1.5}
 approvals_raised = set()  # session ids that already asked
 APPROVAL = {"prompt_id": "ap-moodle", "execution_generation": 1, "command": "open https://moodle.example/login",
             "description": "要在课程的云桌面上登录 Moodle 吗？", "choices": ["once", "session", "always", "deny"]}
@@ -76,7 +81,77 @@ def seed_transcripts():
                                   "text": "课程的 Bot Chat。", "timestamp": start}]
 
 
+# 资讯's turns: a question, the tools the answer used, and a reply from one line to most of a screen
+NEWS_TURNS = [
+    ("东京今年冬天电费要涨 30%，是真的吗",
+     [("web_search", "东京电力 冬季 电价 2026"), ("web_fetch", "www.tepco.co.jp/press")],
+     "不是真的。东京电力公布的冬季方案里，**家庭用户平均涨 7%**。30% 这个数字出自一篇把燃料调整费和再生能源附加费"
+     "加在一起、又按用电最多的那一档算的文章。\n\n"
+     "- 一般家庭（每月 260 kWh）：每月多 520 日元左右\n"
+     "- 你上个月用了 180 kWh：每月多 360 日元左右\n\n"
+     "来源是东京电力 11 月 2 日的新闻稿，链接放进今天的新闻日报了。"),
+    ("好", [], "嗯。"),
+    ("今天有什么新闻",
+     [("web_search", "今日のニュース 東京")],
+     "今天的要闻：\n"
+     "- 日银维持利率不变，下次会议在 12 月 18 日\n"
+     "- 中央線 12 月起末班车提前 10 分钟\n"
+     "- 东京大学公布了明年的入学考试日程\n"
+     "- 首都圈今晚到明早有雨，最低 6 度\n\n"
+     "中央線的改动要加进你的通勤提醒吗？"),
+    ("加吧", [("kanban_create", "通勤：中央線末班车提前 10 分钟")], "交给「通勤」了，改好它会告诉你。"),
+    ("帮我看看这条是不是真的：日本明年起留学生打工上限改成每周 20 小时",
+     [("web_search", "留学生 資格外活動 上限 改正"), ("web_fetch", "www.moj.go.jp"), ("web_fetch", "www.nikkei.com")],
+     "部分属实，说法不准确。\n\n"
+     "出入国在留管理厅确实在讨论调整「资格外活动许可」，草案里写的是**把每周 28 小时改成按月计算的 112 小时**，"
+     "长假期间每天 8 小时的规定不变。「每周 20 小时」在官方文件里找不到，最早出现在一个转述日经报道的帖子里，"
+     "转述时把「平均每周约 26 小时」写错了，之后被很多账号原样转发。\n\n"
+     "现在的进度：\n"
+     "1. 10 月底结束了公众意见征集\n"
+     "2. 预计明年 4 月施行\n"
+     "3. 已经拿到许可的人，许可期内不受影响\n\n"
+     "你现在每周打工 18 小时，新规下也没有问题。要是之后有正式公告，我会写进新闻日报。"),
+    ("谢谢", [], "不客气。"),
+    ("下周的研讨会在哪个教室",
+     [("calendar_search", "研讨会 下周")],
+     "下周三 14:40 的研讨会在 **工学部 2 号馆 213**。上周发的通知说换了教室，原来的 105 在装修。"),
+    ("把这周的新闻日报总结成三句话",
+     [("report_read", "新闻日报 本周"), ("summarize", "7 篇")],
+     "这周最值得记住的三件事：\n\n"
+     "1. 日银连续第三次维持利率不变，市场普遍预期 12 月也不会动，日元对美元在 152 到 155 之间来回。\n"
+     "2. 东京都从明年起给租房的大学生发每月 1 万日元的住房补贴，你符合条件，**申请截止是 1 月 15 日**，"
+     "需要在学证明和租房合同的复印件。\n"
+     "3. JR 东日本宣布 12 月起几条线的末班车提前，中央線、山手線各提前 10 分钟左右，周末不变。\n\n"
+     "补贴的申请材料我列成了待办，日期定在下周一，你看行不行。"),
+]
+
+
+def seed_news_transcript():
+    """资讯's Bot Chat: the turns above, numbered and gone round, so a page has rows of every
+    height; the newest reply is last."""
+    start = time.time() - 3 * 86400
+    rows, n = [], 0
+
+    def add(**row):
+        nonlocal n
+        n += 1
+        rows.append({"row_id": n, "row_kind": "message", "timestamp": start + n * 300, **row})
+
+    for turn in range(1, 45):
+        question, tools, reply = NEWS_TURNS[(turn - 1) % len(NEWS_TURNS)]
+        add(role="user", text=f"第 {turn} 问：{question}")
+        for name, context in tools:
+            add(role="tool", name=name, context=context, text="")
+        add(role="assistant", text=reply)
+    add(role="user", text="第 45 问：明天要带伞吗")
+    add(role="tool", name="web_search", context="東京 天気 明日", text="")
+    add(role="assistant", text="不用。明天东京多云转晴，降水概率 10%，最高 14 度、最低 7 度，早上出门带件薄外套。\n\n"
+                               "这是资讯最新的一条回复。")
+    transcripts["sess-news"] = rows
+
+
 seed_transcripts()
+seed_news_transcript()
 
 # what Hermes's canonical contracts accept (tui_gateway/contracts/canonical_sessions.py and
 # canonical_stored_reads.py)
@@ -474,7 +549,11 @@ class Handler(BaseHTTPRequestHandler):
             end = int(cursor[len(prefix):])
         begin = max(0, end - limit)
         page = rows[begin:end]
-        log(f"    transcript rows {begin}..{end - 1} of {len(rows)}" + (" (first page)" if cursor is None else ""))
+        delay = slow_first_pages.get(session_id, 0) if cursor is None else 0
+        if delay:
+            time.sleep(delay)
+        log(f"    transcript rows {begin}..{end - 1} of {len(rows)}" + (" (first page)" if cursor is None else "")
+            + (f", {delay} s late" if delay else ""))
         return {"session_id": session_id, "rows": page, "reset": cursor is None,
                 "next_cursor": f"c:{session_id}:latest:{begin}" if begin > 0 else None}, None
 
@@ -499,6 +578,8 @@ class Handler(BaseHTTPRequestHandler):
                  "ui_meta": {"hermes-bots": {"title": "课程（CI）"}}},
                 {"name": "commute", "display_name": "通勤（CI）", "description": "通勤", "is_default": False,
                  "ui_meta": {}},
+                {"name": "news", "display_name": "news", "description": "资讯", "is_default": False,
+                 "ui_meta": {"hermes-bots": {"title": "资讯（CI）"}}},
             ]}
         elif method == "runtime.describe":
             if params:

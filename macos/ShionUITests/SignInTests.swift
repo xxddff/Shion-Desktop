@@ -149,7 +149,42 @@ final class SignInTests: XCTestCase {
         XCTAssertTrue(says(total, "4 件（按内存推算）"), "overall: \(total.label) / \(String(describing: total.value))")
         let each = element("board-limit-assistant", in: again)
         XCTAssertTrue(says(each, "1 件"), "per assistant: \(each.label) / \(String(describing: each.value))")
+
+        // 资讯's replies run from one line to most of a screen, and its newest page comes 1.5 s
+        // after the click, as over a real network: the chat still opens on its newest message.
+        // Each picture is taken before the rows are looked up, which could lay them out.
+        app.typeKey("w", modifierFlags: .command)
+        element("bot-news", in: app).click()
+        Thread.sleep(forTimeInterval: 3)
+        keep(XCUIScreen.main.screenshot(), "signin-9-long-replies")
+        let newsOpened = newestShown("这是资讯最新的一条回复", in: app)
+        // opening again, the rows are there from the start: 詩音 (all 134 rows by now), then 资讯
+        element("bot-shion", in: app).click()
+        Thread.sleep(forTimeInterval: 1.5)
+        keep(XCUIScreen.main.screenshot(), "signin-9a-shion-again")
+        let shionAgain = newestShown("收到：hello", in: app)
+        element("bot-news", in: app).click()
+        Thread.sleep(forTimeInterval: 1.5)
+        keep(XCUIScreen.main.screenshot(), "signin-9b-long-replies-again")
+        let newsAgain = newestShown("这是资讯最新的一条回复", in: app)
+        XCTAssertTrue(newsOpened, "资讯's chat did not open on its newest message")
+        XCTAssertTrue(shionAgain, "詩音's chat did not open again on its newest message")
+        XCTAssertTrue(newsAgain, "资讯's chat did not open again on its newest message")
         app.terminate()
+    }
+
+    /// The row showing `text` is at the bottom of the transcript: on screen, above the composer
+    /// and close to it. Prints where it is either way.
+    @MainActor
+    private func newestShown(_ text: String, in app: XCUIApplication) -> Bool {
+        let composer = element("composer", in: app).frame
+        guard let row = findText(text, in: app) else {
+            print("newest row «\(text)»: not on screen (composer at \(composer))")
+            return false
+        }
+        let gap = composer.minY - row.frame.maxY
+        print("newest row «\(text)»: \(row.frame), \(gap) pt above the composer at \(composer)")
+        return gap >= 0 && gap < 80
     }
 
     @MainActor
