@@ -131,9 +131,11 @@ enum Picture {
               let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
         let w = image.width, h = image.height
         var pixels = [UInt8](repeating: 0, count: w * h * 4)
+        // draw in the image's own RGB space: the stored values, not a color-managed conversion
+        let space = image.colorSpace.flatMap { $0.model == .rgb ? $0 : nil } ?? CGColorSpace(name: CGColorSpace.sRGB)!
         let ok = pixels.withUnsafeMutableBytes { buffer -> Bool in
             guard let context = CGContext(data: buffer.baseAddress, width: w, height: h, bitsPerComponent: 8,
-                                          bytesPerRow: w * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                          bytesPerRow: w * 4, space: space,
                                           bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
             context.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
             return true

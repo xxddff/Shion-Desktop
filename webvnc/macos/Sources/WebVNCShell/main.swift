@@ -101,6 +101,7 @@ final class SelfTest {
             print("\(required ? "FAIL" : "WARN")  \(name)  \(error)")
         }
         fflush(stdout)
+        save()   // after every check: a crash later keeps what is known so far
     }
 
     func ms(since date: Date) -> Int { Int(Date().timeIntervalSince(date) * 1000) }
@@ -147,13 +148,22 @@ final class SelfTest {
         return r
     }
 
+    /// The decoded picture against Chrome's (same recording): pixel by pixel, and the page's own
+    /// hash of its RGB bytes against the one recorded on Linux (equal = bit-identical decoding).
     func comparePicture(_ viewer: Viewer, name: String) async -> [String: Any] {
         guard let url = await viewer.call("return window.shionVNC.picturePNG()") as? String,
               let png = Picture.data(fromDataURL: url) else { return ["error": "no picture"] }
         try? FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
         try? png.write(to: outDir.appendingPathComponent("\(name).png"))
         guard let expected = try? Data(contentsOf: URL(fileURLWithPath: a.staticExpected)) else { return ["error": "no expected picture"] }
-        return Picture.compare(png, expected)
+        var result = Picture.compare(png, expected)
+        let hash = (await viewer.call("return window.shionVNC.pictureHash()") as? [String: Any])?["fnv1a"] as? String
+        let metaURL = URL(fileURLWithPath: a.staticExpected).deletingLastPathComponent().appendingPathComponent("novnc-static.json")
+        let meta = (try? JSONSerialization.jsonObject(with: Data(contentsOf: metaURL))) as? [String: Any]
+        let recorded = (meta?["picture"] as? [String: Any])?["fnv1a"] as? String
+        result["hash"] = orNull(hash)
+        result["chromeHash"] = orNull(recorded)
+        return result
     }
 
     func run() async -> Bool {
@@ -390,6 +400,52 @@ final class SelfTest {
                 }
             }
             big?.stop()
+        }
+
+        // ---- macOS 27: bytes to the page without base64? -[WKUserContentController addBuffer:name:contentWorld:]
+        // (NSData, shown to JavaScript as window.webkit.buffers.<name>). Called through the
+        // Objective-C runtime so that the shell builds without knowing its Swift spelling; last,
+        // because a wrong guess at its signature would end the process.
+        await check("WebKit 27: bytes to the page without base64 (window.webkit.buffers)", required: false) {
+            let viewer = try await openPage(csp: Viewer.cspChannel)
+            defer { viewer.close() }
+            let controller = viewer.webView.configuration.userContentController
+            let add = NSSelectorFromString("addBuffer:name:contentWorld:")
+            let remove = NSSelectorFromString("removeBufferWithName:contentWorld:")
+            guard controller.responds(to: add), controller.responds(to: remove) else {
+                throw Failure(description: "no addBuffer:name:contentWorld: on this WebKit")
+            }
+            typealias AddBuffer = @convention(c) (AnyObject, Selector, NSData, NSString, WKContentWorld) -> Void
+            typealias RemoveBuffer = @convention(c) (AnyObject, Selector, NSString, WKContentWorld) -> Void
+            let addBuffer = unsafeBitCast(controller.method(for: add), to: AddBuffer.self)
+            let removeBuffer = unsafeBitCast(controller.method(for: remove), to: RemoveBuffer.self)
+            var out: [String: Any] = [:]
+            for megabytes in [1, 8] {
+                var data = Data(count: megabytes << 20)
+                data.withUnsafeMutableBytes { raw in
+                    let bytes = raw.bindMemory(to: UInt8.self)
+                    for i in 0..<bytes.count { bytes[i] = UInt8(truncatingIfNeeded: i) }
+                }
+                let name = "probe\(megabytes)"
+                var started = Date()
+                addBuffer(controller, add, data as NSData, name as NSString, WKContentWorld.page)
+                let seen = await viewer.call("""
+                    const b = window.webkit && window.webkit.buffers && window.webkit.buffers[n]
+                    if (!b) return { found: false, buffers: !!(window.webkit && window.webkit.buffers) }
+                    const kind = Object.prototype.toString.call(b)
+                    const u8 = b instanceof ArrayBuffer ? new Uint8Array(b) : (ArrayBuffer.isView(b) ? new Uint8Array(b.buffer, b.byteOffset, b.byteLength) : null)
+                    let intact = !!u8
+                    if (u8) { for (let i = 0; i < u8.length; i += 4093) { if (u8[i] !== (i & 255)) { intact = false; break } } }
+                    return { found: true, kind, byteLength: u8 ? u8.length : null, intact }
+                    """, ["n": name])
+                let bufferMs = Date().timeIntervalSince(started) * 1000
+                removeBuffer(controller, remove, name as NSString, WKContentWorld.page)
+                started = Date()
+                let decoded = await viewer.call("return Uint8Array.fromBase64(s).length", ["s": data.base64EncodedString()])
+                let base64Ms = Date().timeIntervalSince(started) * 1000
+                out["\(megabytes) MB"] = ["buffer": orNull(seen), "bufferMs": bufferMs, "base64Length": orNull(decoded), "base64Ms": base64Ms]
+            }
+            return out
         }
 
         save()

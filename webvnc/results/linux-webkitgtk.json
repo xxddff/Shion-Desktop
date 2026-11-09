@@ -1,0 +1,82 @@
+[
+  {
+    "name": "webkitgtk: the page from a custom scheme (ES modules, secure context, CSP)",
+    "ok": true,
+    "detail": {
+      "engine": "WebKitGTK 2.52.6",
+      "ready": {
+        "secureContext": true,
+        "subtleCrypto": true,
+        "nativeBase64": true,
+        "origin": "shion-webvnc://app"
+      },
+      "csp": {
+        "ua": "Mozilla/5.0 (X11; Ubuntu; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/60.5 Safari/605.1.15",
+        "inlineRan": false,
+        "fetchBlocked": true
+      },
+      "notRegisteredAsSecure": {
+        "secureContext": true,
+        "subtleCrypto": true,
+        "nativeBase64": true,
+        "origin": "shion-webvnc://app"
+      }
+    }
+  },
+  {
+    "name": "webkitgtk: relay, holder — clipboard + Ctrl+V reaches the remote",
+    "ok": true,
+    "detail": {
+      "firstFrameMs": 72,
+      "typed": {
+        "ok": true,
+        "bytes": 25
+      },
+      "origin": "shion-webvnc://app",
+      "sentUpstream": 1000
+    }
+  },
+  {
+    "name": "webkitgtk: HostChannel, holder — no socket in the page",
+    "ok": true,
+    "detail": {
+      "firstFrameMs": 104,
+      "typed": {
+        "ok": true,
+        "bytes": 5
+      },
+      "channel": {
+        "batches": 16,
+        "bytes_down": 49854,
+        "bytes_up": 419,
+        "close": 1000
+      }
+    }
+  },
+  {
+    "name": "webkitgtk: decode a recorded Chrome scroll (161 updates, 20.4 MB) through the relay",
+    "ok": true,
+    "detail": {
+      "updates": 161,
+      "seconds": 4.24,
+      "cpu": 12.41,
+      "bytesIn": 20386701
+    }
+  },
+  {
+    "name": "webkitgtk: decode a recorded Chrome scroll (161 updates, 20.4 MB) through the channel",
+    "ok": true,
+    "detail": {
+      "updates": 161,
+      "seconds": 4.28,
+      "cpu": 12.59,
+      "bytesIn": 20386701,
+      "channel": {
+        "batches": 4,
+        "bytes_down": 20386701,
+        "bytes_up": 3390,
+        "close": 1000
+      }
+    }
+  }
+]

@@ -1,9 +1,9 @@
 name: Web viewer (noVNC)
 
 # The exploration in webvnc/: noVNC 1.7.0 (as Hermes' official desktop app uses it) in a web view.
-# Linux runs on every change to webvnc/: the page in headless Chrome and in WebKitGTK against a real
-# Xvnc behind Hermes' own RFB filter (rfb/testbed), through the loopback relay and through the
-# in-app channel; it also records a scroll session for the macOS job. The macOS job uses the
+# Linux runs on every change to webvnc/: the page in headless Chrome against a real Xvnc behind
+# Hermes' own RFB filter (rfb/testbed), through the loopback relay and through the in-app channel;
+# it also records a scroll session for the macOS job. The macOS job uses the
 # limited macOS minutes: only on a manual run with "macos" ticked, or when the commit message
 # contains [macos]. It builds the shell (WKWebView + relay + channel) and runs its self-test against
 # recorded sessions (no Xvnc on macOS).
@@ -32,7 +32,7 @@ env:
 
 jobs:
   linux:
-    name: Linux — Chrome and WebKitGTK against Xvnc
+    name: Linux — Chrome against Xvnc
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     defaults:
@@ -48,24 +48,21 @@ jobs:
           web/fetch-novnc.sh
           web/fetch-novnc.sh --check
 
-      - name: Packages (Xvnc, X clients, CJK fonts, Xvfb, openbox, WebKitGTK)
+      - name: Packages (Xvnc, X clients, CJK fonts)
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq tigervnc-standalone-server x11-apps x11-utils x11-xserver-utils \
-            xterm xdotool xclip fonts-dejavu-core fonts-noto-cjk xvfb openbox gir1.2-webkit-6.0 python3-gi
+            xterm xdotool xclip fonts-dejavu-core fonts-noto-cjk
           Xvnc -version 2>&1 | head -1
           google-chrome --version
 
-      - name: Python (websockets; and one with the system's gi for WebKitGTK)
+      - name: Python (websockets)
         run: |
           python3 -m venv ~/testbed-venv
           ~/testbed-venv/bin/pip install -q "$WEBSOCKETS"
-          /usr/bin/python3 -m venv --system-site-packages ~/wk-venv
-          ~/wk-venv/bin/pip install -q "$WEBSOCKETS"
           echo "RFB_TESTBED_PYTHON=$HOME/testbed-venv/bin/python3" >> "$GITHUB_ENV"
-          echo "WEBVNC_WK_PYTHON=$HOME/wk-venv/bin/python3" >> "$GITHUB_ENV"
 
       - name: Playwright (driver only; the runner's Chrome)
         run: npm ci --no-audit --no-fund
@@ -80,9 +77,9 @@ jobs:
         if: success() || failure()
         run: node linux/record-sample.mjs scroll samples
 
-      - name: WebKitGTK
-        if: success() || failure()
-        run: node linux/webkit.mjs --scroll-sample samples/novnc-scroll.messages.z --out out
+      # WebKitGTK (linux/webkit.mjs) is not run here: on the runner its web-process sandbox
+      # (bubblewrap) cannot set up its network namespace, and the web process never starts. It
+      # runs locally with the sandbox on; see webvnc/README.md.
 
       - name: Upload results
         if: always()

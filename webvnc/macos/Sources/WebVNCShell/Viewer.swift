@@ -103,6 +103,8 @@ final class Viewer {
         window = NSWindow(contentRect: NSRect(x: 40, y: 40, width: 1440, height: 900),
                           styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         window.title = "webvnc"
+        // We own the window: AppKit's default (release on close) over-releases it under ARC
+        window.isReleasedWhenClosed = false
         window.contentView = webView
         window.makeKeyAndOrderFront(nil)
         bridge.onMessage = { [weak self] message in
@@ -149,6 +151,8 @@ final class Viewer {
 
     func close() {
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "shion")
+        webView.stopLoading()
+        window.contentView = nil
         window.close()
     }
 }
