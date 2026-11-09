@@ -1,0 +1,37 @@
+name: Hermes plugin
+
+# Runs the shion Hermes plugin's tests (hermes-plugin/tests). They need only pytest: Hermes itself is
+# replaced by stand-ins of the few interfaces the plugin uses.
+on:
+  push:
+    paths:
+      - 'hermes-plugin/**'
+      - '.github/workflows/hermes-plugin.yml'
+  pull_request:
+    paths:
+      - 'hermes-plugin/**'
+      - '.github/workflows/hermes-plugin.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: hermes-plugin-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: pytest (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        python: ['3.11', '3.13']
+    defaults:
+      run:
+        working-directory: hermes-plugin
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install pytest
+      - run: python -m pytest -q

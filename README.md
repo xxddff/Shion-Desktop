@@ -340,6 +340,8 @@ macos/          macOS App（SwiftUI + AppKit，最低 macOS 27），project.yml 
   ShionUITests/ 截图测试（每个页面浅色、深色各一张），浏览器登录的端到端测试
   ci/           CI 上替身用的假 Hermes（fake_hermes.py，只用标准库）
 .github/workflows/macos.yml   在 macOS 27 runner 上编译、截图、跑登录测试
+hermes-plugin/  Hermes 的 shion 插件（服务器端）：待办、今天的汇总、日报、应用记录、专注检查；接口见 hermes-plugin/README.md
+.github/workflows/hermes-plugin.yml   在 ubuntu runner 上跑插件的 pytest
 ```
 
 ```bash

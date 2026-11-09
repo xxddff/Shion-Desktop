@@ -1,0 +1,24 @@
+name: shion
+version: 0.1.0
+manifest_version: 2
+api_version: 1
+description: >-
+  Shion's shared store: todos, today's summary, daily reports, app usage and the focus check,
+  read and written by every assistant (tools) and by the Shion macOS app (plugin RPC).
+license: MIT
+homepage: https://github.com/xxddff/Shion-Desktop
+tags: [shion, todos, reports]
+provides_tools:
+  - shion_todo_list
+  - shion_todo_add
+  - shion_todo_update
+  - shion_todo_delete
+  - shion_today_write
+  - shion_today_read
+  - shion_report_write
+  - shion_report_read
+  - shion_usage_day
+  - shion_usage_set_category
+  - shion_focus_status
+provides_hooks:
+  - pre_llm_call
