@@ -144,6 +144,7 @@ struct BotSettingsForm: View {
                         .buttonStyle(.plain)
                         .accessibilityLabel("颜色 \(index + 1)")
                         .accessibilityValue(editor.color == swatch ? "已选" : "")
+                        .accessibilityAddTraits(editor.color == swatch ? .isSelected : [])
                         .accessibilityIdentifier("assistant-color-\(index)")
                     }
                     Button("默认") { editor.chooseColor("") }

@@ -85,7 +85,8 @@ final class BotPageTests: XCTestCase {
         // the avatar: one of Bot Mode's swatches and a shape, into its section of ui_meta
         let swatch = reveal("assistant-color-4", in: app)
         swatch.click()
-        XCTAssertTrue(waitUntil(timeout: 10) { self.says(swatch, "已选") }, "the colour was not taken: \(String(describing: swatch.value))")
+        XCTAssertTrue(waitUntil(timeout: 10) { self.picked(swatch) },
+                      "the colour was not taken: \(String(describing: swatch.value)), selected \(swatch.isSelected)")
         choose("六边形", in: "assistant-shape", app: app)
         XCTAssertTrue(waitUntil(timeout: 10) { self.shows(self.element("assistant-shape", in: app), "六边形") }, "the shape was not taken")
         keep(window.screenshot(), "page-4-look")
@@ -171,7 +172,7 @@ final class BotPageTests: XCTestCase {
         XCTAssertTrue(waitUntil(timeout: 10) { self.contains(self.reveal("assistant-soul", in: app), "你是通勤助手（CI）") },
                       "the SOUL did not stay")
         XCTAssertTrue(waitUntil(timeout: 10) { self.shows(self.reveal("assistant-model", in: app), "ci-pricey") }, "the model did not stay")
-        XCTAssertTrue(says(reveal("assistant-color-4", in: app), "已选"), "the colour did not stay")
+        XCTAssertTrue(picked(reveal("assistant-color-4", in: app)), "the colour did not stay")
         XCTAssertTrue(shows(element("assistant-shape", in: app), "六边形"), "the shape did not stay")
         XCTAssertTrue(reveal("mcp-test-fetch", in: app).exists, "fetch did not stay")
         XCTAssertTrue(reveal("mcp-test-slow-ci", in: app).exists, "slow-ci did not stay")
@@ -264,13 +265,14 @@ final class BotPageTests: XCTestCase {
     }
 
     @MainActor
-    private func says(_ element: XCUIElement, _ text: String) -> Bool {
-        element.exists && (element.label == text || (element.value as? String) == text)
-    }
-
-    @MainActor
     private func contains(_ element: XCUIElement, _ text: String) -> Bool {
         element.exists && ((element.value as? String)?.contains(text) == true || element.label.contains(text))
+    }
+
+    /// A colour swatch says it is the chosen one: by its value, or as selected.
+    @MainActor
+    private func picked(_ element: XCUIElement) -> Bool {
+        element.exists && ((element.value as? String) == "已选" || element.isSelected)
     }
 
     /// A pop-up's or a menu's choice, wherever the control puts it: its value, title or label.
