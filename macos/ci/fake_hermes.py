@@ -501,6 +501,40 @@ class Handler(BaseHTTPRequestHandler):
         except OSError:
             pass
 
+    LATER_NOW = "好，过一会儿再说一句（CI）。"
+    LATER_REPLY = "又想起一件事（CI）：周四的实验课改到下午 3 点。"
+
+    def later(self, session_id, text):
+        """A reply now, and 8 seconds on another one nobody asked for, as when an assistant comes
+        back to a chat by itself (a cron job's delivery, a card done). BoardTests reads further up
+        the chat meanwhile, and the new message must not pull it down to the end."""
+        with lock:
+            rows = transcripts.setdefault(session_id, [])
+            rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "user", "text": text,
+                         "timestamp": time.time()})
+            rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "assistant",
+                         "text": self.LATER_NOW, "timestamp": time.time()})
+        self.event("message.start", session_id, {})
+        self.event("message.delta", session_id, {"text": self.LATER_NOW})
+        self.event("message.complete", session_id, {"text": self.LATER_NOW, "status": "complete"})
+        threading.Timer(8.0, self.later_turn, args=(session_id,)).start()
+
+    def later_turn(self, session_id):
+        with lock:
+            rows = transcripts.setdefault(session_id, [])
+            rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "assistant",
+                         "text": self.LATER_REPLY, "timestamp": time.time()})
+        log(f"  -> a message nobody asked for on {session_id}")
+        half = len(self.LATER_REPLY) // 2
+        try:
+            self.event("message.start", session_id, {})
+            self.event("message.delta", session_id, {"text": self.LATER_REPLY[:half]})
+            time.sleep(0.3)
+            self.event("message.delta", session_id, {"text": self.LATER_REPLY[half:]})
+            self.event("message.complete", session_id, {"text": self.LATER_REPLY, "status": "complete"})
+        except OSError:
+            pass
+
     HOMEWORK_CALLS = (("call-ci-hw-1", "web_search", "这周的作业（CI）"),
                       ("call-ci-hw-2", "read_file", "syllabus（CI）"),
                       ("call-ci-hw-3", "web_extract", "moodle.example（CI）"))
@@ -723,6 +757,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.hand_over(session_id, text)
             if "这周的作业" in text:
                 return self.homework(session_id, text)
+            if "等一会儿再说" in text:
+                return self.later(session_id, text)
             with lock:
                 rows = transcripts.setdefault(session_id, [])
                 rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "user", "text": text,

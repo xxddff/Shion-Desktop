@@ -11,6 +11,9 @@ struct ChatView: View {
     @State private var short = false
     /// Folded runs of tool calls opened by a click, by line id; not kept once the chat closes.
     @State private var openRuns: Set<String> = []
+    /// Whether what comes next is followed down: the reader is at the newest message. Scrolled
+    /// up, nothing moves under them until they are back at the end, or send something.
+    @State private var follow = Follow()
 
     var body: some View {
         let bot = store.bot(botId)
@@ -23,6 +26,26 @@ struct ChatView: View {
                 .onChange(of: items.first?.id) { previous, _ in
                     guard let previous, let line = lines.first(where: { line in line.items.contains { $0.id == previous } }) else { return }
                     reader.scrollTo(line.id, anchor: .top)
+                }
+                // a message came, a reply grew or finished, a call was made: followed down while
+                // the reader is at the end. Opening or closing a run changes none of this, so the
+                // transcript keeps its top and the run's line stays under the pointer.
+                .onChange(of: TranscriptEnd(lines)) {
+                    guard follow.on, let last = lines.last else { return }
+                    follow.until = Date().addingTimeInterval(1)
+                    reader.scrollTo(last.id, anchor: .bottom)
+                }
+                // the reader scrolled: to the end, or away from it. When the content's height
+                // changed it was not the reader: the newest rows taking their real heights, which
+                // is followed for a moment after a message, or a run of tool calls opening
+                .onScrollGeometryChange(for: EndGap.self) { geometry in
+                    EndGap(below: geometry.contentSize.height - geometry.visibleRect.maxY, height: geometry.contentSize.height)
+                } action: { old, new in
+                    if new.height == old.height {
+                        follow.on = new.below <= 40
+                    } else if follow.on, Date() < follow.until, new.below > 1, let last = lines.last {
+                        reader.scrollTo(last.id, anchor: .bottom)
+                    }
                 }
         }
         .overlay {
@@ -40,6 +63,8 @@ struct ChatView: View {
         }
         .safeAreaInset(edge: .bottom) {
             Composer(placeholder: "跟\(bot?.name ?? "")说…", text: $draft) {
+                // what one sends, and the reply to it, are followed down from wherever one was
+                follow.on = true
                 store.send(draft, to: botId)
                 draft = ""
             }
@@ -59,24 +84,22 @@ struct ChatView: View {
                     OlderMessages(botId: botId)
                 }
                 ForEach(Array(lines.enumerated()), id: \.element.id) { index, line in
-                    switch line {
-                    case .item(let item):
-                        ChatRow(item: item, bot: bot, showHead: showsHead(lines, index))
-                    case .tools(let id, let tools):
-                        ToolRun(tools: tools, open: openRuns.contains(id)) {
-                            openRuns.formSymmetricDifference([id])
-                        }
-                    }
+                    row(line, at: index, of: lines, bot: bot)
+                        // the margin below the newest line is part of it, so following it down
+                        // shows the margin too
+                        .padding(.bottom, index == lines.count - 1 ? 24 : 0)
                 }
             }
             .padding(.horizontal, 40)
-            .padding(.vertical, 24)
+            .padding(.top, 24)
             .frame(maxWidth: 760)
             // a short chat sits at the bottom of a full-height page, not on a short one
             .frame(maxWidth: .infinity, minHeight: viewport, alignment: .bottom)
         }
-        // starts at the newest message, and follows new ones
-        .defaultScrollAnchor(.bottom)
+        // starts at the newest message, and a short chat sits at the bottom; nothing is anchored
+        // when the content grows or shrinks (the newest message is followed above instead)
+        .defaultScrollAnchor(.bottom, for: .initialOffset)
+        .defaultScrollAnchor(.bottom, for: .alignment)
         .accessibilityIdentifier("transcript")
         // measured from the first layout on (a scroll geometry change only reports changes); the
         // size is already inside the toolbar and the composer
@@ -109,12 +132,55 @@ struct ChatView: View {
         }
     }
 
+    @ViewBuilder
+    private func row(_ line: ChatLine, at index: Int, of lines: [ChatLine], bot: Bot?) -> some View {
+        switch line {
+        case .item(let item):
+            ChatRow(item: item, bot: bot, showHead: showsHead(lines, index))
+        case .tools(let id, let tools):
+            ToolRun(tools: tools, open: openRuns.contains(id)) {
+                openRuns.formSymmetricDifference([id])
+            }
+        }
+    }
+
     /// The assistant's name shows once per run of its messages, again after ten quiet minutes.
     private func showsHead(_ lines: [ChatLine], _ index: Int) -> Bool {
         guard case .item(let item) = lines[index], item.role == .assistant else { return false }
         guard index > 0, case .item(let previous) = lines[index - 1] else { return true }
         return previous.role != .assistant || item.at.timeIntervalSince(previous.at) > 600
     }
+}
+
+/// Whether a transcript follows its newest message down, and until when a change in its height
+/// still comes from the newest message. Read in callbacks only, so nothing redraws for it.
+final class Follow {
+    var on = true
+    var until = Date.distantPast
+}
+
+/// What changes at the end of a transcript as a turn goes on: a line comes, the last one grows
+/// (a reply streaming in, its todos) or finishes. Older pages arriving above leave it as it is.
+private nonisolated struct TranscriptEnd: Equatable {
+    let last: String?
+    let length: Int
+    let streaming: Bool
+    let todos: Int
+
+    @MainActor
+    init(_ lines: [ChatLine]) {
+        last = lines.last?.id
+        let item = lines.last?.items.last
+        length = item?.text.utf8.count ?? 0
+        streaming = item?.streaming ?? false
+        todos = item?.todoIds.count ?? 0
+    }
+}
+
+/// How far the content goes on below what shows, and how tall it is.
+private nonisolated struct EndGap: Equatable {
+    let below: CGFloat
+    let height: CGFloat
 }
 
 /// The top of a paged transcript: a spinner while the next older page loads, or why it did not.

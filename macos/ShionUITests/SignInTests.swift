@@ -104,20 +104,35 @@ final class SignInTests: XCTestCase {
         keep(app.windows.firstMatch.screenshot(), "signin-4-chat")
         XCTAssertTrue(opened, "the Bot Chat did not open")
 
+        // from here on each check reports, and the next one still runs; where things are on the
+        // screen goes in signin-positions.txt
+        continueAfterFailure = true
+        let transcript = element("transcript", in: app)
+        var positions: [String] = []
+        // the chat opens at its newest message
+        Thread.sleep(forTimeInterval: 0.5)
+        let greeting = findText("CI 替身服务器连上了", in: app)
+        positions.append("opened: the newest message at \(place(greeting)) in \(transcript.frame)")
+        XCTAssertTrue(inView(greeting, of: transcript), "the chat did not open at its newest message. \(positions.last ?? "")")
+
         let composer = element("composer", in: app)
         XCTAssertTrue(composer.waitForExistence(timeout: 5))
         composer.click()
         composer.typeText("hello")
         element("send", in: app).click()
         let replied = waitForText("收到：hello", in: app, timeout: 15)
+        Thread.sleep(forTimeInterval: 0.5)
         keep(app.windows.firstMatch.screenshot(), "signin-5-reply")
         XCTAssertTrue(replied, "no reply streamed back")
+        // the reply was followed down as it came
+        let hello = findText("收到：hello", in: app)
+        positions.append("replied: the reply at \(place(hello)) in \(transcript.frame)")
+        XCTAssertTrue(inView(hello, of: transcript), "the reply was not followed down. \(positions.last ?? "")")
 
         // 詩音's chat on the stand-in is 135 rows: it opened on the newest 50, and the older ones
         // come a page at a time as the top scrolls into view
         XCTAssertFalse(waitForText("第 1 条（你）", in: app, timeout: 1), "the whole transcript came at once")
         let window = app.windows.firstMatch
-        let transcript = element("transcript", in: app)
         XCTAssertTrue(transcript.waitForExistence(timeout: 5), "no transcript")
         // which sign of a wheel delta scrolls up is the runner's business: nudge, and see which
         // way a row on screen moved. Towards older messages rows move down; the chat is at its
@@ -133,18 +148,30 @@ final class SignInTests: XCTestCase {
         }
         var reachedTop = false
         var sawSecondPage = false
-        for _ in 0..<24 {
+        for _ in 0..<40 {
             // wheel events go where the pointer is: put it on the transcript, not the composer
             transcript.hover()
+            if !sawSecondPage {
+                // a little at a time until the second page lands: 第 82 条 led the first page, and
+                // when 第 81 条 and the rest come in above it, it stays in view where it was
+                let before = findText("第 82 条", in: app).map { $0.frame.minY }
+                transcript.scroll(byDeltaX: 0, deltaY: direction * 300)
+                if waitForText("第 81 条", in: app, timeout: 1.2) {
+                    sawSecondPage = true
+                    Thread.sleep(forTimeInterval: 0.3)
+                    let lead = findText("第 82 条", in: app)
+                    keep(window.screenshot(), "signin-6a-second-page")
+                    positions.append("second page: 第 82 条, which led the first, at \(before.map { "\($0)" } ?? "gone") "
+                                     + "before the step that brought it, \(place(lead)) once it came, in \(transcript.frame)")
+                    XCTAssertTrue(inView(lead, of: transcript), "the row that led the first page went out of view "
+                                  + "as the second came. \(positions.last ?? "")")
+                }
+                continue
+            }
             transcript.scroll(byDeltaX: 0, deltaY: direction * 1200)
             if waitForText("第 1 条（你）", in: app, timeout: 1.5) {
                 reachedTop = true
                 break
-            }
-            // the moment the second page lands: the rows that were at the top should still be there
-            if !sawSecondPage && waitForText("第 81 条", in: app, timeout: 0.2) {
-                sawSecondPage = true
-                keep(window.screenshot(), "signin-6a-second-page")
             }
         }
         // the oldest page opens with a compaction that has the row_id of 第 1 条, the ask it was
@@ -169,6 +196,12 @@ final class SignInTests: XCTestCase {
         let created = waitForText("新的 Bot Chat。", in: app, timeout: 15)
         keep(window.screenshot(), "signin-7-new-chat")
         XCTAssertTrue(created, "the new Bot Chat did not open")
+        // one message: it sits at the bottom, just above the composer
+        Thread.sleep(forTimeInterval: 0.5)
+        let only = findText("新的 Bot Chat", in: app)
+        positions.append("a short chat: its message at \(place(only)) in \(transcript.frame)")
+        XCTAssertTrue(inView(only, of: transcript) && only.map { transcript.frame.maxY - $0.frame.maxY < 80 } ?? false,
+                      "a short chat does not sit at the bottom. \(positions.last ?? "")")
 
         // the board limits in Settings come from the server: unset overall (4 by its 2 GB), 1 each
         app.typeKey(",", modifierFlags: .command)
@@ -181,7 +214,31 @@ final class SignInTests: XCTestCase {
         XCTAssertTrue(says(total, "4 件（按内存推算）"), "overall: \(total.label) / \(String(describing: total.value))")
         let each = element("board-limit-assistant", in: again)
         XCTAssertTrue(says(each, "1 件"), "per assistant: \(each.label) / \(String(describing: each.value))")
+        note(positions.joined(separator: "\n"), "signin-positions")
         app.terminate()
+    }
+
+    /// In the transcript's visible part, not above or below it.
+    @MainActor
+    private func inView(_ element: XCUIElement?, of transcript: XCUIElement) -> Bool {
+        guard let element, element.exists, transcript.exists else { return false }
+        let frame = element.frame, area = transcript.frame
+        return frame.minY >= area.minY - 2 && frame.maxY <= area.maxY + 2
+    }
+
+    /// Where an element is on the screen, top to bottom, or "gone".
+    @MainActor
+    private func place(_ element: XCUIElement?) -> String {
+        guard let element, element.exists else { return "gone" }
+        return "\(element.frame.minY)–\(element.frame.maxY)"
+    }
+
+    /// Numbers worth reading after the run, kept as a text beside the pictures (`name.txt`).
+    private func note(_ text: String, _ name: String) {
+        let attachment = XCTAttachment(string: text)
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
     }
 
     @MainActor
