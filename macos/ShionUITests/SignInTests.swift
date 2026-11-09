@@ -113,7 +113,7 @@ final class SignInTests: XCTestCase {
         keep(app.windows.firstMatch.screenshot(), "signin-5-reply")
         XCTAssertTrue(replied, "no reply streamed back")
 
-        // 詩音's chat on the stand-in is 132 rows: it opened on the newest 50, and the older ones
+        // 詩音's chat on the stand-in is 135 rows: it opened on the newest 50, and the older ones
         // come a page at a time as the top scrolls into view
         XCTAssertFalse(waitForText("第 1 条（你）", in: app, timeout: 1), "the whole transcript came at once")
         let window = app.windows.firstMatch
@@ -147,8 +147,19 @@ final class SignInTests: XCTestCase {
                 keep(window.screenshot(), "signin-6a-second-page")
             }
         }
+        // the oldest page opens with a compaction that has the row_id of 第 1 条, the ask it was
+        // stored on, as Hermes sends it: both rows show, with the tool rows after it
+        var summarized = waitForText("更早的对话压缩成了摘要", in: app, timeout: 2)
+        if reachedTop && !summarized {
+            transcript.hover()
+            transcript.scroll(byDeltaX: 0, deltaY: direction * 1200)
+            summarized = waitForText("更早的对话压缩成了摘要", in: app, timeout: 3)
+        }
         keep(window.screenshot(), "signin-6-oldest")
         XCTAssertTrue(reachedTop, "older pages did not load on scrolling up")
+        XCTAssertTrue(summarized, "the compaction above 第 1 条 is not shown")
+        XCTAssertTrue(waitForText("第 1 条（你）", in: app, timeout: 1), "第 1 条, which holds the compaction, is not shown")
+        XCTAssertTrue(waitForText("web_search · 第 1 条问的", in: app, timeout: 1), "the tool row after 第 1 条 is not shown")
 
         // 通勤 has no Bot Chat on the stand-in yet: Shion creates one (the stand-in checks the
         // fields against Hermes's, and logs which interface the assistant would be told)
