@@ -622,6 +622,12 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(bytes(head) + data)
             self.wfile.flush()
 
+    def send_late(self, value):
+        try:
+            self.send_json(value)
+        except OSError:
+            pass
+
     def send_json(self, value):
         self.send_frame(1, json.dumps(value, ensure_ascii=False).encode())
 
@@ -745,6 +751,12 @@ class Handler(BaseHTTPRequestHandler):
             result, bad = self.transcript(params)
             if bad:
                 return self.refuse(rid, bad)
+            if params.get("cursor") is not None:
+                # an older page comes a moment after it is asked for, as over a real network: SignInTests
+                # reads where the rows in view are before it lands, and again after
+                reply = {"jsonrpc": "2.0", "id": rid, "result": result}
+                threading.Timer(1.5, self.send_late, args=(reply,)).start()
+                return
         elif method in ("approval.respond", "clarify.respond"):
             unknown = sorted(set(params) - RESPOND_KEYS)
             if unknown:

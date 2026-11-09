@@ -14,11 +14,18 @@ struct ChatView: View {
     /// Whether what comes next is followed down: the reader is at the newest message. Scrolled
     /// up, nothing moves under them until they are back at the end, or send something.
     @State private var follow = Follow()
+    /// Where the rows in view are, so the one at the top stays put as older rows come in above.
+    @State private var spots = RowSpots()
+    /// Bumped as the transcript is made: once its rows are laid out, it goes to the newest one.
+    @State private var placing = 0
 
     var body: some View {
         let bot = store.bot(botId)
         let items = store.chats[botId] ?? []
         let lines = ChatLine.lines(items, replying: store.replying.contains(botId))
+        // older rows coming in above: where the row at the top of what shows was, from the layout
+        // before they came
+        let _ = spots.note(first: items.first?.id)
         Group {
             // the transcript is made once there is something in it: it starts at its newest
             // message with the rows there, and nothing has to be followed down to get there
@@ -27,14 +34,29 @@ struct ChatView: View {
             } else {
                 ScrollViewReader { reader in
                     transcript(lines, bot: bot)
-                        // older rows arrived above: the rows that were at the top stay where they
-                        // were (a run of tool calls the page boundary cut is one line with the
-                        // calls before it)
+                        // made with its rows: at the newest one, now and once they are laid out;
+                        // older pages wait until then
+                        .onAppear {
+                            follow.placed = false
+                            toEnd(lines, with: reader)
+                            placing += 1
+                        }
+                        .onChange(of: placing) {
+                            toEnd(lines, with: reader)
+                            follow.placed = true
+                        }
+                        // older rows arrived above: the row that was at the top of what shows goes
+                        // back to where it was (a run of tool calls the page boundary cut is one
+                        // line with the calls before it, under the same id)
                         .onChange(of: items.first?.id) { previous, _ in
-                            guard let previous,
-                                  let line = lines.first(where: { line in line.items.contains { $0.id == previous } })
-                            else { return }
-                            reader.scrollTo(line.id, anchor: .top)
+                            guard let previous else { return }
+                            if let held = spots.held, lines.contains(where: { $0.id == held.id }),
+                               viewport > held.frame.height + 1 {
+                                let anchor = UnitPoint(x: 0, y: held.frame.minY / (viewport - held.frame.height))
+                                reader.scrollTo(held.id, anchor: anchor)
+                            } else if let line = lines.first(where: { line in line.items.contains { $0.id == previous } }) {
+                                reader.scrollTo(line.id, anchor: .top)
+                            }
                         }
                         // a message came, a reply grew or finished, a call was made: followed down
                         // while the reader is at the end. Opening or closing a run changes none of
@@ -100,6 +122,14 @@ struct ChatView: View {
                         // the margin below the newest line is part of it, so following it down
                         // shows the margin too
                         .padding(.bottom, index == lines.count - 1 ? 24 : 0)
+                        .onGeometryChange(for: CGRect.self) { proxy in
+                            proxy.frame(in: .scrollView)
+                        } action: { frame in
+                            spots.frames[line.id] = frame
+                        }
+                        .onDisappear {
+                            spots.frames[line.id] = nil
+                        }
                 }
             }
             .padding(.horizontal, 40)
@@ -108,23 +138,24 @@ struct ChatView: View {
             // a short chat sits at the bottom of a full-height page, not on a short one
             .frame(maxWidth: .infinity, minHeight: viewport, alignment: .bottom)
         }
-        // starts at the newest message, and a short chat sits at the bottom; nothing is anchored
-        // when the content grows or shrinks (the newest message is followed above instead)
-        .defaultScrollAnchor(.bottom, for: .initialOffset)
-        .defaultScrollAnchor(.bottom, for: .alignment)
+        // no anchor: the content's top stays put as it grows or shrinks, and where it shows is
+        // only ever set above (to the newest message, after it, back to the row in view); a short
+        // chat sits at the bottom of the full-height frame
         .accessibilityIdentifier("transcript")
         // measured from the first layout on (a scroll geometry change only reports changes); the
         // size is already inside the toolbar and the composer
         .onGeometryChange(for: CGFloat.self) { proxy in
             proxy.size.height
         } action: { height in
-            viewport = max(0, height)
+            if abs(height - viewport) > 1 {
+                viewport = max(0, height)
+            }
         }
-        // the next older page when the top comes into view
+        // the next older page when the top comes into view, once the transcript was put at its end
         .onScrollGeometryChange(for: Bool.self) { geometry in
             geometry.contentOffset.y + geometry.contentInsets.top < 400
         } action: { _, nearTop in
-            if nearTop {
+            if nearTop, follow.placed {
                 Task { await store.loadOlder(botId) }
             }
         }
@@ -142,6 +173,13 @@ struct ChatView: View {
                 }
             }
         }
+    }
+
+    /// To the newest line, and after it for a moment as the rows take their real heights.
+    private func toEnd(_ lines: [ChatLine], with reader: ScrollViewProxy) {
+        guard let last = lines.last else { return }
+        follow.until = Date().addingTimeInterval(1)
+        reader.scrollTo(last.id, anchor: .bottom)
     }
 
     @ViewBuilder
@@ -169,6 +207,28 @@ struct ChatView: View {
 final class Follow {
     var on = true
     var until = Date.distantPast
+    /// Put at its newest message since it was made: until then no older page is asked for.
+    var placed = false
+}
+
+/// Where the rows are in the transcript's visible part, by line id, as last laid out. Not
+/// observed, so nothing redraws for it as the rows move.
+final class RowSpots {
+    var frames: [String: CGRect] = [:]
+    /// The topmost row wholly below the top of what showed, and where it was, when the first row
+    /// last changed.
+    private(set) var held: (id: String, frame: CGRect)?
+    private var first: String?
+
+    /// Called as the transcript is made, before its rows are laid out: a new first row means older
+    /// rows came in above, and the row at the top of what shows is noted from the layout before.
+    func note(first: String?) {
+        guard first != self.first else { return }
+        self.first = first
+        held = frames.filter { $0.value.minY >= 0 }
+            .min { $0.value.minY < $1.value.minY }
+            .map { (id: $0.key, frame: $0.value) }
+    }
 }
 
 /// What changes at the end of a transcript as a turn goes on: a line comes, the last one grows
