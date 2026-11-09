@@ -39,7 +39,7 @@ struct JumpHit: Identifiable {
     enum Target {
         case route(Route)
         case todo(String)
-        /// The words, as a sentence for 詩音.
+        /// The words, as a sentence for 总秘书.
         case ask(String)
     }
 
@@ -54,7 +54,7 @@ struct JumpHit: Identifiable {
 }
 
 /// Pages, assistants and open todos, found by what you type; ↑↓ choose, Return goes. Words that
-/// match nothing can go to 詩音 instead, as the last line.
+/// match nothing can go to 总秘书 instead, as the last line.
 struct JumpPalette: View {
     @Environment(AppStore.self) private var store
     @Environment(JumpState.self) private var jump
@@ -182,8 +182,7 @@ struct JumpPalette: View {
         var found = JumpSearch.results(candidates, query: query).compactMap { all[$0.id] }
         let words = query.trimmingCharacters(in: .whitespacesAndNewlines)
         if !words.isEmpty {
-            let chief = store.bot(store.chiefId)?.name ?? "詩音"
-            found.append(JumpHit(id: "jump-ask", group: .ask, title: "跟\(chief)说「\(words)」", icon: .mark, target: .ask(words)))
+            found.append(JumpHit(id: "jump-ask", group: .ask, title: "跟\(store.chiefName)说「\(words)」", icon: .mark, target: .ask(words)))
         }
         return found
     }

@@ -2,7 +2,7 @@ import AppKit
 import KeyboardShortcuts
 import SwiftUI
 
-/// The 前往 menu: the pages on ⌘1…⌘7 in sidebar order, ⌘K, and 跟詩音说 on the global shortcut
+/// The 前往 menu: the pages on ⌘1…⌘7 in sidebar order, ⌘K, and 跟总秘书说 on the global shortcut
 /// (shown here; the shortcut itself works in any app).
 struct ShionCommands: Commands {
     let store: AppStore
@@ -24,10 +24,7 @@ struct ShionCommands: Commands {
                 jump.shown.toggle()
             }
             .keyboardShortcut("k", modifiers: .command)
-            Button("跟詩音说…") {
-                quick.show()
-            }
-            .keyboardShortcut(quick.shortcut?.toSwiftUI)
+            QuickAskMenuItem(store: store, quick: quick)
         }
     }
 
@@ -42,6 +39,20 @@ struct ShionCommands: Commands {
     /// main window behind them.
     private static var quickHasKeyboard: Bool {
         NSApp.keyWindow is QuickAskWindow
+    }
+}
+
+/// 跟总秘书说…, with her name and the global shortcut as they are now: a view of its own, so the
+/// menu follows them when they change.
+private struct QuickAskMenuItem: View {
+    let store: AppStore
+    let quick: QuickAsk
+
+    var body: some View {
+        Button("跟\(store.chiefName)说…") {
+            quick.show()
+        }
+        .keyboardShortcut(quick.shortcut?.toSwiftUI)
     }
 }
 

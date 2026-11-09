@@ -27,7 +27,7 @@ final class QuickAskWindow: NSPanel {
         isMovableByWindowBackground = true
         isReleasedWhenClosed = false
         animationBehavior = .utilityWindow
-        title = "跟詩音说"
+        title = "跟\(store.chiefName)说"
         identifier = NSUserInterfaceItemIdentifier("quick-ask")
         setAccessibilityIdentifier("quick-ask")
         let host = NSHostingView(rootView: QuickAskRoot(store: store, quick: quick) { [weak self] height in
@@ -109,8 +109,9 @@ private struct QuickAskRoot: View {
     }
 }
 
-/// The field, then 詩音's answer as it comes in: the same rows as her chat (folded tool calls,
-/// cards, Markdown), and what she asks you on the way. Glass, since it floats over everything.
+/// The field, then 总秘书's answer as it comes in: the same rows as her chat (folded tool calls,
+/// cards, Markdown), and what she asks you on the way, answered here. Sentences waiting for a
+/// server come first. Glass, since it floats over everything.
 struct QuickAskView: View {
     @Environment(AppStore.self) private var store
     let quick: QuickAsk
@@ -124,15 +125,14 @@ struct QuickAskView: View {
 
     var body: some View {
         @Bindable var quick = quick
-        let chiefId = store.chiefId
         let items = quick.exchange(in: store)
-        let lines = ChatLine.lines(items, replying: store.replying.contains(chiefId))
-        let since = quick.asked?.at ?? .distantFuture
-        let asks = store.asks.filter { $0.botId == chiefId && $0.at >= since }
+        let lines = ChatLine.lines(items, replying: store.replying.contains(store.chiefId))
+        let asks = quick.asks(in: store)
         let state = status(answered: items.count > 1 || !asks.isEmpty)
+        let filled = !quick.waiting.isEmpty || !lines.isEmpty || !asks.isEmpty
         VStack(spacing: 0) {
-            bar($quick.draft)
-            if !lines.isEmpty || !asks.isEmpty {
+            bar($quick.draft, answering: quick.question(in: store) != nil)
+            if filled {
                 Divider()
                 answer(lines, asks: asks)
             }
@@ -147,7 +147,7 @@ struct QuickAskView: View {
                     Spacer(minLength: 0)
                 }
                 .padding(.horizontal, 18)
-                .padding(.top, lines.isEmpty && asks.isEmpty ? 0 : 2)
+                .padding(.top, filled ? 2 : 0)
                 .padding(.bottom, 12)
                 .accessibilityElement(children: .combine)
                 .accessibilityIdentifier("quick-status")
@@ -164,12 +164,13 @@ struct QuickAskView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
-    private func bar(_ draft: Binding<String>) -> some View {
+    /// The field; while 总秘书 waits on words from you, Return answers her.
+    private func bar(_ draft: Binding<String>, answering: Bool) -> some View {
         HStack(spacing: 12) {
             Mark(size: 26)
             KeyField(
                 text: draft,
-                placeholder: "跟\(store.bot(store.chiefId)?.name ?? "詩音")说…",
+                placeholder: answering ? "回答\(store.chiefName)…" : "跟\(store.chiefName)说…",
                 size: 15,
                 identifier: "quick-field",
                 onSubmit: { quick.send() },
@@ -199,7 +200,7 @@ struct QuickAskView: View {
             .buttonStyle(.glassProminent)
             .buttonBorderShape(.circle)
             .disabled(draft.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            .accessibilityLabel("发送")
+            .accessibilityLabel(answering ? "回答" : "发送")
             .accessibilityIdentifier("quick-send")
         }
         .padding(.leading, 16)
@@ -210,9 +211,12 @@ struct QuickAskView: View {
     }
 
     private func answer(_ lines: [ChatLine], asks: [Ask]) -> some View {
-        let chief = store.bot(store.chiefId)
+        let chief = store.chief
         return ScrollView {
             VStack(alignment: .leading, spacing: 12) {
+                ForEach(quick.waiting) { sentence in
+                    WaitingSentence(text: sentence.text)
+                }
                 ForEach(lines) { line in
                     switch line {
                     case .item(let item):
@@ -224,7 +228,7 @@ struct QuickAskView: View {
                     }
                 }
                 ForEach(asks) { ask in
-                    AskRow(ask: ask)
+                    QuickAskPrompt(ask: ask)
                 }
             }
             .padding(.horizontal, 18)
@@ -255,5 +259,69 @@ struct QuickAskView: View {
         case .failed(let reason): return (reason, Palette.alert)
         case .offline: return ("未连接服务器", Color.secondary)
         }
+    }
+}
+
+/// A sentence sent while no server was connected: it goes out by itself once one is.
+struct WaitingSentence: View {
+    let text: String
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 4) {
+            HStack {
+                Spacer(minLength: 80)
+                Text(text)
+                    .font(.t13)
+                    .foregroundStyle(Palette.onAccent)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Palette.accent.opacity(0.55), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            }
+            Label("等连上服务器后发出", systemImage: "clock")
+                .font(.t12)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("quick-waiting")
+    }
+}
+
+/// An approval or a question from 总秘书 in this exchange, with every answer it takes. A question
+/// that wants words has only 跳过 here: the field answers it.
+struct QuickAskPrompt: View {
+    @Environment(AppStore.self) private var store
+    let ask: Ask
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(ask.title)
+                .font(.t13.weight(.medium))
+                .fixedSize(horizontal: false, vertical: true)
+            if let preview = ask.preview {
+                Text(preview)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+                    .textSelection(.enabled)
+            }
+            HStack(spacing: 8) {
+                ForEach(ask.options) { option in
+                    if option.primary {
+                        Button(option.label) { store.answer(ask, with: option) }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                    } else {
+                        Button(option.label) { store.answer(ask, with: option) }
+                            .controlSize(.small)
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Palette.fill, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("quick-ask-\(ask.id)")
     }
 }

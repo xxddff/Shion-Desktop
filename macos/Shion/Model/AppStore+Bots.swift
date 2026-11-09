@@ -14,6 +14,10 @@ extension AppStore {
         return rosterBots()
     }
 
+    /// The assistant that is 总秘书: its name and avatar go wherever you talk to 总秘书.
+    var chief: Bot? { bot(chiefId) }
+    var chiefName: String { chief?.name ?? "总秘书" }
+
     private func rosterBots() -> [Bot] {
         let chief = roster.chiefName
         var shown: [Bot] = []

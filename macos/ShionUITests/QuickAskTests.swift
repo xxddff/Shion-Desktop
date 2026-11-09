@@ -1,35 +1,52 @@
 import AppKit
+import Carbon.HIToolbox
 import XCTest
 
 /// The ⌥Space window end to end, against ci/fake_hermes.py (its answers to the window are in
-/// ci/fake_quick.py): sign in, press the global shortcut over another app, send 詩音 a sentence,
-/// watch her reply stream into the window, open the whole chat, and see the window start afresh.
-/// A picture at each step (`quick-*.png`).
+/// ci/fake_quick.py): a sentence typed before signing in waits and goes out once connected; the
+/// global shortcut over another app; 詩音's reply streaming into the window; an approval and a
+/// question to answer in words, both handled in the window; the whole chat; and the window
+/// starting afresh. Then the shortcut held by another app, as Settings → 快捷键 shows it. A
+/// picture at each step (`quick-*.png`).
 final class QuickAskTests: XCTestCase {
     private let server = "http://127.0.0.1:8765"
-    /// The stand-in streams its answer to this a few characters at a time (fake_quick.py).
+    /// The stand-in streams its answer to these a few characters at a time (fake_quick.py).
+    private let early = "小窗：到家了吗？"
     private let sentence = "小窗：明天几点出门？"
+    /// …and asks on the way for this one: an approval, then 「交给哪位老师？」 with no choices.
+    private let asking = "小窗：帮我把实验报告交了"
 
     @MainActor
     func testQuickAsk() throws {
         continueAfterFailure = false
-        let app = XCUIApplication()
-        app.launchArguments = [
-            "-ShionSnapshot", "YES",
-            "-ShionRoute", "today",
-            "-ShionAppearance", "light",
-            "-ApplePersistenceIgnoreState", "YES",
-        ]
-        app.launch()
+        let app = launch()
         let window = app.windows.firstMatch
         XCTAssertTrue(window.waitForExistence(timeout: 20))
+        let field = app.textFields["quick-field"]
 
-        // sign in as SignInTests does; Settings opens on the tab it was last left on (BotsTests,
-        // which runs before this, leaves it on 助手)
+        // 0. before signing in: the sentence stays in the window, marked as waiting
+        open(app, field)
+        field.click()
+        field.typeText(early)
+        app.typeKey(.return, modifierFlags: [])
+        let waiting = element("quick-waiting", in: app)
+        XCTAssertTrue(waiting.waitForExistence(timeout: 5), "a sentence sent with no server did not show as waiting")
+        XCTAssertTrue(waitForText("等连上服务器后发出", in: app, timeout: 2), "the waiting sentence does not say it waits")
+        Thread.sleep(forTimeInterval: 0.5)
+        keep(XCUIScreen.main.screenshot(), "quick-0-waiting")
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertEqual(XCTWaiter().wait(for: [gone(field)], timeout: 5), .completed, "Esc did not put the window away")
+
+        // sign in as SignInTests does. Settings opens on 服务器 in test runs, though BotsTests,
+        // which runs before this, leaves it on 助手
         app.typeKey(",", modifierFlags: .command)
         let settings = app.windows.matching(NSPredicate(format: "identifier CONTAINS[c] 'settings'")).firstMatch
         XCTAssertTrue(settings.waitForExistence(timeout: 5), "no Settings window")
-        if !settings.textFields["server-address"].waitForExistence(timeout: 2) {
+        let onServer = settings.textFields["server-address"].waitForExistence(timeout: 3)
+        continueAfterFailure = true
+        XCTAssertTrue(onServer, "Settings did not open on 服务器")
+        continueAfterFailure = false
+        if !onServer {
             selectTab("服务器", in: settings)
         }
         type(server, into: settings.textFields["server-address"])
@@ -46,9 +63,18 @@ final class QuickAskTests: XCTestCase {
         app.typeKey("w", modifierFlags: .command)
         XCTAssertTrue(element("bot-shion", in: app).waitForExistence(timeout: 10), "no assistants from the server")
 
-        let field = app.textFields["quick-field"]
+        // 1. connected, it went out by itself: the window shows 詩音's answer, nothing waits
+        open(app, field)
+        let answer = element("quick-answer", in: app)
+        let sentEarly = waitForText("收到：" + early, in: answer, timeout: 20)
+        Thread.sleep(forTimeInterval: 0.5)
+        keep(XCUIScreen.main.screenshot(), "quick-1-sent-on-connect")
+        XCTAssertTrue(sentEarly, "the waiting sentence was not answered once connected")
+        XCTAssertFalse(waiting.exists, "the sentence still shows as waiting")
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertEqual(XCTWaiter().wait(for: [gone(field)], timeout: 5), .completed, "Esc did not put the window away")
 
-        // 1. the global shortcut with another app in front: the window comes up over it, and the
+        // 2. the global shortcut with another app in front: the window comes up over it, and the
         // same shortcut puts it away again. Only the system's hot key can do this (the menu's copy
         // of the shortcut only works while Shion is the active app).
         let finder = XCUIApplication(bundleIdentifier: "com.apple.finder")
@@ -56,7 +82,7 @@ final class QuickAskTests: XCTestCase {
         Thread.sleep(forTimeInterval: 1.5)
         finder.typeKey(" ", modifierFlags: .option)
         let global = field.waitForExistence(timeout: 6)
-        keep(XCUIScreen.main.screenshot(), "quick-1-over-finder")
+        keep(XCUIScreen.main.screenshot(), "quick-2-over-finder")
         print("over Finder: window \(global ? "up" : "not up")")
         // a failure here is kept and the rest still runs, so the window is checked even if the shortcut is not
         continueAfterFailure = true
@@ -65,55 +91,140 @@ final class QuickAskTests: XCTestCase {
             // pressed where the keys now are, the window's field: typing at Finder could hand the
             // keyboard back to Finder first, and then the shortcut brings the window back instead
             field.typeKey(" ", modifierFlags: .option)
-            let away = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: field)
-            XCTAssertEqual(XCTWaiter().wait(for: [away], timeout: 5), .completed, "pressing ⌥Space again did not put it away")
+            XCTAssertEqual(XCTWaiter().wait(for: [gone(field)], timeout: 5), .completed, "pressing ⌥Space again did not put it away")
         } else {
             // Finder had the keys: ⌥Space is its full-screen Quick Look, should anything be selected
             finder.typeKey(.escape, modifierFlags: [])
         }
         continueAfterFailure = false
 
-        // 2. from Shion: the shortcut (or, should it not reach the window, the 前往 menu); the
-        // sentence goes to 詩音 and her reply streams in under it
+        // 3. from Shion: the sentence goes to 詩音 and her reply streams in under it
         app.activate()
         Thread.sleep(forTimeInterval: 1)
         open(app, field)
         field.click()
         field.typeText(sentence)
         app.typeKey(.return, modifierFlags: [])
-        let answer = element("quick-answer", in: app)
         XCTAssertTrue(answer.waitForExistence(timeout: 10), "the sentence did not show in the window")
         let reply = "收到：" + sentence
         // the cursor of a reply still arriving, before the whole of it is there
         let streaming = waitForText("▍", in: answer, timeout: 10)
-        let early = waitForText(reply, in: answer, timeout: 0)
-        keep(XCUIScreen.main.screenshot(), "quick-2-streaming")
+        let whole = waitForText(reply, in: answer, timeout: 0)
+        keep(XCUIScreen.main.screenshot(), "quick-3-streaming")
         XCTAssertTrue(streaming, "the reply did not stream into the window")
-        XCTAssertFalse(early, "the whole reply was there at once")
+        XCTAssertFalse(whole, "the whole reply was there at once")
         let replied = waitForText(reply, in: answer, timeout: 15)
         Thread.sleep(forTimeInterval: 0.5)
-        keep(XCUIScreen.main.screenshot(), "quick-3-replied")
+        keep(XCUIScreen.main.screenshot(), "quick-4-replied")
         XCTAssertTrue(replied, "the reply did not finish in the window")
         XCTAssertFalse(waitForText("▍", in: answer, timeout: 0), "the reply still looks unfinished")
 
-        // 3. the whole chat: the window goes, 詩音's chat opens in the main window with the exchange
+        // 4. 詩音 asks on the way, and both are answered in the window: the approval by its button,
+        // the question with no choices by typing in the field
+        field.click()
+        field.typeText(asking)
+        app.typeKey(.return, modifierFlags: [])
+        let approval = element("quick-ask-ap-quick", in: app)
+        XCTAssertTrue(approval.waitForExistence(timeout: 10), "the approval did not show in the window")
+        Thread.sleep(forTimeInterval: 0.5)
+        keep(XCUIScreen.main.screenshot(), "quick-5-approval")
+        let allow = approval.buttons["允许这一次"]
+        XCTAssertTrue(allow.exists, "no 允许这一次 on the approval")
+        allow.click()
+        let question = element("quick-ask-cl-quick", in: app)
+        XCTAssertTrue(question.waitForExistence(timeout: 10), "the question did not show in the window")
+        XCTAssertFalse(approval.exists, "the approval stayed after it was answered")
+        continueAfterFailure = true
+        XCTAssertEqual(field.placeholderValue, "回答詩音…", "the field does not say it answers the question")
+        continueAfterFailure = false
+        Thread.sleep(forTimeInterval: 0.5)
+        keep(XCUIScreen.main.screenshot(), "quick-6-question")
+        field.click()
+        field.typeText("中村老师")
+        app.typeKey(.return, modifierFlags: [])
+        let handed = waitForText("交给中村老师了。", in: answer, timeout: 15)
+        Thread.sleep(forTimeInterval: 0.5)
+        keep(XCUIScreen.main.screenshot(), "quick-7-answered")
+        XCTAssertTrue(handed, "the typed answer did not reach 詩音")
+        XCTAssertFalse(question.exists, "the question stayed after it was answered")
+
+        // 5. the whole chat: the window goes, 詩音's chat opens in the main window with the exchange
         element("quick-open", in: app).click()
-        let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: field)
-        XCTAssertEqual(XCTWaiter().wait(for: [gone], timeout: 5), .completed, "the window stayed after opening the chat")
+        XCTAssertEqual(XCTWaiter().wait(for: [gone(field)], timeout: 5), .completed, "the window stayed after opening the chat")
         let titled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "title CONTAINS %@", "詩音"), object: window)
         XCTAssertEqual(XCTWaiter().wait(for: [titled], timeout: 5), .completed, "詩音's chat did not open: \(window.title)")
-        let inChat = waitForText(reply, in: element("transcript", in: app), timeout: 10)
-        keep(window.screenshot(), "quick-4-full-chat")
+        let inChat = waitForText("交给中村老师了。", in: element("transcript", in: app), timeout: 10)
+        keep(window.screenshot(), "quick-8-full-chat")
         XCTAssertTrue(inChat, "the exchange is not in 詩音's chat")
 
-        // 4. an answered sentence went with the window: it comes back empty, and Esc puts it away
+        // 6. an answered sentence went with the window: it comes back empty, and Esc puts it away
         open(app, field)
         XCTAssertFalse(element("quick-answer", in: app).waitForExistence(timeout: 1), "the window came back with the old answer")
-        keep(XCUIScreen.main.screenshot(), "quick-5-again")
+        keep(XCUIScreen.main.screenshot(), "quick-9-again")
         app.typeKey(.escape, modifierFlags: [])
-        let closed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: field)
-        XCTAssertEqual(XCTWaiter().wait(for: [closed], timeout: 5), .completed, "Esc did not put the window away")
+        XCTAssertEqual(XCTWaiter().wait(for: [gone(field)], timeout: 5), .completed, "Esc did not put the window away")
         app.terminate()
+    }
+
+    /// Another app holds the shortcut (this runner plays it, registering ⌥Space exclusively as
+    /// GlobalHotKey.swift does): Settings → 快捷键 says so. Once let go, 再试一次 takes it, and
+    /// the shortcut brings the window up.
+    @MainActor
+    func testShortcutTaken() throws {
+        continueAfterFailure = false
+        // the system's hot keys go through the window server, which an app is connected to
+        _ = NSApplication.shared
+        var held: EventHotKeyRef?
+        let status = RegisterEventHotKey(UInt32(kVK_Space), UInt32(optionKey), EventHotKeyID(signature: 0x5445_5354, id: 1),
+                                         GetEventDispatcherTarget(), OptionBits(kEventHotKeyExclusive), &held)
+        XCTAssertEqual(status, OSStatus(noErr), "the runner could not take ⌥Space: \(status)")
+        defer {
+            if let held {
+                UnregisterEventHotKey(held)
+            }
+        }
+        let app = launch()
+        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 20))
+        app.typeKey(",", modifierFlags: .command)
+        let settings = app.windows.matching(NSPredicate(format: "identifier CONTAINS[c] 'settings'")).firstMatch
+        XCTAssertTrue(settings.waitForExistence(timeout: 5), "no Settings window")
+        selectTab("快捷键", in: settings)
+        let problem = element("quick-shortcut-problem", in: settings)
+        let said = problem.waitForExistence(timeout: 5)
+        Thread.sleep(forTimeInterval: 0.5)
+        keep(settings.screenshot(), "quick-taken")
+        XCTAssertTrue(said, "Settings does not say the shortcut is taken")
+        XCTAssertTrue(waitForText("被别的 App 占用了", in: settings, timeout: 1), "not the words for a taken shortcut")
+
+        // the other app lets it go
+        if let held {
+            UnregisterEventHotKey(held)
+        }
+        held = nil
+        element("quick-shortcut-retry", in: settings).click()
+        XCTAssertEqual(XCTWaiter().wait(for: [gone(problem)], timeout: 5), .completed, "再试一次 did not take the shortcut")
+        keep(settings.screenshot(), "quick-taken-retried")
+        let field = app.textFields["quick-field"]
+        app.typeKey(" ", modifierFlags: .option)
+        XCTAssertTrue(field.waitForExistence(timeout: 5), "⌥Space did not bring up the window once Shion had it")
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertEqual(XCTWaiter().wait(for: [gone(field)], timeout: 5), .completed, "Esc did not put the window away")
+        app.terminate()
+    }
+
+    /// Screenshot data, and the global shortcut registered as in normal use.
+    @MainActor
+    private func launch() -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-ShionSnapshot", "YES",
+            "-ShionHotKey", "YES",
+            "-ShionRoute", "today",
+            "-ShionAppearance", "light",
+            "-ApplePersistenceIgnoreState", "YES",
+        ]
+        app.launch()
+        return app
     }
 
     /// The window by the shortcut, or by the 前往 menu when the shortcut does not reach it.
@@ -125,10 +236,15 @@ final class QuickAskTests: XCTestCase {
         if field.waitForExistence(timeout: 4) {
             return
         }
-        print("⌥Space did not bring the window up; using 前往 → 跟詩音说…")
+        print("⌥Space did not bring the window up; using 前往 → 跟…说…")
         app.menuBars.menuBarItems["前往"].click()
-        app.menuItems["跟詩音说…"].click()
+        app.menuItems.matching(NSPredicate(format: "title BEGINSWITH '跟' AND title ENDSWITH '说…'")).firstMatch.click()
         XCTAssertTrue(field.waitForExistence(timeout: 5), "no ⌥Space window from the menu either")
+    }
+
+    @MainActor
+    private func gone(_ element: XCUIElement) -> XCTNSPredicateExpectation {
+        XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: element)
     }
 
     /// A Settings tab: a toolbar button, a radio button or a plain one, depending on the system.

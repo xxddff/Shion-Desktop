@@ -707,6 +707,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"jsonrpc": "2.0", "id": rid, "result": {"accepted": True}})
             kind = "approval.settled" if method == "approval.respond" else "clarify.settled"
             self.event(kind, params.get("session_id"), {"prompt_id": params.get("prompt_id")})
+            if fake_quick.responded(self, log, lock, transcripts, params):
+                return  # the ⌥Space window's turn goes on
             self.event("session.info", params.get("session_id"), {"running": False})
             return
         elif method == "prompt.submit":
