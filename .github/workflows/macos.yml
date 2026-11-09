@@ -25,7 +25,7 @@ jobs:
       run:
         working-directory: macos
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Toolchain
         run: |
@@ -83,7 +83,7 @@ jobs:
 
       - name: Upload screenshots
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: shots
           path: macos/build/shots
@@ -110,7 +110,7 @@ jobs:
 
       - name: Upload the Release build
         if: success() && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[package]'))
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: Shion-macOS-${{ github.run_number }}
           path: macos/build/Shion.dmg
