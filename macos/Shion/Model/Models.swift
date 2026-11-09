@@ -140,6 +140,8 @@ struct ChatItem: Identifiable, Hashable {
     var todoIds: [String] = []
     /// An assistant reply still arriving.
     var streaming = false
+    /// The pictures and files you sent with the words (ChatMedia.swift).
+    var media: [ChatMedia] = []
 }
 
 enum ReportKind: String, CaseIterable, Identifiable {

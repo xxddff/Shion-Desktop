@@ -48,6 +48,8 @@ final class AppStore {
     private(set) var boardLimits: BoardLimits?
     /// The server's kanban board, live while connected.
     let board = BoardStore()
+    /// The chats' pictures and files (AppStore+Media.swift).
+    let media = MediaStore()
     /// What `runtime.describe` says the server can do (`session-transcript-v1`, …).
     @ObservationIgnored var serverCapabilities: Set<String> = []
     /// Today, todos and reports come from the server's `shion` plugin (AppStore+Plugin.swift).
@@ -70,7 +72,7 @@ final class AppStore {
     @ObservationIgnored private var demoChats: [String: [ChatItem]] = [:]
     @ObservationIgnored private var demoAsks: [Ask] = []
     /// bot id → its Bot Chat's session id, and back
-    @ObservationIgnored private var sessions: [String: String] = [:]
+    @ObservationIgnored private(set) var sessions: [String: String] = [:]
     @ObservationIgnored private var sessionBots: [String: String] = [:]
     /// bot id → the assistant message being streamed
     @ObservationIgnored private var streaming: [String: String] = [:]
@@ -612,7 +614,7 @@ extension AppStore {
                              cardId: notice.taskId, cardAssignee: notice.assignee)
                 }
             }
-            return [ChatItem(id: id, role: .user, at: at, text: body)]
+            return [Self.userItem(id: id, at: at, text: body)]
         case "assistant":
             let body = text(of: row)
             return body.isEmpty ? [] : [ChatItem(id: id, role: .assistant, at: at, text: body)]
@@ -745,6 +747,7 @@ extension AppStore {
                 append(ChatItem(id: id, role: .tool, at: Date(), text: toolLine(name, payload["context"]?.string ?? "")), to: botId)
             }
         case "tool.complete":
+            toolFinished(payload, botId: botId)
             // a kanban_create call's result names the card it made
             guard let call = payload["tool_id"]?.string, let made = madeCards.removeValue(forKey: call),
                   let cardId = Self.madeCardId(payload),

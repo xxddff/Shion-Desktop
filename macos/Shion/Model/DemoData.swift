@@ -178,6 +178,20 @@ struct DemoData {
                 ChatItem(id: "x2", role: .assistant, at: at(0, 8, 1), text: "新邮件 9 封，需要你处理的有 2 封：中村老师问中期报告的提交格式（昨天就该回了），实习 HR 的面谈时间确认（我已经帮你接受了周四 15:00）。"),
                 ChatItem(id: "x3", role: .user, at: at(0, 8, 43), text: "老师那封你帮我回一下，说用 PDF 按时交"),
                 ChatItem(id: "x4", role: .assistant, at: at(0, 8, 44), text: "起草好了，在「等你确认」里，你点发送我再发。"),
+                // pictures and files in a chat (ChatMediaViews.swift): one you sent, the inbox the
+                // assistant looked at, a file it hands over, a web picture that waits for a click
+                ChatItem(id: "x5", role: .user, at: at(0, 9, 2), text: "老师发的讲义也拍了，要交的格式是不是这样？",
+                         media: [ChatMedia(kind: .image, name: "讲义.jpg", path: "/opt/data/profiles/mail/cache/images/讲义.jpg")]),
+                ChatItem(id: "x6", role: .tool, at: at(0, 9, 3), text: "browser_navigate · webmail.example/inbox"),
+                ChatItem(id: "x7", role: .assistant, at: at(0, 9, 4), text: """
+                    是的，和讲义上写的一样：PDF，A4，学号写在页眉。中村老师的邮件里附了模板，我存下来了：
+
+                    MEDIA:/opt/data/profiles/mail/attachments/中期报告模板.docx
+
+                    课程网站上的提交页面是这样的：
+
+                    ![课程网站的提交页面](https://moodle.example/pluginfile.php/submission.png)
+                    """),
             ],
         ]
     }

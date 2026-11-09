@@ -39,14 +39,21 @@ struct ChatView: View {
             await store.openChat(botId)
         }
         .safeAreaInset(edge: .bottom) {
-            Composer(placeholder: "跟\(bot?.name ?? "")说…", text: $draft) {
-                store.send(draft, to: botId)
-                draft = ""
+            // with what is about to go: pictures and files (AttachmentViews.swift)
+            ComposerBar(botId: botId) {
+                Composer(placeholder: "跟\(bot?.name ?? "")说…", text: $draft, canSend: store.canSend(botId, draft)) {
+                    if store.sendMessage(draft, to: botId) {
+                        draft = ""
+                    }
+                }
             }
             .frame(maxWidth: 720)
             .padding(.horizontal, 40)
             .padding(.bottom, 16)
         }
+        // dropped and pasted pictures and files go to the composer
+        .chatAttachments(botId)
+        .environment(\.chatBotId, botId)
         .navigationTitle(bot?.name ?? "")
         .navigationSubtitle(bot?.title ?? "")
     }
@@ -168,20 +175,12 @@ struct ChatRow: View {
                     .frame(maxWidth: .infinity)
             }
         case .user:
-            HStack {
-                Spacer(minLength: 80)
-                Text(item.text)
-                    .font(.t13)
-                    .foregroundStyle(Palette.onAccent)
-                    .textSelection(.enabled)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(Palette.accent, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            }
+            // with the pictures and files you sent (ChatMediaViews.swift)
+            UserMessage(item: item)
         case .assistant:
             AssistantMessage(item: item, bot: bot, showHead: showHead)
         case .tool:
-            ToolLine(text: item.text)
+            ToolCall(item: item)
         }
     }
 }
@@ -222,9 +221,12 @@ struct ToolRun: View {
             .accessibilityIdentifier("tool-run")
             if open {
                 ForEach(tools) { tool in
-                    ToolLine(text: tool.text)
+                    ToolCall(item: tool)
                         .padding(.leading, 18)
                 }
+            } else {
+                // the run's screenshots, small
+                RunShots(tools: tools)
             }
         }
     }
@@ -249,11 +251,16 @@ struct AssistantMessage: View {
             if item.text.isEmpty && item.streaming {
                 BusyDots()
             } else if item.streaming {
-                StreamingReply(id: item.id, text: item.text)
+                StreamingReply(id: item.id, text: ReplyMedia.streamingText(item.text))
             } else {
-                // parsed once per text (MarkdownCache); a block at a time selects
-                MarkdownView(blocks: MarkdownCache.shared.document(item.id, item.text).blocks)
+                // parsed once per text (MarkdownCache); a block at a time selects. What the reply
+                // hands over (MEDIA:, server paths, its pictures) is laid out under it
+                let reply = ReplyMediaCache.shared.parsed(item.id, item.text)
+                MarkdownView(blocks: MarkdownCache.shared.document(item.id, reply.text).blocks)
                     .textSelection(.enabled)
+                if !reply.media.isEmpty {
+                    DeliveredMedia(media: reply.media)
+                }
             }
             if !todos.isEmpty {
                 VStack(spacing: 0) {
@@ -272,6 +279,8 @@ struct AssistantMessage: View {
 struct Composer: View {
     let placeholder: String
     @Binding var text: String
+    /// Whether it can send now; nil: once there are words.
+    var canSend: Bool?
     let send: () -> Void
 
     var body: some View {
@@ -290,7 +299,7 @@ struct Composer: View {
             }
             .buttonStyle(.glassProminent)
             .buttonBorderShape(.circle)
-            .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .disabled(!(canSend ?? !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
             .accessibilityLabel("发送")
             .accessibilityIdentifier("send")
         }
