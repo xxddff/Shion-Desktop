@@ -7,7 +7,8 @@ name: macOS app
 # contains [package].
 on:
   push:
-    branches: [claude/macos-app]
+    # the app's branch, and branches that work on part of it in parallel (claude/macos-board, …)
+    branches: ['claude/macos-app', 'claude/macos-*']
     paths:
       - 'macos/**'
       - '.github/workflows/macos.yml'
