@@ -25,16 +25,19 @@ extension Font {
 }
 
 struct Avatar: View {
+    @Environment(\.backgroundProminence) private var prominence
     let bot: Bot?
     var size: CGFloat = 22
 
     var body: some View {
+        // on a selected row the accent fill is behind it: go white, or 詩音's violet seal vanishes
+        let onSelection = prominence == .increased
         let hue = bot?.hue ?? Color.secondary
         Text(bot?.initial ?? "·")
             .font(.system(size: size * 0.5, weight: .semibold))
-            .foregroundStyle(hue)
+            .foregroundStyle(onSelection ? Color.white : hue)
             .frame(width: size, height: size)
-            .background(hue.opacity(0.16), in: Circle())
+            .background(onSelection ? Color.white.opacity(0.22) : hue.opacity(0.16), in: Circle())
             .accessibilityHidden(true)
     }
 }
@@ -56,10 +59,12 @@ struct Mark: View {
 /// The breathing dots of an assistant at work: one of the only two moving things in the app.
 /// Still in screenshot mode, so the app goes idle and every run renders the same frame.
 struct BusyDots: View {
+    @Environment(\.backgroundProminence) private var prominence
+
     var body: some View {
         let dots = Image(systemName: "ellipsis")
             .font(.system(size: 12, weight: .bold))
-            .foregroundStyle(Palette.accent)
+            .foregroundStyle(prominence == .increased ? Color.white : Palette.accent)
             .accessibilityLabel("在做")
         if LaunchOptions.current.snapshot {
             dots

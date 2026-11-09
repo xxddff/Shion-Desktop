@@ -50,7 +50,7 @@ struct Sidebar: View {
             Section {
                 Label("今天", systemImage: "sun.max").tag(Route.today)
                 Label("等你确认", systemImage: "hand.raised")
-                    .badge(store.asks.isEmpty ? nil : Text("\(store.asks.count)").foregroundStyle(Palette.warm).fontWeight(.semibold))
+                    .badge(confirmBadge)
                     .tag(Route.confirm)
                 Label("待办", systemImage: "checklist").badge(store.todayTodos.count).tag(Route.todos)
                 Label("日程", systemImage: "calendar").tag(Route.calendar)
@@ -71,6 +71,14 @@ struct Sidebar: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             ConnectionFooter()
         }
+    }
+
+    /// Warm while asks wait on you; the system's own color on the selected row, where warm would
+    /// sink into the accent fill.
+    private var confirmBadge: Text? {
+        guard !store.asks.isEmpty else { return nil }
+        let count = Text("\(store.asks.count)")
+        return selection == .confirm ? count : count.foregroundStyle(Palette.warm).fontWeight(.semibold)
     }
 }
 
