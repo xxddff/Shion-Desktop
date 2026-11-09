@@ -1,6 +1,7 @@
 name: macOS app
 
-# Builds the app on macOS 27 / Xcode 27 and takes a screenshot of every page, light and dark.
+# Builds the app on macOS 27 / Xcode 27 and takes a screenshot of every page, light and dark,
+# then signs in through the browser sheet against a stand-in Hermes (macos/ci/fake_hermes.py).
 # macOS runner minutes are limited: this only runs when the app or this file changes.
 # A downloadable Release build (Shion.dmg) is made on manual runs, or when the commit message
 # contains [package].
@@ -47,38 +48,88 @@ jobs:
       - name: Allow UI automation without a password
         run: sudo automationmodetool enable-automationmode-without-authentication || true
 
-      - name: Build and run the screenshot test
+      - name: Build
         run: |
           mkdir -p build
           set -o pipefail
-          xcodebuild test \
+          xcodebuild build-for-testing \
             -project Shion.xcodeproj \
             -scheme Shion \
             -destination 'platform=macOS' \
             -derivedDataPath build/DerivedData \
-            -resultBundlePath build/Shots.xcresult \
             -quiet 2>&1 | tee build/xcodebuild.log
+
+      - name: Screenshot every page
+        run: |
+          set -o pipefail
+          xcodebuild test-without-building \
+            -project Shion.xcodeproj \
+            -scheme Shion \
+            -destination 'platform=macOS' \
+            -derivedDataPath build/DerivedData \
+            -only-testing:ShionUITests/ScreenshotTests \
+            -resultBundlePath build/Shots.xcresult \
+            -quiet 2>&1 | tee -a build/xcodebuild.log
+
+      # Real Cloudflare Access and a real Hermes are not on the runner: the stand-in plays both,
+      # checks what Shion sends (Access headers, PKCE, the loopback redirect, the bearer) and logs
+      # each request. A failure here warns, and the screenshots and the package still go out.
+      - name: Browser sign-in against a stand-in Hermes
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          python3 -u ci/fake_hermes.py --port 8765 > build/fake_hermes.log 2>&1 &
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            curl -fsS -o /dev/null -H 'CF-Access-Client-Id: ci-client' -H 'CF-Access-Client-Secret: ci-secret' \
+              http://127.0.0.1:8765/api/status && break
+            sleep 1
+          done
+          if xcodebuild test-without-building \
+               -project Shion.xcodeproj \
+               -scheme Shion \
+               -destination 'platform=macOS' \
+               -derivedDataPath build/DerivedData \
+               -only-testing:ShionUITests/SignInTests \
+               -resultBundlePath build/SignIn.xcresult \
+               -quiet 2>&1 | tee build/signin.log; then
+            echo "Browser sign-in: passed"
+          else
+            echo "::warning title=Browser sign-in::the end-to-end sign-in test failed; see the signin-* screenshots and fake_hermes.log in the shots artifact"
+            grep -nE 'error:|failed|Failing' build/signin.log | head -40 || true
+            exit 1
+          fi
+
+      - name: Stand-in Hermes log
+        if: always()
+        run: cat build/fake_hermes.log 2>/dev/null || echo "no stand-in log"
 
       - name: Export screenshots
         if: always()
         run: |
           mkdir -p build/shots
-          if [ -d build/Shots.xcresult ]; then
-            xcrun xcresulttool export attachments --path build/Shots.xcresult --output-path build/shots || echo "attachment export failed"
-          fi
+          for bundle in Shots SignIn; do
+            if [ -d "build/$bundle.xcresult" ]; then
+              mkdir -p "build/export-$bundle"
+              xcrun xcresulttool export attachments --path "build/$bundle.xcresult" --output-path "build/export-$bundle" \
+                || echo "attachment export failed for $bundle"
+            fi
+          done
+          cp build/fake_hermes.log build/shots/ 2>/dev/null || true
           python3 - <<'PY'
-          import json, os, re
-          folder = 'build/shots'
-          manifest = os.path.join(folder, 'manifest.json')
-          if os.path.exists(manifest):
+          import json, os, re, shutil
+          out = 'build/shots'
+          for folder in ('build/export-Shots', 'build/export-SignIn'):
+              manifest = os.path.join(folder, 'manifest.json')
+              if not os.path.exists(manifest):
+                  continue
               for test in json.load(open(manifest)):
                   for item in test.get('attachments', []):
                       source = os.path.join(folder, item.get('exportedFileName', ''))
                       name = item.get('suggestedHumanReadableName') or os.path.basename(source)
                       name = re.sub(r'_\d+_[0-9A-Fa-f-]{36}', '', name)
                       if os.path.isfile(source):
-                          os.replace(source, os.path.join(folder, name))
-          print('\n'.join(sorted(os.listdir(folder))))
+                          shutil.move(source, os.path.join(out, name))
+          print('\n'.join(sorted(os.listdir(out))))
           PY
 
       - name: Upload screenshots

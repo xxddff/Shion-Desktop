@@ -6,8 +6,15 @@ nonisolated enum GatewayError: LocalizedError {
     case offline
     case timeout(String)
     case accessDenied
+    case notHermes
     case tokenLoginOff([String])
     case badToken(String)
+    case noSignInNeeded
+    case noBrowserSignIn([String])
+    case notSignedIn
+    case signInExpired
+    case signInRefused
+    case signInFailed(String)
     case upgradeRefused(Int)
     case http(Int)
     case closed(Int, String)
@@ -19,20 +26,42 @@ nonisolated enum GatewayError: LocalizedError {
         case .offline: return "没有连上服务器"
         case .timeout(let what): return "等 \(what) 超时了"
         case .accessDenied: return "Cloudflare Access 没有放行，检查 Client ID 和 Secret"
+        case .notHermes: return "这个地址的 /api/status 不是 Hermes 的回复：要填 hermes gateway 的 Webapp 地址。"
         case .tokenLoginOff(let providers):
-            let now = providers.isEmpty ? "现在一个登录方式都没有" : "现在只有 \(providers.joined(separator: "、"))"
-            return "服务器没开会话令牌登录：/api/status 的 auth_providers 里没有 session-token（\(now)）。在运行 hermes gateway 的环境里设好 HERMES_DASHBOARD_SESSION_TOKEN，确认 dashboard.session_token_auth.enabled 不是 false，再重启 gateway。"
+            return "服务器没开会话令牌登录：/api/status 的 auth_providers 里没有 session-token（\(Self.listing(providers))）。在运行 hermes gateway 的环境里设好 HERMES_DASHBOARD_SESSION_TOKEN，确认 dashboard.session_token_auth.enabled 不是 false，再重启 gateway。"
         case .badToken(let hint):
             return "会话令牌和服务器上的 HERMES_DASHBOARD_SESSION_TOKEN 对不上（/api/auth/me 返回 401）。这里填的是 \(hint)，和服务器上 gateway 进程实际用的值比一比；服务器换过令牌的话，这里要填新的。"
+        case .noSignInNeeded: return "这个服务器没开登录（auth_required 是 false），没有登录页：改用会话令牌。"
+        case .noBrowserSignIn(let providers):
+            return "服务器没开浏览器登录：/api/status 的 auth_flows 里没有 native_pkce（\(Self.listing(providers))）。在 config.yaml 的 dashboard.basic_auth 设好 username 和 password，重启 gateway。"
+        case .notSignedIn: return "还没登录：点「用浏览器登录」"
+        case .signInExpired: return "登录过期了：再点一次「用浏览器登录」"
+        case .signInRefused: return "服务器不认这次登录（/api/auth/me 返回 401）：退出登录，再登录一次"
+        case .signInFailed(let detail): return "登录没完成：\(detail)"
         case .upgradeRefused(let status):
             switch status {
             case 404: return "这个地址下面没有 /api/ws（HTTP 404）：要填 hermes gateway 的 Webapp 地址。"
-            case 401, 403: return "服务器拒绝了 WebSocket（HTTP \(status)）。令牌已经检查过的话，多半是 Host 和 webapp.public_url 对不上，或者这个地址没开聊天。"
+            case 401, 403: return "服务器拒绝了 WebSocket（HTTP \(status)）。登录已经检查过的话，多半是 Host 和 webapp.public_url 对不上，或者这个地址没开聊天。"
             default: return "服务器拒绝了 WebSocket（HTTP \(status)）。"
             }
         case .http(let status): return "服务器返回 HTTP \(status)"
         case .closed(let code, let reason): return Gateway.describeClose(code, reason)
         case .rpc(_, let message, let reason): return reason ?? message
+        }
+    }
+
+    private static func listing(_ providers: [String]) -> String {
+        providers.isEmpty ? "现在一个登录方式都没有" : "现在只有 \(providers.joined(separator: "、"))"
+    }
+
+    /// Trying again cannot fix these; they wait for a change in Settings or on the server.
+    var needsYou: Bool {
+        switch self {
+        case .notConfigured, .accessDenied, .notHermes, .tokenLoginOff, .badToken, .noSignInNeeded,
+             .noBrowserSignIn, .notSignedIn, .signInExpired, .signInRefused:
+            return true
+        default:
+            return false
         }
     }
 }
@@ -58,8 +87,13 @@ final class Gateway {
     @ObservationIgnored var onEvent: ((String, String?, JSONValue) -> Void)?
     /// Called after an automatic reconnect: attachments are per socket, so sessions must resume.
     @ObservationIgnored var onReconnect: (() -> Void)?
+    /// Signs each dial: the session token, or a browser sign-in's access token. `true` asks for
+    /// a fresh one, after the server refused the last.
+    @ObservationIgnored var credential: ((_ settings: ServerSettings, _ renew: Bool) async throws -> Credential)?
 
     @ObservationIgnored private var settings = ServerSettings()
+    /// Bumped by every dial and by disconnect: a dial that was overtaken while it waited stops.
+    @ObservationIgnored private var attempt = 0
     @ObservationIgnored private var socket: URLSessionWebSocketTask?
     @ObservationIgnored private var nextId = 1
     @ObservationIgnored private var pending: [Int: CheckedContinuation<JSONValue, Error>] = [:]
@@ -83,16 +117,28 @@ final class Gateway {
 
     func disconnect() {
         wanted = false
+        attempt += 1
         teardown(GatewayError.offline)
         phase = .offline
     }
 
     private func open(isReconnect: Bool) async {
+        attempt += 1
+        let attempt = attempt
         teardown(GatewayError.offline)
         phase = .connecting
         do {
-            guard let url = settings.socketURL else { throw GatewayError.notConfigured }
-            try await preflight()
+            guard settings.isConfigured, let credential else { throw GatewayError.notConfigured }
+            var signed = try await credential(settings, false)
+            do {
+                try await preflight(signed)
+            } catch GatewayError.signInRefused {
+                // a server can drop a sign-in's token before its time: renew once, then it counts
+                signed = try await credential(settings, true)
+                try await preflight(signed)
+            }
+            guard attempt == self.attempt else { return }
+            guard let url = settings.socketURL(token: signed.token) else { throw GatewayError.notConfigured }
             var request = URLRequest(url: url)
             settings.applyAccessHeaders(to: &request)
             let socket = URLSession.shared.webSocketTask(with: request)
@@ -104,6 +150,7 @@ final class Gateway {
             let readyPayload = try await waitForReady(seconds: 15)
             sessionAuthority = readyPayload["session_authority"]?.bool ?? false
             _ = try await call("client.capabilities", ["server_requests": true])
+            guard attempt == self.attempt else { return }
             phase = .online
             wasOnline = true
             retries = 0
@@ -114,44 +161,36 @@ final class Gateway {
                 onReconnect?()
             }
         } catch {
+            guard attempt == self.attempt else { return }
             teardown(error)
             phase = .failed(error.localizedDescription)
-            scheduleReconnect()
+            if (error as? GatewayError)?.needsYou != true {
+                scheduleReconnect()
+            }
         }
     }
 
     /// Checks over plain HTTP what the WebSocket upgrade would only answer with a bare refusal:
     /// whether Cloudflare Access lets us in (`GET /api/status` is public on Hermes), whether the
     /// server takes the deployment session token at all (its `session-token` provider), and
-    /// whether this token is that one (`GET /api/auth/me` with it as a bearer). These are the
-    /// checks Hermes's own docs give for a token-gated deployment.
-    private func preflight() async throws {
-        guard let url = settings.httpURL("/api/status") else { throw GatewayError.notConfigured }
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 15
-        settings.applyAccessHeaders(to: &request)
-        let (data, response) = try await URLSession.shared.data(for: request)
-        if let host = response.url?.host, host.hasSuffix("cloudflareaccess.com") {
-            throw GatewayError.accessDenied
-        }
-        if let http = response as? HTTPURLResponse, http.statusCode == 401 || http.statusCode == 403 {
-            throw GatewayError.accessDenied
-        }
+    /// whether this credential opens it (`GET /api/auth/me`, the way Hermes Desktop sends it:
+    /// the session token as X-Hermes-Session-Token, a sign-in's access token as a bearer).
+    private func preflight(_ signed: Credential) async throws {
         // a server without the sign-in gate (loopback) checks the token on the socket itself
-        guard let status = try? JSONValue.parse(String(decoding: data, as: UTF8.self)),
-              status["auth_required"]?.bool == true
-        else { return }
-        let providers = (status["auth_providers"]?.array ?? []).compactMap { $0.string }
-        guard providers.contains("session-token") else { throw GatewayError.tokenLoginOff(providers) }
+        guard let status = try await settings.status(), status.authRequired else { return }
+        if case .sessionToken = signed, !status.providers.contains("session-token") {
+            throw GatewayError.tokenLoginOff(status.providers)
+        }
         guard let meURL = settings.httpURL("/api/auth/me") else { return }
         var me = URLRequest(url: meURL)
         me.timeoutInterval = 15
         settings.applyAccessHeaders(to: &me)
-        // the header Hermes Desktop's "Session token" connection uses on REST
-        me.setValue(settings.token, forHTTPHeaderField: "X-Hermes-Session-Token")
+        signed.sign(&me)
         let (_, meResponse) = try await URLSession.shared.data(for: me)
-        if let http = meResponse as? HTTPURLResponse, http.statusCode == 401 {
-            throw GatewayError.badToken(settings.tokenHint)
+        guard let http = meResponse as? HTTPURLResponse, http.statusCode == 401 else { return }
+        switch signed {
+        case .sessionToken: throw GatewayError.badToken(settings.tokenHint)
+        case .bearer: throw GatewayError.signInRefused
         }
     }
 
@@ -334,7 +373,7 @@ final class Gateway {
 
     nonisolated static func describeClose(_ code: Int, _ reason: String) -> String {
         switch code {
-        case 4401: return "令牌不对，服务器拒绝了连接（4401）"
+        case 4401: return "服务器不认这次的令牌或登录，拒绝了连接（4401）"
         case 4403: return "服务器拒绝了连接（4403）：检查地址、Host 和权限"
         case 1013: return "网关还没准备好，稍后会自动重连（1013）"
         case 1011: return "服务器断开了连接（1011）"

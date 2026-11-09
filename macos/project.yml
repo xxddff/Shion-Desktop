@@ -22,11 +22,15 @@ targets:
     platform: macOS
     sources:
       - path: Shion
+        excludes:
+          - Info.plist
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.shion.Shion
         PRODUCT_NAME: Shion
         GENERATE_INFOPLIST_FILE: YES
+        # merged with the generated keys: only the ATS exception for local addresses lives there
+        INFOPLIST_FILE: Shion/Info.plist
         INFOPLIST_KEY_CFBundleDisplayName: Shion
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.productivity
         INFOPLIST_KEY_NSPrincipalClass: NSApplication

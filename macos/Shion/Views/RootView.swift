@@ -64,6 +64,7 @@ struct Sidebar: View {
             Section("助手") {
                 ForEach(store.bots) { bot in
                     BotRow(bot: bot, waiting: store.asks.contains { $0.botId == bot.id })
+                        .accessibilityIdentifier("bot-\(bot.id)")
                         .tag(Route.chat(bot.id))
                 }
             }

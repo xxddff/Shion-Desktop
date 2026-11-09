@@ -10,9 +10,22 @@ struct SettingsView: View {
         Form {
             Section {
                 TextField("地址", text: $draft.address, prompt: Text(verbatim: "https://hermes.example.dev"))
-                SecureField("会话令牌", text: $draft.token)
+                    .accessibilityIdentifier("server-address")
+                Picker("登录方式", selection: $draft.login) {
+                    Text("浏览器登录").tag(ServerSettings.Login.browser)
+                    Text("会话令牌").tag(ServerSettings.Login.sessionToken)
+                }
+                .pickerStyle(.segmented)
+                switch draft.login {
+                case .browser:
+                    AccountRow(draft: draft)
+                case .sessionToken:
+                    SecureField("会话令牌", text: $draft.token)
+                }
                 TextField("Access Client ID", text: $draft.accessClientId)
+                    .accessibilityIdentifier("access-id")
                 SecureField("Access Client Secret", text: $draft.accessClientSecret)
+                    .accessibilityIdentifier("access-secret")
                 HStack(spacing: 8) {
                     ConnectionState(phase: store.gateway.phase, live: store.live, count: store.bots.count, canonical: store.gateway.sessionAuthority)
                     Spacer()
@@ -24,12 +37,12 @@ struct SettingsView: View {
                         Task { await store.connect() }
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(!draft.isConfigured || store.gateway.phase == .connecting)
+                    .disabled(!store.canConnect(draft) || store.gateway.phase == .connecting)
                 }
             } header: {
                 Text("Hermes 服务器")
             } footer: {
-                Text("会话令牌是服务器上的 HERMES_DASHBOARD_SESSION_TOKEN。Access 两项填 Cloudflare Access 的 service token，没有就留空。三项都存在钥匙串里，只发给这个地址。连上后，助手列表和各助手的对话来自服务器；今天、待办、日程、日报、看板和云桌面暂时还是示例数据。")
+                Text(footer)
                     .font(.t12)
                     .foregroundStyle(.secondary)
             }
@@ -55,6 +68,55 @@ struct SettingsView: View {
             draft = store.serverSettings
         }
     }
+
+    private var footer: String {
+        let login = switch draft.login {
+        case .browser:
+            "浏览器登录：在服务器的登录页输入用户名和密码，Shion 只拿到登录凭证，碰不到密码；凭证快到期时自动续上。"
+        case .sessionToken:
+            "会话令牌是服务器上的 HERMES_DASHBOARD_SESSION_TOKEN。"
+        }
+        return login + "Access 两项填 Cloudflare Access 的 service token，没有就留空。这些都存在钥匙串里，只发给这个地址。连上后，助手列表和各助手的对话来自服务器；今天、待办、日程、日报、看板和云桌面暂时还是示例数据。"
+    }
+}
+
+/// The browser sign-in for the address being edited: who is signed in, or the way to sign in.
+struct AccountRow: View {
+    @Environment(AppStore.self) private var store
+    let draft: ServerSettings
+
+    var body: some View {
+        LabeledContent("账号") {
+            if store.account.state == .signingIn {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("在弹出的窗口里登录").foregroundStyle(.secondary)
+                    Button("取消") { store.account.cancelSignIn() }
+                }
+            } else if let tokens = store.account.tokens(for: draft.trimmed) {
+                HStack(spacing: 8) {
+                    Text(tokens.userId.isEmpty ? "已登录" : tokens.userId)
+                        .accessibilityIdentifier("account-name")
+                    Button("退出登录") { store.signOut() }
+                }
+            } else {
+                Button("用浏览器登录…") {
+                    store.serverSettings = draft
+                    Task { await store.signIn() }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!draft.trimmed.isConfigured)
+                .accessibilityIdentifier("sign-in")
+            }
+        }
+        if case .failed(let reason) = store.account.state {
+            Text(reason)
+                .font(.t12)
+                .foregroundStyle(Palette.alert)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
 }
 
 /// Where the connection stands, in words.
@@ -72,6 +134,7 @@ struct ConnectionState: View {
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("connection-state")
         }
     }
 

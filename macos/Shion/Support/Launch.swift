@@ -23,16 +23,19 @@ enum Route: Hashable {
 }
 
 /// Options the screenshot test passes on launch:
-/// `-ShionSnapshot YES -ShionRoute today -ShionAppearance dark`.
+/// `-ShionSnapshot YES -ShionRoute today -ShionAppearance dark`, and `-ShionDemoSignIn YES` to
+/// show Settings signed in to a made-up server.
 struct LaunchOptions {
     var snapshot = false
     var route: Route = .today
     var colorScheme: ColorScheme?
+    var demoSignIn = false
 
     static let current: LaunchOptions = {
         let defaults = UserDefaults.standard
         var options = LaunchOptions()
         options.snapshot = defaults.bool(forKey: "ShionSnapshot")
+        options.demoSignIn = options.snapshot && defaults.bool(forKey: "ShionDemoSignIn")
         if let token = defaults.string(forKey: "ShionRoute"), let route = Route(token: token) {
             options.route = route
         }

@@ -58,15 +58,41 @@ final class ScreenshotTests: XCTestCase {
         }
     }
 
+    /// Settings signed in (to a made-up server, nothing is dialled), then with the session token.
     @MainActor
-    private func launch(route: String, appearance: String) -> XCUIApplication {
+    func testSettingsSignedIn() throws {
+        continueAfterFailure = true
+        let app = launch(route: "today", appearance: "light", extra: ["-ShionDemoSignIn", "YES"])
+        _ = app.windows.firstMatch.waitForExistence(timeout: 20)
+        app.typeKey(",", modifierFlags: .command)
+        let settings = app.windows.matching(NSPredicate(format: "identifier CONTAINS[c] 'settings'")).firstMatch
+        guard settings.waitForExistence(timeout: 5) else {
+            keep(XCUIScreen.main.screenshot(), name: "settings-signedin-screen")
+            return XCTFail("No Settings window")
+        }
+        Thread.sleep(forTimeInterval: 1)
+        keep(settings.screenshot(), name: "settings-signedin-light")
+        // a segmented picker's segments are radio buttons to accessibility, or plain buttons
+        let token = settings.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "会话令牌")).firstMatch
+        if token.waitForExistence(timeout: 3) {
+            token.click()
+            Thread.sleep(forTimeInterval: 0.5)
+            keep(settings.screenshot(), name: "settings-token-light")
+        } else {
+            print("No 会话令牌 segment to click")
+        }
+        app.terminate()
+    }
+
+    @MainActor
+    private func launch(route: String, appearance: String, extra: [String] = []) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = [
             "-ShionSnapshot", "YES",
             "-ShionRoute", route,
             "-ShionAppearance", appearance,
             "-ApplePersistenceIgnoreState", "YES",
-        ]
+        ] + extra
         app.launch()
         return app
     }

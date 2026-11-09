@@ -147,6 +147,7 @@ struct Composer: View {
                 .lineLimit(1...6)
                 .onSubmit(send)
                 .padding(.vertical, 7)
+                .accessibilityIdentifier("composer")
             Button(action: send) {
                 Image(systemName: "arrow.up")
                     .font(.system(size: 13, weight: .bold))
@@ -155,6 +156,8 @@ struct Composer: View {
             .buttonStyle(.glassProminent)
             .buttonBorderShape(.circle)
             .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .accessibilityLabel("发送")
+            .accessibilityIdentifier("send")
         }
         .padding(.leading, 16)
         .padding(.trailing, 6)

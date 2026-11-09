@@ -1,0 +1,376 @@
+#!/usr/bin/env python3
+"""A stand-in for what Shion talks to, for the browser sign-in test on CI (SignInTests).
+
+Plays Cloudflare Access in front: a request needs the service token headers, or the
+CF_Authorization cookie Access hands back for them. Behind it, the parts of a Hermes gateway's
+Webapp that Shion uses, shaped like hermes_cli/dashboard_auth and the Canonical Gateway Protocol:
+
+  GET  /api/status             public; says a password provider and native_pkce are on
+  GET  /auth/native/authorize  checks PKCE S256 and the loopback redirect, then 302 to /login
+  GET  /login                  a login page that fills itself in and submits
+  POST /auth/password-login    returns the loopback redirect with a one-time code
+  POST /auth/native/token      code + verifier -> bearer tokens
+  POST /auth/native/refresh    refresh token -> the next pair
+  GET  /api/auth/me            the bearer's identity, or 401
+  GET  /api/ws?token=…         JSON-RPC 2.0 over WebSocket: gateway.ready, profiles, a Bot Chat
+
+Every request is logged (path, which credentials came, the answer), so a failing run shows
+where the flow stopped. Stdlib only.
+"""
+import argparse
+import base64
+import hashlib
+import json
+import secrets
+import struct
+import sys
+import threading
+import time
+import urllib.parse
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+ACCESS_ID, ACCESS_SECRET = "ci-client", "ci-secret"
+USER, PASSWORD = "ci-user", "ci-pass"
+
+lock = threading.Lock()
+access_cookies = set()
+pending = {}  # broker -> {challenge, redirect_uri, state}
+codes = {}  # code -> challenge
+access_tokens = {}  # token -> expiry
+refresh_tokens = set()
+sessions = {}  # profile -> session id
+
+
+def log(*parts):
+    print(time.strftime("%H:%M:%S"), *parts, flush=True)
+
+
+def s256(verifier):
+    return base64.urlsafe_b64encode(hashlib.sha256(verifier.encode("ascii")).digest()).rstrip(b"=").decode()
+
+
+def mint_pair():
+    access, refresh = "at-" + secrets.token_urlsafe(24), "rt-" + secrets.token_urlsafe(24)
+    expires = int(time.time()) + 3600
+    with lock:
+        access_tokens[access] = expires
+        refresh_tokens.add(refresh)
+    return {"access_token": access, "refresh_token": refresh, "token_type": "Bearer",
+            "expires_at": expires, "provider": "basic", "user_id": USER}
+
+
+def valid_access(token):
+    with lock:
+        return access_tokens.get(token, 0) > time.time()
+
+
+LOGIN_PAGE = """<!doctype html><meta charset="utf-8"><title>Hermes (CI)</title>
+<body style="font:15px -apple-system,system-ui;margin:3rem">
+<h3>Hermes 登录（CI 替身）</h3><p id="s">自动填用户名和密码，提交中…</p>
+<script>
+fetch('/auth/password-login', {method: 'POST', credentials: 'same-origin',
+  headers: {'Content-Type': 'application/json'},
+  body: JSON.stringify({provider: 'basic', username: '%s', password: '%s', next: ''})})
+  .then(function (r) { return r.json().then(function (d) { return [r.status, d]; }); })
+  .then(function (x) {
+    document.getElementById('s').textContent = 'HTTP ' + x[0] + ' → ' + (x[1].next || x[1].detail);
+    if (x[0] === 200) { window.location.assign(x[1].next); }
+  })
+  .catch(function (e) { document.getElementById('s').textContent = '失败：' + e; });
+</script>""" % (USER, PASSWORD)
+
+
+class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, *args):
+        pass
+
+    def handle(self):
+        # a client that hangs up between requests is not news
+        try:
+            super().handle()
+        except (ConnectionError, TimeoutError):
+            pass
+
+    # ---- plumbing -----------------------------------------------------------------------
+
+    def cookies(self):
+        jar = {}
+        for part in self.headers.get("Cookie", "").split(";"):
+            if "=" in part:
+                name, value = part.strip().split("=", 1)
+                jar[name] = value
+        return jar
+
+    def answer(self, status, body=b"", content_type="application/json", headers=()):
+        if isinstance(body, (dict, list)):
+            body = json.dumps(body, ensure_ascii=False).encode()
+        elif isinstance(body, str):
+            body = body.encode()
+        self.send_response(status)
+        self.send_header("Content-Type", content_type + ("; charset=utf-8" if "html" in content_type else ""))
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        for name, value in list(headers) + self.extra_headers:
+            self.send_header(name, value)
+        self.end_headers()
+        self.wfile.write(body)
+        log(f"  -> {status}")
+
+    def access(self):
+        """Cloudflare Access: the service token headers, or the cookie it gave for them."""
+        self.extra_headers = []
+        has_headers = (self.headers.get("CF-Access-Client-Id") == ACCESS_ID
+                       and self.headers.get("CF-Access-Client-Secret") == ACCESS_SECRET)
+        cookie = self.cookies().get("CF_Authorization", "")
+        with lock:
+            has_cookie = cookie in access_cookies
+        url = urllib.parse.urlsplit(self.path)
+        log(f"{self.command} {url.path} access={'headers' if has_headers else 'cookie' if has_cookie else 'NONE'}"
+            f" bearer={'yes' if self.headers.get('Authorization') else 'no'}"
+            f" query={sorted(urllib.parse.parse_qs(url.query))}")
+        if has_headers:
+            value = secrets.token_urlsafe(18)
+            with lock:
+                access_cookies.add(value)
+            self.extra_headers = [("Set-Cookie", f"CF_Authorization={value}; Path=/; HttpOnly; SameSite=Lax")]
+            return True
+        if has_cookie:
+            return True
+        self.answer(403, "<h1>Forbidden</h1><p>Cloudflare Access (CI stand-in): no service token, no cookie.</p>",
+                    "text/html")
+        return False
+
+    def body(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        try:
+            return json.loads(self.rfile.read(length) or b"{}")
+        except ValueError:
+            return {}
+
+    # ---- routes -------------------------------------------------------------------------
+
+    def do_GET(self):
+        if not self.access():
+            return
+        url = urllib.parse.urlsplit(self.path)
+        query = dict(urllib.parse.parse_qsl(url.query))
+        if url.path == "/api/status":
+            return self.answer(200, {"auth_required": True, "auth_providers": ["basic"],
+                                     "auth_flows": ["cookie", "native_pkce"]})
+        if url.path == "/auth/native/authorize":
+            return self.authorize(query)
+        if url.path == "/login":
+            return self.answer(200, LOGIN_PAGE, "text/html")
+        if url.path == "/api/auth/me":
+            bearer = self.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+            if valid_access(bearer):
+                return self.answer(200, {"user_id": USER, "email": "", "display_name": USER, "org_id": "",
+                                         "provider": "basic", "expires_at": access_tokens[bearer]})
+            return self.answer(401, {"detail": "Unauthorized"})
+        if url.path == "/api/ws":
+            return self.socket(query)
+        self.answer(404, {"detail": "Not Found"})
+
+    def do_POST(self):
+        if not self.access():
+            return
+        url = urllib.parse.urlsplit(self.path)
+        body = self.body()
+        if url.path == "/auth/password-login":
+            return self.password_login(body)
+        if url.path == "/auth/native/token":
+            with lock:
+                challenge = codes.pop(body.get("code", ""), None)
+            if challenge is None or s256(body.get("code_verifier", "")) != challenge:
+                log("  token: unknown code or PKCE mismatch")
+                return self.answer(400, {"detail": "Invalid or expired authorization code."})
+            return self.answer(200, mint_pair())
+        if url.path == "/auth/native/refresh":
+            with lock:
+                known = body.get("refresh_token") in refresh_tokens
+                refresh_tokens.discard(body.get("refresh_token"))
+            if not known:
+                return self.answer(401, {"error": "session_expired", "detail": "start a new sign-in"})
+            return self.answer(200, mint_pair())
+        self.answer(404, {"detail": "Not Found"})
+
+    def authorize(self, query):
+        problems = []
+        if query.get("code_challenge_method", "").upper() != "S256":
+            problems.append("code_challenge_method must be S256")
+        if len(query.get("code_challenge", "")) != 43:
+            problems.append("code_challenge must be base64url SHA-256 (43 chars)")
+        redirect = urllib.parse.urlsplit(query.get("redirect_uri", ""))
+        if redirect.scheme != "http" or redirect.hostname != "127.0.0.1" or not redirect.port:
+            problems.append("redirect_uri must be http://127.0.0.1:<port>/...")
+        if len(query.get("state", "")) < 16:
+            problems.append("state must be random")
+        if problems:
+            log("  authorize refused:", "; ".join(problems))
+            return self.answer(400, {"detail": "; ".join(problems)})
+        broker = secrets.token_urlsafe(24)
+        with lock:
+            pending[broker] = {"challenge": query["code_challenge"], "redirect_uri": query["redirect_uri"],
+                               "state": query["state"]}
+        self.extra_headers.append(("Set-Cookie", f"hermes_pkce={broker}; Path=/; HttpOnly; SameSite=Lax"))
+        self.answer(302, b"", "text/plain", [("Location", "/login")])
+
+    def password_login(self, body):
+        if body.get("username") != USER or body.get("password") != PASSWORD:
+            return self.answer(401, {"detail": "Invalid credentials"})
+        with lock:
+            entry = pending.pop(self.cookies().get("hermes_pkce", ""), None)
+        if entry is None:
+            log("  password-login: no native sign-in pending for this browser (pkce cookie missing)")
+            return self.answer(400, {"detail": "Native login expired or unknown; restart sign-in."})
+        code = secrets.token_urlsafe(32)
+        with lock:
+            codes[code] = entry["challenge"]
+        target = entry["redirect_uri"] + "?" + urllib.parse.urlencode({"code": code, "state": entry["state"]})
+        self.answer(200, {"ok": True, "next": target})
+
+    # ---- /api/ws ------------------------------------------------------------------------
+
+    def socket(self, query):
+        if self.headers.get("Upgrade", "").lower() != "websocket":
+            return self.answer(400, {"detail": "expected a WebSocket upgrade"})
+        if not valid_access(query.get("token", "")):
+            log("  ws: token is not a live access token")
+            self.close_connection = True
+            return self.answer(403, b"", "text/plain")
+        accept = base64.b64encode(hashlib.sha1(
+            (self.headers["Sec-WebSocket-Key"] + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()).decode()
+        self.send_response(101, "Switching Protocols")
+        self.send_header("Upgrade", "websocket")
+        self.send_header("Connection", "Upgrade")
+        self.send_header("Sec-WebSocket-Accept", accept)
+        self.end_headers()
+        self.wfile.flush()
+        log("  ws: open")
+        self.close_connection = True
+        self.event("gateway.ready", None, {"session_authority": True, "heartbeat": True})
+        try:
+            while True:
+                opcode, data = self.frame()
+                if opcode == 8:
+                    self.send_frame(8, data[:2])
+                    break
+                if opcode == 9:
+                    self.send_frame(10, data)
+                elif opcode == 1:
+                    self.rpc(json.loads(data))
+        except (ConnectionError, OSError, ValueError) as exc:
+            log("  ws: closed", type(exc).__name__)
+        log("  ws: done")
+
+    def read_exact(self, count):
+        data = b""
+        while len(data) < count:
+            chunk = self.rfile.read(count - len(data))
+            if not chunk:
+                raise ConnectionError("eof")
+            data += chunk
+        return data
+
+    def frame(self):
+        """One whole message; continuation frames are joined."""
+        message, first = b"", None
+        while True:
+            head = self.read_exact(2)
+            fin, opcode = head[0] & 0x80, head[0] & 0x0F
+            length = head[1] & 0x7F
+            if length == 126:
+                length = struct.unpack(">H", self.read_exact(2))[0]
+            elif length == 127:
+                length = struct.unpack(">Q", self.read_exact(8))[0]
+            mask = self.read_exact(4) if head[1] & 0x80 else b""
+            data = self.read_exact(length)
+            if mask:
+                data = bytes(byte ^ mask[i % 4] for i, byte in enumerate(data))
+            if opcode >= 8:
+                return opcode, data
+            first = opcode if first is None else first
+            message += data
+            if fin:
+                return first, message
+
+    def send_frame(self, opcode, data):
+        head = bytearray([0x80 | opcode])
+        if len(data) < 126:
+            head.append(len(data))
+        elif len(data) < 65536:
+            head.append(126)
+            head += struct.pack(">H", len(data))
+        else:
+            head.append(127)
+            head += struct.pack(">Q", len(data))
+        self.wfile.write(bytes(head) + data)
+        self.wfile.flush()
+
+    def send_json(self, value):
+        self.send_frame(1, json.dumps(value, ensure_ascii=False).encode())
+
+    def event(self, kind, session_id, payload):
+        params = {"type": kind, "payload": payload}
+        if session_id:
+            params["session_id"] = session_id
+        self.send_json({"jsonrpc": "2.0", "method": "event", "params": params})
+
+    def snapshot(self, profile):
+        with lock:
+            session_id = sessions.setdefault(profile, f"sess-{profile}")
+        return {"session_id": session_id, "running": False, "prompts": [],
+                "display_messages": [{"role": "assistant", "text": "CI 替身服务器连上了。", "timestamp": time.time()}]}
+
+    def rpc(self, request):
+        method, params, rid = request.get("method", ""), request.get("params") or {}, request.get("id")
+        if method != "gateway.ping":
+            log(f"  rpc {method} {json.dumps(params, ensure_ascii=False)[:160]}")
+        result = None
+        if method == "client.capabilities":
+            result = {"server_requests": True}
+        elif method == "gateway.ping":
+            result = {"pong": True}
+        elif method == "profiles.list":
+            result = {"profiles": [
+                {"name": "shion", "display_name": "詩音", "description": "", "is_default": True, "ui_meta": {}},
+                {"name": "study", "display_name": "study", "description": "课程", "is_default": False,
+                 "ui_meta": {"hermes-bots": {"title": "课程（CI）"}}},
+            ]}
+        elif method == "session.list":
+            with lock:
+                known = sessions.get(params.get("profile"))
+            result = {"sessions": [{"id": known, "title": "Bot Chat", "root_title": "Bot Chat"}] if known else []}
+        elif method in ("session.create", "session.resume"):
+            result = self.snapshot(params.get("profile", "shion"))
+        elif method == "prompt.submit":
+            self.send_json({"jsonrpc": "2.0", "id": rid, "result": {"accepted": True}})
+            session_id, text = params.get("session_id"), params.get("text", "")
+            self.event("message.start", session_id, {})
+            self.event("message.delta", session_id, {"text": "收到："})
+            self.event("message.delta", session_id, {"text": text})
+            self.event("message.complete", session_id, {"text": "收到：" + text, "status": "complete"})
+            return
+        if result is None:
+            self.send_json({"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": f"no method {method}"}})
+        else:
+            self.send_json({"jsonrpc": "2.0", "id": rid, "result": result})
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--port", type=int, default=8765)
+    args = parser.parse_args()
+    server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
+    server.daemon_threads = True
+    log(f"stand-in Hermes on http://127.0.0.1:{args.port}")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()

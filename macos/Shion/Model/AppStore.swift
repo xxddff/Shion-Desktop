@@ -23,7 +23,11 @@ final class AppStore {
     // the Hermes server
     let gateway = Gateway()
     // screenshot runs never touch the keychain (a locked one would put up a password prompt)
-    var serverSettings = LaunchOptions.current.snapshot ? ServerSettings() : ServerSettings.load()
+    var serverSettings = LaunchOptions.current.snapshot ? AppStore.snapshotSettings : ServerSettings.load()
+    /// The browser sign-in, when that is how Shion logs in.
+    let account = LaunchOptions.current.snapshot
+        ? Account(persist: false, tokens: AppStore.snapshotSignIn)
+        : Account(persist: true)
     /// Assistants and Bot Chats come from the server.
     private(set) var live = false
     /// Bot ids whose Bot Chat is being opened, and why one could not be.
@@ -56,7 +60,11 @@ final class AppStore {
         gateway.onReconnect = { [weak self] in
             self?.reattach()
         }
-        if serverSettings.isConfigured && !LaunchOptions.current.snapshot {
+        gateway.credential = { [weak self] settings, renew in
+            guard let self else { throw GatewayError.offline }
+            return try await self.credential(for: settings, renew: renew)
+        }
+        if canConnect(serverSettings) && !LaunchOptions.current.snapshot {
             Task { await connect() }
         }
     }
@@ -149,18 +157,72 @@ final class AppStore {
 // MARK: - the Hermes server
 
 extension AppStore {
+    /// Whether these settings have what a dial needs: an address, and a session token or a
+    /// sign-in for that address.
+    func canConnect(_ settings: ServerSettings) -> Bool {
+        let settings = settings.trimmed
+        guard settings.isConfigured else { return false }
+        switch settings.login {
+        case .sessionToken: return true
+        case .browser: return account.tokens(for: settings) != nil
+        }
+    }
+
     /// Saves the settings and connects; on success the assistants come from the server.
     func connect() async {
-        serverSettings = serverSettings.trimmed
-        serverSettings.save()
+        keepSettings()
         await gateway.connect(serverSettings)
         guard gateway.phase == .online else { return }
         await loadProfiles()
     }
 
+    /// Saves the settings, signs in through the server's login page, then connects.
+    func signIn() async {
+        keepSettings()
+        guard await account.signIn(serverSettings) else { return }
+        await connect()
+    }
+
+    func signOut() {
+        account.signOut()
+        if serverSettings.login == .browser {
+            disconnect()
+        }
+    }
+
     func disconnect() {
         gateway.disconnect()
         leaveLive()
+    }
+
+    /// Screenshot and test runs keep what they type in memory: no keychain, no preferences.
+    private func keepSettings() {
+        serverSettings = serverSettings.trimmed
+        if !LaunchOptions.current.snapshot {
+            serverSettings.save()
+        }
+    }
+
+    private func credential(for settings: ServerSettings, renew: Bool) async throws -> Credential {
+        switch settings.login {
+        case .sessionToken:
+            return .sessionToken(settings.token)
+        case .browser:
+            return .bearer(try await account.accessToken(for: settings, renew: renew))
+        }
+    }
+
+    /// Screenshot runs: no server, unless `-ShionDemoSignIn YES` asks to show a signed-in account.
+    static var snapshotSettings: ServerSettings {
+        LaunchOptions.current.demoSignIn ? ServerSettings(address: "hermes.example.dev") : ServerSettings()
+    }
+
+    static var snapshotSignIn: SignInTokens? {
+        guard LaunchOptions.current.demoSignIn else { return nil }
+        return SignInTokens(
+            server: "https://hermes.example.dev", accessToken: "demo", refreshToken: "demo",
+            expiresAt: 0, provider: "basic", userId: "kaede"
+        )
     }
 
     private func loadProfiles() async {
