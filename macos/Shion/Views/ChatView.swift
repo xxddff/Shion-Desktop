@@ -67,9 +67,10 @@ struct ChatView: View {
         // starts at the newest message, and follows new ones
         .defaultScrollAnchor(.bottom)
         .accessibilityIdentifier("transcript")
-        // measured from the first layout on (a scroll geometry change only reports changes)
+        // measured from the first layout on (a scroll geometry change only reports changes); the
+        // size is already inside the toolbar and the composer
         .onGeometryChange(for: CGFloat.self) { proxy in
-            proxy.size.height - proxy.safeAreaInsets.top - proxy.safeAreaInsets.bottom
+            proxy.size.height
         } action: { height in
             viewport = max(0, height)
         }
