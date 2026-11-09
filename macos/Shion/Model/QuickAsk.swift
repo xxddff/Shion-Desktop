@@ -25,9 +25,6 @@ final class QuickAsk {
     /// What is being typed: it stays when the window goes away, and goes once it is sent.
     var draft = ""
     private(set) var shown = false
-    /// How the window came up last: "hotkey", "menu" or "launch" (screenshots); the end-to-end
-    /// test reads it to tell the global shortcut from the menu.
-    private(set) var openedBy = ""
     /// The sentence this window sent last: what follows it in 詩音's chat is the answer.
     private(set) var asked: Asked?
 
@@ -63,7 +60,7 @@ final class QuickAsk {
         if let first = demo.first {
             asked = Asked(itemId: first.id, text: first.text, at: first.at)
         }
-        show(by: "launch")
+        show()
     }
 
     // MARK: the shortcut
@@ -108,13 +105,12 @@ final class QuickAsk {
         if shown && window?.isKeyWindow == true {
             hide()
         } else {
-            show(by: "hotkey")
+            show()
         }
     }
 
-    func show(by source: String = "menu") {
+    func show() {
         guard let store else { return }
-        openedBy = source
         let window = self.window ?? QuickAskWindow(store: store, quick: self)
         self.window = window
         if !shown {

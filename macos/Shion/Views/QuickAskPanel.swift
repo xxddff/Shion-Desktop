@@ -207,8 +207,6 @@ struct QuickAskView: View {
         .frame(height: 60)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("quick-bar")
-        // how the window came up, for the end-to-end test; nothing on screen
-        .accessibilityValue(quick.openedBy)
     }
 
     private func answer(_ lines: [ChatLine], asks: [Ask]) -> some View {

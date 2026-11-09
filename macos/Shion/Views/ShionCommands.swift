@@ -25,7 +25,7 @@ struct ShionCommands: Commands {
             }
             .keyboardShortcut("k", modifiers: .command)
             Button("跟詩音说…") {
-                quick.show(by: "menu")
+                quick.show()
             }
             .keyboardShortcut(quick.shortcut?.toSwiftUI)
         }
