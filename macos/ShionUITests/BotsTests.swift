@@ -1,11 +1,13 @@
 import AppKit
 import XCTest
 
-/// The assistants against ci/fake_hermes.py (their routes are in ci/fake_profiles.py): sign in,
-/// make 课程 总秘书 (the shion plugin is only in 詩音's profile, so 今天 goes back to the demo) and
-/// 詩音 again, see that Hermes's default profile cannot be deleted and hide it, make an assistant,
-/// change its description and SOUL, add an MCP server and test it, turn a skill off, read the page
-/// again from the server, and delete the assistant. A picture at each step (`bots-*.png`).
+/// The assistants against ci/fake_hermes.py (their routes are in ci/fake_profiles.py): sign in (归档,
+/// hidden in Bot Mode, starts hidden), make 课程 总秘书 (the shion plugin is only in 詩音's profile, so
+/// 今天 goes back to the demo; 今天's field and 「跟…说」 name 课程) and 詩音 again, see that Hermes's
+/// default profile cannot be deleted and hide it, make an assistant, change its description and SOUL,
+/// add an MCP server and test it, turn a skill off, read the page again from the server, delete the
+/// assistant, and see its name held back until the server has cleaned up after it. A picture at each
+/// step (`bots-*.png`). BotPageTests goes through the rest of an assistant's page.
 final class BotsTests: XCTestCase {
     private let server = "http://127.0.0.1:8765"
 
@@ -23,10 +25,13 @@ final class BotsTests: XCTestCase {
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 20))
         let window = app.windows.firstMatch
 
-        // sign in as SignInTests does
+        // sign in as SignInTests does; Settings opens on the tab it was last left on
         app.typeKey(",", modifierFlags: .command)
         var settings = settingsWindow(app)
         XCTAssertTrue(settings.waitForExistence(timeout: 5), "no Settings window")
+        if !settings.textFields["server-address"].waitForExistence(timeout: 2) {
+            selectTab("服务器", in: settings)
+        }
         type(server, into: settings.textFields["server-address"])
         type("ci-client", into: settings.textFields["access-id"])
         type("ci-secret", into: settings.secureTextFields["access-secret"])
@@ -45,6 +50,9 @@ final class BotsTests: XCTestCase {
         let summary = waitForText("（CI）早上好", in: app, timeout: 15)
         keep(window.screenshot(), "bots-1-today")
         XCTAssertTrue(summary, "詩音's paragraph from the plugin is not on 今天")
+        XCTAssertTrue(asking("詩音", in: app).exists, "今天's field does not ask for 詩音")
+        // Bot Mode hid 归档 (ui_meta hidden): seen here for the first time, it starts hidden
+        XCTAssertFalse(element("bot-archive-ci", in: app).exists, "归档, hidden in Bot Mode, is in the sidebar")
 
         // Settings → 助手: 课程 becomes 总秘书. The plugin is not in its profile, so 今天 has the
         // demo's line again
@@ -60,6 +68,11 @@ final class BotsTests: XCTestCase {
         keep(window.screenshot(), "bots-3-today-study")
         XCTAssertTrue(studyLeads, "课程 does not lead the sidebar")
         XCTAssertTrue(demoAgain, "今天 still shows 詩音's paragraph from the plugin")
+        // the field on 今天 and 「跟…说」 name 总秘书
+        XCTAssertTrue(asking("课程（CI）", in: app).waitForExistence(timeout: 5), "今天's field does not ask for 课程")
+        element("nav-todos", in: app).click()
+        XCTAssertTrue(waitForText("跟课程（CI）说", in: app, timeout: 5), "the toolbar's 「跟…说」 does not name 课程")
+        element("nav-today", in: app).click()
 
         // Hermes's default profile has a page, but no way to delete it
         openPage(of: "default", in: app)
@@ -71,6 +84,9 @@ final class BotsTests: XCTestCase {
         // back to 詩音, and the default profile hidden
         settings = openAssistantSettings(app)
         choose("詩音", in: "chief-picker", window: settings, app: app)
+        let archived = switchOf("show-archive-ci", in: app)
+        XCTAssertTrue(archived.waitForExistence(timeout: 5), "归档 is not listed in Settings")
+        XCTAssertEqual(isOn(archived), false, "归档, hidden in Bot Mode, starts shown: \(String(describing: archived.value))")
         let shown = element("show-default", in: settings)
         XCTAssertTrue(shown.waitForExistence(timeout: 5), "no 显示 toggle for the default profile")
         shown.click()
@@ -185,6 +201,27 @@ final class BotsTests: XCTestCase {
         let gone = waitUntil(timeout: 20) { !self.element("bot-mail-ci", in: app).exists }
         keep(window.screenshot(), "bots-14-deleted")
         XCTAssertTrue(gone, "the deleted assistant is still in the sidebar")
+
+        // the stand-in left mail-ci's identity unsettled: Settings says so, the name is held back
+        // until Shion's retry of `hermes profile purge-identity` goes through (the fourth try)
+        settings = openAssistantSettings(app)
+        let cleaning = element("cleaning-mail-ci", in: settings)
+        XCTAssertTrue(cleaning.waitForExistence(timeout: 10), "Settings does not say mail-ci is still being cleaned up")
+        element("new-assistant", in: settings).click()
+        let again = element("new-assistant-name", in: app)
+        XCTAssertTrue(again.waitForExistence(timeout: 5), "no 新建助手 sheet in Settings")
+        again.click()
+        again.typeText("mail-ci")
+        let held = waitForText("刚删掉", in: app, timeout: 5)
+        keep(settings.screenshot(), "bots-15-held-back")
+        XCTAssertTrue(held, "a new mail-ci is not held back while the server cleans up")
+        let create = element("new-assistant-create", in: app)
+        XCTAssertFalse(create.isEnabled, "新建 is open for a name still being cleaned up")
+        let released = waitUntil(timeout: 75) { create.exists && create.isEnabled }
+        keep(settings.screenshot(), "bots-16-released")
+        XCTAssertTrue(released, "the name was not let go once the server cleaned up")
+        XCTAssertFalse(element("cleaning-mail-ci", in: settings).exists, "Settings still lists mail-ci as being cleaned up")
+        app.typeKey(.escape, modifierFlags: [])
         app.terminate()
     }
 
@@ -203,18 +240,24 @@ final class BotsTests: XCTestCase {
         XCTAssertTrue(settings.waitForExistence(timeout: 5), "no Settings window")
         let picker = element("chief-picker", in: settings)
         if !picker.waitForExistence(timeout: 1) {
-            let tabs = [settings.toolbarButtons["助手"], settings.toolbars.buttons["助手"], settings.buttons["助手"],
-                        settings.radioButtons["助手"]]
-            if let tab = tabs.first(where: { $0.exists }) {
-                tab.click()
-            } else {
-                let any = settings.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "助手")).firstMatch
-                XCTAssertTrue(any.waitForExistence(timeout: 3), "no 助手 tab in Settings")
-                any.click()
-            }
+            selectTab("助手", in: settings)
         }
         XCTAssertTrue(picker.waitForExistence(timeout: 10), "no 总秘书 picker on the 助手 tab")
         return settings
+    }
+
+    /// A tab of Settings, by its name in the toolbar.
+    @MainActor
+    private func selectTab(_ name: String, in settings: XCUIElement) {
+        let tabs = [settings.toolbarButtons[name], settings.toolbars.buttons[name], settings.buttons[name],
+                    settings.radioButtons[name]]
+        if let tab = tabs.first(where: { $0.exists }) {
+            tab.click()
+        } else {
+            let any = settings.descendants(matching: .any).matching(NSPredicate(format: "label == %@", name)).firstMatch
+            XCTAssertTrue(any.waitForExistence(timeout: 3), "no \(name) tab in Settings")
+            any.click()
+        }
     }
 
     /// A picker's item, from its pop-up menu.
@@ -300,6 +343,12 @@ final class BotsTests: XCTestCase {
     @MainActor
     private func contains(_ element: XCUIElement, _ text: String) -> Bool {
         element.exists && ((element.value as? String)?.contains(text) == true || element.label.contains(text))
+    }
+
+    /// 今天's field, by what it says when empty: 「跟<name>说：…」.
+    @MainActor
+    private func asking(_ name: String, in app: XCUIApplication) -> XCUIElement {
+        app.textFields.matching(NSPredicate(format: "placeholderValue BEGINSWITH %@", "跟\(name)说")).firstMatch
     }
 
     /// A toggle's switch. Its identifier can be on its label's texts as well, as a row's goes to

@@ -164,10 +164,11 @@ final class QuickAsk {
         guard let store else { return }
         let window = self.window ?? QuickAskWindow(store: store, quick: self)
         self.window = window
+        // named for whoever is 总秘书 now
+        window.title = "跟\(store.chiefName)说"
         if !shown {
             window.place()
         }
-        window.title = "跟\(store.chiefName)说"
         shown = true
         // a panel that does not activate Shion: the app in front stays in front
         window.makeKeyAndOrderFront(nil)
