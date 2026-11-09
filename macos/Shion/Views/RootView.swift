@@ -37,7 +37,8 @@ struct DetailView: View {
         case .reports: ReportsView().askToolbar()
         case .board: BoardView().askToolbar()
         case .desktop: DesktopView().askToolbar()
-        case .chat(let id): AssistantView(botId: id).askToolbar(id != store.chiefId).id(id)
+        case .chat(let id): AssistantView(botId: id).assistantSettingsButton(id).askToolbar(id != store.chiefId).id(id)
+        case .botSettings(let id): BotSettingsView(botId: id).askToolbar().id("assistant-\(id)")
         }
     }
 }
@@ -66,11 +67,13 @@ struct Sidebar: View {
                 ForEach(store.bots) { bot in
                     BotRow(bot: bot, waiting: store.waitsOnYou(bot.id))
                         .accessibilityIdentifier("bot-\(bot.id)")
+                        .contextMenu { AssistantMenu(store: store, botId: bot.id) }
                         .tag(Route.chat(bot.id))
                 }
             }
         }
         .listStyle(.sidebar)
+        .assistantSheet()
         .safeAreaInset(edge: .bottom, spacing: 0) {
             ConnectionFooter()
         }
