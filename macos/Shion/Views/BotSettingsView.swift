@@ -62,6 +62,40 @@ struct BotSettingsForm: View {
             removalSection
         }
         .formStyle(.grouped)
+        // the questions hang on the page, not on its rows: the form lays its rows out again as the
+        // store changes (the board's poll, a chat), and a dialog hung on a row can close with it
+        .alert("这个模型要你确认", isPresented: modelWarned, presenting: editor.modelWarning) { warning in
+            Button("换成它") { editor.chooseModel(warning.choice, confirmed: true) }
+            Button("取消", role: .cancel) {}
+        } message: { warning in
+            Text(warning.message)
+        }
+        .confirmationDialog("用改过的 SOUL 替换服务器上的？", isPresented: $confirmSoul) {
+            Button("替换") { editor.saveSoul() }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("服务器上原来的 SOUL 会被这一版换掉。")
+        }
+        .alert("服务器上的 SOUL 改过了", isPresented: $editor.soulChanged) {
+            Button("覆盖", role: .destructive) { editor.saveSoul(force: true) }
+            Button("用服务器上的") { editor.reloadSoul() }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("这一页打开以后，有人改过服务器上的 SOUL。覆盖会丢掉那一版。")
+        }
+        // the server's name comes with the dialog: the binding may be cleared before the button runs
+        .confirmationDialog(removalQuestion, isPresented: removing, presenting: removingServer) { server in
+            Button("删除", role: .destructive) { editor.removeServer(server) }
+            Button("取消", role: .cancel) {}
+        } message: { _ in
+            Text("这个助手的配置里不再有它。")
+        }
+        .confirmationDialog(deletionQuestion, isPresented: $confirmDelete) {
+            Button("删除", role: .destructive) { delete() }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("服务器上这个助手的设置、技能、记忆和对话都会删掉，不能恢复。")
+        }
         .sheet(isPresented: $addingServer) {
             NewMcpServerSheet(editor: editor)
         }
@@ -108,12 +142,6 @@ struct BotSettingsForm: View {
                 }
                 .disabled(editor.busy.contains("model"))
             }
-            .alert("这个模型要你确认", isPresented: modelWarned, presenting: editor.modelWarning) { warning in
-                Button("换成它") { editor.chooseModel(warning.choice, confirmed: true) }
-                Button("取消", role: .cancel) {}
-            } message: { warning in
-                Text(warning.message)
-            }
             Problem(editor.errors[.basics])
             Problem(editor.errors[.model])
         } header: {
@@ -157,19 +185,6 @@ struct BotSettingsForm: View {
                     .disabled(!editor.soulEdited || editor.busy.contains("soul"))
                     .accessibilityIdentifier("assistant-soul-save")
             }
-            .confirmationDialog("用改过的 SOUL 替换服务器上的？", isPresented: $confirmSoul) {
-                Button("替换") { editor.saveSoul() }
-                Button("取消", role: .cancel) {}
-            } message: {
-                Text("服务器上原来的 SOUL 会被这一版换掉。")
-            }
-            .alert("服务器上的 SOUL 改过了", isPresented: $editor.soulChanged) {
-                Button("覆盖", role: .destructive) { editor.saveSoul(force: true) }
-                Button("用服务器上的") { editor.reloadSoul() }
-                Button("取消", role: .cancel) {}
-            } message: {
-                Text("这一页打开以后，有人改过服务器上的 SOUL。覆盖会丢掉那一版。")
-            }
         } header: {
             Text("性格（SOUL）")
         }
@@ -195,16 +210,6 @@ struct BotSettingsForm: View {
                 Button("添加…") { addingServer = true }
                     .accessibilityIdentifier("mcp-add")
             }
-            .confirmationDialog("删除 MCP 服务器「\(removingServer ?? "")」？", isPresented: removing) {
-                Button("删除", role: .destructive) {
-                    if let server = removingServer {
-                        editor.removeServer(server)
-                    }
-                }
-                Button("取消", role: .cancel) {}
-            } message: {
-                Text("这个助手的配置里不再有它。")
-            }
         } header: {
             Text("MCP 服务器")
         }
@@ -219,6 +224,10 @@ struct BotSettingsForm: View {
                 }
             }
         )
+    }
+
+    private var removalQuestion: String {
+        "删除 MCP 服务器「\(removingServer ?? "")」？"
     }
 
     // MARK: skills and tools
@@ -341,14 +350,12 @@ struct BotSettingsForm: View {
                     ProgressView().controlSize(.small)
                 }
             }
-            .confirmationDialog("删除「\(store.bot(editor.name)?.name ?? editor.name)」？", isPresented: $confirmDelete) {
-                Button("删除", role: .destructive) { delete() }
-                Button("取消", role: .cancel) {}
-            } message: {
-                Text("服务器上这个助手的设置、技能、记忆和对话都会删掉，不能恢复。")
-            }
             Problem(deleteError)
         }
+    }
+
+    private var deletionQuestion: String {
+        "删除「\(store.bot(editor.name)?.name ?? editor.name)」？"
     }
 
     /// Not the default profile (Hermes keeps it), not 总秘书 (choose another first), not the demo.

@@ -103,6 +103,9 @@ jobs:
             else
               failed="$failed $test"
               grep -nE 'error:|failed|Failing' "build/$test.log" | head -40 || true
+              # -quiet leaves out what failed; the result bundle says
+              xcrun xcresulttool get test-results summary --path "build/$test.xcresult" 2>/dev/null \
+                | grep -E '"(failureText|testName)"' | head -20 || true
             fi
             kill "$standin" 2>/dev/null || true
             wait "$standin" 2>/dev/null || true
@@ -151,7 +154,13 @@ jobs:
                       name = re.sub(r'_\d+_[0-9A-Fa-f-]{36}', '', name)
                       # upload-artifact refuses " : < > | * ? and line breaks (XCTest's debug descriptions quote ids)
                       name = re.sub(r'["`:<>|*?\r\n]', '', name).strip()
-                      shutil.move(source, os.path.join(out, name))
+                      # newest first: an older attachment of the same name (the UI hierarchy XCTest
+                      # keeps at each failed lookup) gets a number instead of replacing it
+                      target, (stem, extension), count = os.path.join(out, name), os.path.splitext(name), 2
+                      while os.path.exists(target):
+                          target = os.path.join(out, f'{stem} {count}{extension}')
+                          count += 1
+                      shutil.move(source, target)
           print('\n'.join(sorted(os.listdir(out))))
           PY
 

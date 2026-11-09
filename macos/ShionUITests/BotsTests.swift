@@ -133,7 +133,7 @@ final class BotsTests: XCTestCase {
         let replace = app.buttons["替换"].firstMatch
         XCTAssertTrue(replace.waitForExistence(timeout: 5), "replacing the SOUL did not ask first")
         keep(window.screenshot(), "bots-9-soul-asks")
-        replace.click()
+        press(replace)
         XCTAssertTrue(waitUntil(timeout: 10) { saveSoul.exists && !saveSoul.isEnabled }, "the SOUL was not saved")
 
         // an MCP server, tested
@@ -154,7 +154,8 @@ final class BotsTests: XCTestCase {
         XCTAssertTrue(works, "testing the MCP server did not say it works")
 
         // a skill turned off
-        let skill = reveal("skill-arxiv", in: app)
+        reveal("skill-arxiv", in: app)
+        let skill = switchOf("skill-arxiv", in: app)
         XCTAssertTrue(skill.exists, "no arxiv skill")
         XCTAssertEqual(isOn(skill), true, "arxiv starts off: \(String(describing: skill.value))")
         skill.click()
@@ -171,15 +172,16 @@ final class BotsTests: XCTestCase {
         keep(window.screenshot(), "bots-12-again")
         XCTAssertTrue(reread, "the description did not stay: \(String(describing: element("assistant-description", in: app).value))")
         XCTAssertTrue(waitUntil(timeout: 10) { self.contains(self.reveal("assistant-soul", in: app), "CI 改过") }, "the SOUL did not stay")
-        XCTAssertTrue(reveal("mcp-notes-ci", in: app).exists, "the MCP server did not stay")
-        XCTAssertEqual(isOn(reveal("skill-arxiv", in: app)), false, "the skill did not stay off")
+        XCTAssertTrue(reveal("mcp-test-notes-ci", in: app).exists, "the MCP server did not stay")
+        reveal("skill-arxiv", in: app)
+        XCTAssertEqual(isOn(switchOf("skill-arxiv", in: app)), false, "the skill did not stay off")
 
         // and deleted, after asking
         reveal("assistant-delete", in: app).click()
         let confirm = app.buttons["删除"].firstMatch
         XCTAssertTrue(confirm.waitForExistence(timeout: 5), "deleting did not ask first")
         keep(window.screenshot(), "bots-13-delete-asks")
-        confirm.click()
+        press(confirm)
         let gone = waitUntil(timeout: 20) { !self.element("bot-mail-ci", in: app).exists }
         keep(window.screenshot(), "bots-14-deleted")
         XCTAssertTrue(gone, "the deleted assistant is still in the sidebar")
@@ -261,6 +263,14 @@ final class BotsTests: XCTestCase {
         return target
     }
 
+    /// A dialog's button, clicked at its place on the screen rather than after XCTest's own check
+    /// that it can be hit, which a dialog over the window does not need.
+    @MainActor
+    private func press(_ button: XCUIElement) {
+        XCTAssertTrue(button.exists, "the dialog closed before its button was clicked")
+        button.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+    }
+
     // MARK: helpers, as in the other tests
 
     @MainActor
@@ -284,6 +294,16 @@ final class BotsTests: XCTestCase {
     @MainActor
     private func contains(_ element: XCUIElement, _ text: String) -> Bool {
         element.exists && ((element.value as? String)?.contains(text) == true || element.label.contains(text))
+    }
+
+    /// A toggle's switch. Its identifier can be on its label's texts as well, as a row's goes to
+    /// each of its parts, so the switch is looked for first.
+    @MainActor
+    private func switchOf(_ identifier: String, in app: XCUIApplication) -> XCUIElement {
+        let control = app.switches.matching(identifier: identifier).firstMatch
+        if control.exists { return control }
+        let box = app.checkBoxes.matching(identifier: identifier).firstMatch
+        return box.exists ? box : element(identifier, in: app)
     }
 
     /// A toggle's state: its value is a number (or its text) on macOS.
