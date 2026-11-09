@@ -468,7 +468,7 @@ extension AppStore {
             attachMarks[botId] = chats[botId]?.count ?? 0
         } else {
             let rows = snapshot["display_messages"]?.array ?? snapshot["messages"]?.array ?? []
-            chats[botId] = rows.compactMap(chatItem(from:))
+            chats[botId] = uniqued(rows.compactMap(chatItem(from:)))
             olderPages[botId] = nil
         }
         setRunning(botId, snapshot["running"]?.bool ?? false)
@@ -494,7 +494,7 @@ extension AppStore {
         let streamed = held[mark...].filter { item in
             item.streaming || !recent.contains { $0.role == item.role && $0.text == item.text }
         }
-        chats[botId] = rows + streamed
+        chats[botId] = rows + uniqued(streamed, besides: rows)
         olderPages[botId] = page["next_cursor"]?.string
         olderErrors[botId] = nil
     }
@@ -513,8 +513,10 @@ extension AppStore {
             ])
             guard sessions[botId] == sessionId, olderPages[botId] == cursor else { return }
             let rows = transcriptItems(page)
-            // `reset`: the server started over from the newest page (a rotated lineage)
-            chats[botId] = page["reset"]?.bool == true ? rows : rows + (chats[botId] ?? [])
+            // `reset`: the server started over from the newest page (a rotated lineage). Otherwise
+            // the rows already shown keep their ids, so the one at the top can be scrolled back to
+            let held = page["reset"]?.bool == true ? [] : chats[botId] ?? []
+            chats[botId] = uniqued(rows, besides: held) + held
             olderPages[botId] = page["next_cursor"]?.string
         } catch {
             olderErrors[botId] = error.localizedDescription
@@ -527,13 +529,31 @@ extension AppStore {
     }
 
     /// A transcript page's rows, oldest first. A compaction row stands where older messages
-    /// were folded into a summary.
+    /// were folded into a summary. Hermes gives a compaction row the `row_id` of the message it was stored on, which
+    /// shows as its own row right after it when it holds real content too: their ids differ here.
     private func transcriptItems(_ page: JSONValue) -> [ChatItem] {
-        (page["rows"]?.array ?? []).compactMap { row in
+        uniqued((page["rows"]?.array ?? []).compactMap { row in
             guard row["row_kind"]?.string == "compaction" else { return chatItem(from: row) }
             let at = row["timestamp"]?.number.map { Date(timeIntervalSince1970: $0) } ?? Date()
-            let id = row["row_id"]?.int.map { "row-\($0)" } ?? UUID().uuidString
+            let id = row["row_id"]?.int.map { "compaction-\($0)" } ?? UUID().uuidString
             return ChatItem(id: id, role: .system, at: at, text: "更早的对话压缩成了摘要")
+        })
+    }
+
+    /// `items` with every id distinct, from each other and from `taken`'s: a repeat gets the
+    /// first free `#2`, `#3`… suffix, in order, so the same rows come out with the same ids.
+    private func uniqued(_ items: [ChatItem], besides taken: [ChatItem] = []) -> [ChatItem] {
+        var seen = Set(taken.map(\.id))
+        return items.map { item in
+            var item = item
+            if seen.contains(item.id) {
+                let base = item.id
+                var n = 2
+                while seen.contains("\(base)#\(n)") { n += 1 }
+                item.id = "\(base)#\(n)"
+            }
+            seen.insert(item.id)
+            return item
         }
     }
 
@@ -556,7 +576,9 @@ extension AppStore {
 
     private func chatItem(from row: JSONValue) -> ChatItem? {
         let at = row["timestamp"]?.number.map { Date(timeIntervalSince1970: $0) } ?? Date()
-        let id = row["row_id"]?.int.map { "row-\($0)" } ?? row["row_id"]?.string ?? UUID().uuidString
+        // Hermes's tool rows have no row_id; their call's id keeps them the same across reads
+        let id = row["row_id"]?.int.map { "row-\($0)" } ?? row["row_id"]?.string
+            ?? row["tool_call_id"]?.string.map { "tool-\($0)" } ?? UUID().uuidString
         switch row["role"]?.string {
         case "user":
             guard row["display_kind"]?.string != "hidden" else { return nil }

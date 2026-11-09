@@ -68,14 +68,32 @@ RESPOND_KEYS = {"profile", "session_id", "execution_generation", "prompt_id", "c
 
 
 def seed_transcripts():
-    """詩音's Bot Chat: 130 numbered messages, a compaction marker near the start, a greeting last."""
+    """詩音's Bot Chat: 130 numbered messages and a greeting last, shaped as Hermes projects them
+    (gateway/session_transcript_rows.py, tui_gateway/session_history.py): a compaction row has the
+    row_id of the message it was stored on and comes just before it, and that message still shows
+    when it holds real content too; tool rows have no row_id, only their call's id. The first
+    compaction is on 第 1 条, with two tool rows after it; the second is on 第 32 条, which leads the
+    second page, so the compaction is the last row of the third."""
     start = time.time() - 86400
-    rows = [{"row_id": 1, "row_kind": "compaction", "role": "system", "text": "（之前 40 条的摘要）",
-             "compacted_messages": 40, "timestamp": start}]
+    rows = []
+
+    def compaction(row_id, folded, at):
+        rows.append({"row_id": row_id, "row_kind": "compaction", "role": "system", "text": f"（之前 {folded} 条的摘要）",
+                     "compacted_messages": folded, "timestamp": at})
+
     for n in range(1, 131):
         who = "user" if n % 2 else "assistant"
+        at = start + n * 60
+        if n == 1:
+            compaction(n + 1, 40, at)
+        if n == 32:
+            compaction(n + 1, 70, at)
         rows.append({"row_id": n + 1, "row_kind": "message", "role": who,
-                     "text": f"第 {n} 条（{'你' if who == 'user' else '詩音'}）", "timestamp": start + n * 60})
+                     "text": f"第 {n} 条（{'你' if who == 'user' else '詩音'}）", "timestamp": at})
+        if n == 1:
+            for call, context in (("call-ci-1", "第 1 条问的"), ("call-ci-2", "再查一次")):
+                rows.append({"row_kind": "message", "role": "tool", "name": "web_search", "context": context,
+                             "tool_call_id": call, "timestamp": at + 10})
     rows.append({"row_id": 200, "row_kind": "message", "role": "assistant", "text": "CI 替身服务器连上了。",
                  "timestamp": time.time()})
     transcripts["sess-shion"] = rows

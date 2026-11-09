@@ -128,7 +128,7 @@ enum ChatRole {
 }
 
 struct ChatItem: Identifiable, Hashable {
-    let id: String
+    var id: String
     let role: ChatRole
     let at: Date
     var text = ""
