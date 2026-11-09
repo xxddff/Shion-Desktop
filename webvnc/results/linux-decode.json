@@ -1,0 +1,198 @@
+{
+  "sample": {
+    "file": "novnc-scroll.messages.z",
+    "updates": 87,
+    "MB": 17.76,
+    "recorded": "2026-11-09T16:30:57.861Z",
+    "xvnc": "TigerVNC 1.13.1"
+  },
+  "machine": {
+    "cpus": 4,
+    "model": "Intel(R) Xeon(R) Processor @ 2.10GHz"
+  },
+  "repeat": 3,
+  "summary": {
+    "chrome relay": {
+      "seconds": 1.52,
+      "MBps": 11.7,
+      "engineCPU": 2.6,
+      "webProcessCPU": 1.59,
+      "uiProcessCPU": 0.87,
+      "relayCPU": 0.14,
+      "channelCPU": null
+    },
+    "chrome channel": {
+      "seconds": 2.33,
+      "MBps": 7.6,
+      "engineCPU": 2.92,
+      "webProcessCPU": 1.94,
+      "uiProcessCPU": 0.93,
+      "relayCPU": null,
+      "channelCPU": 0.62
+    },
+    "webkitgtk relay": {
+      "seconds": 2.75,
+      "MBps": 6.5,
+      "engineCPU": 7.9,
+      "webProcessCPU": 5.73,
+      "uiProcessCPU": 2.07,
+      "relayCPU": 0.14,
+      "channelCPU": null
+    },
+    "webkitgtk channel": {
+      "seconds": 2.75,
+      "MBps": 6.5,
+      "engineCPU": 7.67,
+      "webProcessCPU": 5.47,
+      "uiProcessCPU": 2.19,
+      "relayCPU": null,
+      "channelCPU": null
+    }
+  },
+  "runs": [
+    {
+      "engine": "chrome",
+      "transport": "relay",
+      "updates": 87,
+      "bytesIn": 17751893,
+      "seconds": 1.521,
+      "engineCPU": 2.5700000000000003,
+      "webProcessCPU": 1.58,
+      "uiProcessCPU": 0.87,
+      "relayCPU": 0.14,
+      "channelCPU": null
+    },
+    {
+      "engine": "chrome",
+      "transport": "relay",
+      "updates": 87,
+      "bytesIn": 17751893,
+      "seconds": 1.465,
+      "engineCPU": 2.5999999999999996,
+      "webProcessCPU": 1.5899999999999999,
+      "uiProcessCPU": 0.8700000000000001,
+      "relayCPU": 0.141,
+      "channelCPU": null
+    },
+    {
+      "engine": "chrome",
+      "transport": "relay",
+      "updates": 87,
+      "bytesIn": 17751893,
+      "seconds": 1.612,
+      "engineCPU": 2.7800000000000007,
+      "webProcessCPU": 1.7200000000000002,
+      "uiProcessCPU": 0.9199999999999999,
+      "relayCPU": 0.147,
+      "channelCPU": null
+    },
+    {
+      "engine": "chrome",
+      "transport": "channel",
+      "updates": 87,
+      "bytesIn": 17751893,
+      "seconds": 2.24,
+      "engineCPU": 2.8900000000000006,
+      "webProcessCPU": 1.8900000000000001,
+      "uiProcessCPU": 0.9300000000000002,
+      "relayCPU": null,
+      "channelCPU": 0.611266
+    },
+    {
+      "engine": "chrome",
+      "transport": "channel",
+      "updates": 87,
+      "bytesIn": 17751893,
+      "seconds": 2.331,
+      "engineCPU": 2.919999999999998,
+      "webProcessCPU": 1.9599999999999997,
+      "uiProcessCPU": 0.8999999999999995,
+      "relayCPU": null,
+      "channelCPU": 0.616829
+    },
+    {
+      "engine": "chrome",
+      "transport": "channel",
+      "updates": 87,
+      "bytesIn": 17751893,
+      "seconds": 2.376,
+      "engineCPU": 2.9699999999999998,
+      "webProcessCPU": 1.94,
+      "uiProcessCPU": 0.96,
+      "relayCPU": null,
+      "channelCPU": 0.679295
+    },
+    {
+      "engine": "webkitgtk",
+      "transport": "relay",
+      "updates": 87,
+      "seconds": 2.74,
+      "webProcessCPU": 5.72,
+      "bytesIn": 17751893,
+      "relayCPU": 0.144,
+      "engineCPU": 7.82,
+      "uiProcessCPU": 2.02,
+      "channelCPU": null
+    },
+    {
+      "engine": "webkitgtk",
+      "transport": "relay",
+      "updates": 87,
+      "seconds": 2.75,
+      "webProcessCPU": 5.73,
+      "bytesIn": 17751893,
+      "relayCPU": 0.144,
+      "engineCPU": 7.9,
+      "uiProcessCPU": 2.07,
+      "channelCPU": null
+    },
+    {
+      "engine": "webkitgtk",
+      "transport": "relay",
+      "updates": 87,
+      "seconds": 2.8,
+      "webProcessCPU": 5.77,
+      "bytesIn": 17751893,
+      "relayCPU": 0.15,
+      "engineCPU": 7.97,
+      "uiProcessCPU": 2.11,
+      "channelCPU": null
+    },
+    {
+      "engine": "webkitgtk",
+      "transport": "channel",
+      "updates": 87,
+      "seconds": 2.88,
+      "webProcessCPU": 5.75,
+      "bytesIn": 17751893,
+      "engineCPU": 8,
+      "uiProcessCPU": 2.24,
+      "relayCPU": null,
+      "channelCPU": null
+    },
+    {
+      "engine": "webkitgtk",
+      "transport": "channel",
+      "updates": 87,
+      "seconds": 2.73,
+      "webProcessCPU": 5.28,
+      "bytesIn": 17751893,
+      "engineCPU": 7.42,
+      "uiProcessCPU": 2.12,
+      "relayCPU": null,
+      "channelCPU": null
+    },
+    {
+      "engine": "webkitgtk",
+      "transport": "channel",
+      "updates": 87,
+      "seconds": 2.75,
+      "webProcessCPU": 5.47,
+      "bytesIn": 17751893,
+      "engineCPU": 7.67,
+      "uiProcessCPU": 2.19,
+      "relayCPU": null,
+      "channelCPU": null
+    }
+  ]
+}

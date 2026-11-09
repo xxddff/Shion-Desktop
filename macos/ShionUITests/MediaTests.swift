@@ -116,6 +116,7 @@ final class MediaTests: XCTestCase {
         app.typeKey(",", modifierFlags: .command)
         let prefs = app.windows.matching(NSPredicate(format: "identifier CONTAINS[c] 'settings'")).firstMatch
         XCTAssertTrue(prefs.waitForExistence(timeout: 5), "no Settings window")
+        serverTab(prefs)
         let link = element("connection-state", in: prefs)
         prefs.buttons["断开"].click()
         XCTAssertEqual(XCTWaiter().wait(for: [phase("未连接", link)], timeout: 10), .completed, "did not disconnect")
@@ -192,6 +193,7 @@ final class MediaTests: XCTestCase {
         app.typeKey(",", modifierFlags: .command)
         let settings = app.windows.matching(NSPredicate(format: "identifier CONTAINS[c] 'settings'")).firstMatch
         XCTAssertTrue(settings.waitForExistence(timeout: 5), "no Settings window")
+        serverTab(settings)
         type(server, into: settings.textFields["server-address"])
         type("ci-client", into: settings.textFields["access-id"])
         type("ci-secret", into: settings.secureTextFields["access-secret"])
@@ -203,6 +205,20 @@ final class MediaTests: XCTestCase {
         }
         XCTAssertEqual(connected, .completed, "Not connected: \(state.label) / \(String(describing: state.value))")
         app.typeKey("w", modifierFlags: .command)
+    }
+
+    /// Settings opens on the tab it was last left on (BotsTests leaves 助手): 服务器.
+    @MainActor
+    private func serverTab(_ settings: XCUIElement) {
+        guard !settings.textFields["server-address"].waitForExistence(timeout: 1) else { return }
+        let tabs = [settings.toolbarButtons["服务器"], settings.toolbars.buttons["服务器"], settings.buttons["服务器"],
+                    settings.radioButtons["服务器"]]
+        if let tab = tabs.first(where: { $0.exists }) {
+            tab.click()
+        } else {
+            settings.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "服务器")).firstMatch.click()
+        }
+        XCTAssertTrue(settings.textFields["server-address"].waitForExistence(timeout: 5), "no 服务器 tab in Settings")
     }
 
     /// Towards older rows until `condition` holds: which sign of a wheel delta scrolls up is the

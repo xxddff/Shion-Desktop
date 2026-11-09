@@ -17,8 +17,9 @@
            the words (or its own caption), a blank line, "[Image attached at: <path>]" a line each,
            then "[screenshot]" per picture
 
-Server paths are a container's: the default profile (詩音) at /opt/data, the others at
-/opt/data/profiles/<name>; the bytes live in a temporary folder. Every route checks the bearer.
+Server paths are under the stand-in's Hermes home, as fake_profiles.py names it: the default
+profile at /ci/.hermes, the others (詩音 among them) at /ci/.hermes/profiles/<name>; the bytes live in
+a temporary folder. Every route checks the bearer.
 
 Turns, by the words sent:
   - pictures arrive: the reply says what each is (format, size, whether it holds a location or other
@@ -45,8 +46,7 @@ import time
 import urllib.parse
 import zlib
 
-ROOT = "/opt/data"
-DEFAULT_PROFILE = "shion"
+ROOT = "/ci/.hermes"
 INSTALL_ID = "ci-install"
 STORE = tempfile.mkdtemp(prefix="fake-hermes-media-")
 PICTURE_LIMIT = 25 * 1024 * 1024
@@ -76,7 +76,7 @@ def setup(log, valid_access, transcripts, transcript_lock):
 
 def home(profile):
     """A profile's home on the server, as Hermes names it in a container."""
-    if profile in (None, "", "current", "default", DEFAULT_PROFILE):
+    if profile in (None, "", "current", "default"):
         return ROOT
     return f"{ROOT}/profiles/{profile}"
 

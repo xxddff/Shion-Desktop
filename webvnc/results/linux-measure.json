@@ -1,0 +1,827 @@
+{
+ "setup": {
+  "cpus": 4,
+  "xvnc": "TigerVNC 1.13.1 (Ubuntu 24.04), testbed flags = Hermes launcher.sh, 1440x900",
+  "native": "rfb-probe (rfb/ at bad287b), release build, ZRLE, pipelined handshake unless -nopipe",
+  "novnc": "noVNC 1.7.0 in headless Chrome for Testing 153 (software rendering), qualityLevel 7; novnc-zrle = the native encoding list",
+  "cpu": "client: rfb-probe process / the whole Chromium process tree; hostCpu: relay.py or the Node channel host; xvncCpu: the encoder side",
+  "scroll": "a remote Chrome scrolling linux/scenes/article.html, one wheel notch per 100 ms for 5 s",
+  "latency": "150 ms added round trip in the bridge (both directions)"
+ },
+ "median_of_3": {
+  "static": {
+   "native": {
+    "firstFrameMs": 7,
+    "updates": 2,
+    "bytesDown": 10110,
+    "bytesUp": 140,
+    "cpu": 0.04,
+    "xvncCpu": 0.01,
+    "wallMs": 5262,
+    "n": 3
+   },
+   "native-nopipe": {
+    "firstFrameMs": 5,
+    "updates": 2,
+    "bytesDown": 10110,
+    "bytesUp": 140,
+    "cpu": 0.03,
+    "xvncCpu": 0.01,
+    "wallMs": 5264,
+    "n": 3
+   },
+   "novnc-relay": {
+    "firstFrameMs": 22,
+    "updates": 5,
+    "bytesDown": 111807,
+    "bytesUp": 274,
+    "cpu": 0.11,
+    "hostCpu": 0.1,
+    "xvncCpu": 0,
+    "n": 3
+   },
+   "novnc-channel": {
+    "firstFrameMs": 42,
+    "updates": 5,
+    "bytesDown": 111807,
+    "bytesUp": 274,
+    "cpu": 0.11,
+    "hostCpu": 0.12,
+    "xvncCpu": 0.01,
+    "batches": 11,
+    "n": 3
+   },
+   "novnc-zrle": {
+    "firstFrameMs": 29,
+    "updates": 2,
+    "bytesDown": 10136,
+    "bytesUp": 150,
+    "cpu": 0.13,
+    "hostCpu": 0.095,
+    "xvncCpu": 0,
+    "n": 3
+   }
+  },
+  "scroll": {
+   "native": {
+    "firstFrameMs": 7,
+    "updates": 81,
+    "bytesDown": 42793108,
+    "bytesUp": 1720,
+    "cpu": 1.03,
+    "xvncCpu": 3.95,
+    "wallMs": 6878,
+    "n": 3
+   },
+   "native-nopipe": {
+    "firstFrameMs": 8,
+    "updates": 77,
+    "bytesDown": 41125884,
+    "bytesUp": 1640,
+    "cpu": 0.98,
+    "xvncCpu": 3.85,
+    "wallMs": 6887,
+    "n": 3
+   },
+   "novnc-relay": {
+    "firstFrameMs": 24,
+    "updates": 262,
+    "bytesDown": 33620652,
+    "bytesUp": 5414,
+    "cpu": 5.84,
+    "hostCpu": 0.434,
+    "xvncCpu": 1.38,
+    "n": 3
+   },
+   "novnc-channel": {
+    "firstFrameMs": 54,
+    "updates": 221,
+    "bytesDown": 33264578,
+    "bytesUp": 4594,
+    "cpu": 6.18,
+    "hostCpu": 2.25,
+    "xvncCpu": 1.36,
+    "batches": 412,
+    "n": 3
+   },
+   "novnc-zrle": {
+    "firstFrameMs": 25,
+    "updates": 74,
+    "bytesDown": 39196673,
+    "bytesUp": 1590,
+    "cpu": 3.84,
+    "hostCpu": 0.38,
+    "xvncCpu": 3.86,
+    "n": 3
+   }
+  },
+  "scroll-150ms": {
+   "native": {
+    "firstFrameMs": 310,
+    "updates": 55,
+    "bytesDown": 28368183,
+    "bytesUp": 1200,
+    "cpu": 0.75,
+    "xvncCpu": 2.95,
+    "wallMs": 7219,
+    "n": 3
+   },
+   "native-nopipe": {
+    "firstFrameMs": 687,
+    "updates": 57,
+    "bytesDown": 29468389,
+    "bytesUp": 1240,
+    "cpu": 0.8,
+    "xvncCpu": 3.09,
+    "wallMs": 7591,
+    "n": 3
+   },
+   "novnc-relay": {
+    "firstFrameMs": 705,
+    "updates": 156,
+    "bytesDown": 21483947,
+    "bytesUp": 3294,
+    "cpu": 4.2,
+    "hostCpu": 0.323,
+    "xvncCpu": 1.08,
+    "n": 3
+   },
+   "novnc-channel": {
+    "firstFrameMs": 716,
+    "updates": 119,
+    "bytesDown": 16778119,
+    "bytesUp": 2554,
+    "cpu": 3.79,
+    "hostCpu": 1.3,
+    "xvncCpu": 1.05,
+    "batches": 196,
+    "n": 3
+   },
+   "novnc-zrle": {
+    "firstFrameMs": 714,
+    "updates": 50,
+    "bytesDown": 26301138,
+    "bytesUp": 1110,
+    "cpu": 2.77,
+    "hostCpu": 0.325,
+    "xvncCpu": 2.96,
+    "n": 3
+   }
+  },
+  "static-150ms": {
+   "native": {
+    "firstFrameMs": 308,
+    "updates": 2,
+    "bytesDown": 10110,
+    "bytesUp": 140,
+    "cpu": 0.04,
+    "xvncCpu": 0.01,
+    "wallMs": 5616,
+    "n": 3
+   },
+   "native-nopipe": {
+    "firstFrameMs": 685,
+    "updates": 2,
+    "bytesDown": 10110,
+    "bytesUp": 140,
+    "cpu": 0.05,
+    "xvncCpu": 0,
+    "wallMs": 6009,
+    "n": 3
+   },
+   "novnc-relay": {
+    "firstFrameMs": 708,
+    "updates": 39,
+    "bytesDown": 71097,
+    "bytesUp": 954,
+    "cpu": 0.25,
+    "hostCpu": 0.127,
+    "xvncCpu": 0.01,
+    "n": 3
+   },
+   "novnc-channel": {
+    "firstFrameMs": 715,
+    "updates": 39,
+    "bytesDown": 71812,
+    "bytesUp": 954,
+    "cpu": 0.24,
+    "hostCpu": 0.23,
+    "xvncCpu": 0.01,
+    "batches": 35,
+    "n": 3
+   },
+   "novnc-zrle": {
+    "firstFrameMs": 699,
+    "updates": 2,
+    "bytesDown": 10136,
+    "bytesUp": 150,
+    "cpu": 0.15,
+    "hostCpu": 0.099,
+    "xvncCpu": 0,
+    "n": 3
+   }
+  }
+ },
+ "runs": {
+  "static": {
+   "native": [
+    {
+     "firstFrameMs": 7,
+     "updates": 2,
+     "bytesDown": 10110,
+     "bytesUp": 140,
+     "cpu": 0.04,
+     "xvncCpu": 0.01,
+     "wallMs": 5268
+    },
+    {
+     "firstFrameMs": 11,
+     "updates": 2,
+     "bytesDown": 10110,
+     "bytesUp": 140,
+     "cpu": 0.04,
+     "xvncCpu": 0,
+     "wallMs": 5262
+    },
+    {
+     "firstFrameMs": 4,
+     "updates": 2,
+     "bytesDown": 10110,
+     "bytesUp": 140,
+     "cpu": 0.04,
+     "xvncCpu": 0.01,
+     "wallMs": 5254
+    }
+   ],
+   "native-nopipe": [
+    {
+     "firstFrameMs": 5,
+     "updates": 2,
+     "bytesDown": 10110,
+     "bytesUp": 140,
+     "cpu": 0.04,
+     "xvncCpu": 0.01,
+     "wallMs": 5264
+    },
+    {
+     "firstFrameMs": 5,
+     "updates": 2,
+     "bytesDown": 10110,
+     "bytesUp": 140,
+     "cpu": 0.03,
+     "xvncCpu": 0.01,
+     "wallMs": 5266
+    },
+    {
+     "firstFrameMs": 4,
+     "updates": 2,
+     "bytesDown": 10110,
+     "bytesUp": 140,
+     "cpu": 0.03,
+     "xvncCpu": 0,
+     "wallMs": 5256
+    }
+   ],
+   "novnc-relay": [
+    {
+     "firstFrameMs": 34,
+     "updates": 5,
+     "bytesDown": 111807,
+     "bytesUp": 274,
+     "cpu": 0.13,
+     "hostCpu": 0.102,
+     "xvncCpu": 0
+    },
+    {
+     "firstFrameMs": 21,
+     "updates": 5,
+     "bytesDown": 97567,
+     "bytesUp": 274,
+     "cpu": 0.1,
+     "hostCpu": 0.095,
+     "xvncCpu": 0
+    },
+    {
+     "firstFrameMs": 22,
+     "updates": 5,
+     "bytesDown": 111807,
+     "bytesUp": 274,
+     "cpu": 0.11,
+     "hostCpu": 0.1,
+     "xvncCpu": 0.01
+    }
+   ],
+   "novnc-channel": [
+    {
+     "firstFrameMs": 43,
+     "updates": 5,
+     "bytesDown": 110093,
+     "bytesUp": 274,
+     "cpu": 0.1,
+     "hostCpu": 0.13,
+     "xvncCpu": 0.01,
+     "batches": 11
+    },
+    {
+     "firstFrameMs": 33,
+     "updates": 5,
+     "bytesDown": 113544,
+     "bytesUp": 274,
+     "cpu": 0.11,
+     "hostCpu": 0.08,
+     "xvncCpu": 0.01,
+     "batches": 11
+    },
+    {
+     "firstFrameMs": 42,
+     "updates": 5,
+     "bytesDown": 111807,
+     "bytesUp": 274,
+     "cpu": 0.11,
+     "hostCpu": 0.12,
+     "xvncCpu": 0,
+     "batches": 11
+    }
+   ],
+   "novnc-zrle": [
+    {
+     "firstFrameMs": 27,
+     "updates": 2,
+     "bytesDown": 10136,
+     "bytesUp": 150,
+     "cpu": 0.13,
+     "hostCpu": 0.095,
+     "xvncCpu": 0
+    },
+    {
+     "firstFrameMs": 29,
+     "updates": 2,
+     "bytesDown": 10136,
+     "bytesUp": 150,
+     "cpu": 0.11,
+     "hostCpu": 0.127,
+     "xvncCpu": 0
+    },
+    {
+     "firstFrameMs": 32,
+     "updates": 2,
+     "bytesDown": 10136,
+     "bytesUp": 150,
+     "cpu": 0.13,
+     "hostCpu": 0.094,
+     "xvncCpu": 0.01
+    }
+   ]
+  },
+  "scroll": {
+   "native": [
+    {
+     "firstFrameMs": 7,
+     "updates": 81,
+     "bytesDown": 42793108,
+     "bytesUp": 1720,
+     "cpu": 1.05,
+     "xvncCpu": 4.03,
+     "wallMs": 6878
+    },
+    {
+     "firstFrameMs": 6,
+     "updates": 81,
+     "bytesDown": 43032446,
+     "bytesUp": 1720,
+     "cpu": 1.03,
+     "xvncCpu": 3.95,
+     "wallMs": 6871
+    },
+    {
+     "firstFrameMs": 7,
+     "updates": 80,
+     "bytesDown": 42327590,
+     "bytesUp": 1700,
+     "cpu": 1.02,
+     "xvncCpu": 3.95,
+     "wallMs": 6885
+    }
+   ],
+   "native-nopipe": [
+    {
+     "firstFrameMs": 11,
+     "updates": 80,
+     "bytesDown": 42298740,
+     "bytesUp": 1700,
+     "cpu": 0.97,
+     "xvncCpu": 3.85,
+     "wallMs": 6887
+    },
+    {
+     "firstFrameMs": 7,
+     "updates": 76,
+     "bytesDown": 40177525,
+     "bytesUp": 1620,
+     "cpu": 0.98,
+     "xvncCpu": 3.89,
+     "wallMs": 6903
+    },
+    {
+     "firstFrameMs": 8,
+     "updates": 77,
+     "bytesDown": 41125884,
+     "bytesUp": 1640,
+     "cpu": 0.99,
+     "xvncCpu": 3.81,
+     "wallMs": 6879
+    }
+   ],
+   "novnc-relay": [
+    {
+     "firstFrameMs": 24,
+     "updates": 262,
+     "bytesDown": 33568754,
+     "bytesUp": 5414,
+     "cpu": 5.84,
+     "hostCpu": 0.424,
+     "xvncCpu": 1.37
+    },
+    {
+     "firstFrameMs": 27,
+     "updates": 264,
+     "bytesDown": 33620652,
+     "bytesUp": 5454,
+     "cpu": 5.8,
+     "hostCpu": 0.442,
+     "xvncCpu": 1.38
+    },
+    {
+     "firstFrameMs": 22,
+     "updates": 256,
+     "bytesDown": 33862566,
+     "bytesUp": 5294,
+     "cpu": 6.02,
+     "hostCpu": 0.434,
+     "xvncCpu": 1.38
+    }
+   ],
+   "novnc-channel": [
+    {
+     "firstFrameMs": 59,
+     "updates": 214,
+     "bytesDown": 33264578,
+     "bytesUp": 4454,
+     "cpu": 6.18,
+     "hostCpu": 2.4,
+     "xvncCpu": 1.36,
+     "batches": 420
+    },
+    {
+     "firstFrameMs": 32,
+     "updates": 221,
+     "bytesDown": 33118856,
+     "bytesUp": 4594,
+     "cpu": 6.15,
+     "hostCpu": 2.25,
+     "xvncCpu": 1.35,
+     "batches": 412
+    },
+    {
+     "firstFrameMs": 54,
+     "updates": 257,
+     "bytesDown": 33515692,
+     "bytesUp": 5314,
+     "cpu": 6.54,
+     "hostCpu": 2.05,
+     "xvncCpu": 1.41,
+     "batches": 380
+    }
+   ],
+   "novnc-zrle": [
+    {
+     "firstFrameMs": 25,
+     "updates": 74,
+     "bytesDown": 39196673,
+     "bytesUp": 1590,
+     "cpu": 3.65,
+     "hostCpu": 0.364,
+     "xvncCpu": 3.79
+    },
+    {
+     "firstFrameMs": 26,
+     "updates": 79,
+     "bytesDown": 41721957,
+     "bytesUp": 1690,
+     "cpu": 3.91,
+     "hostCpu": 0.38,
+     "xvncCpu": 3.93
+    },
+    {
+     "firstFrameMs": 24,
+     "updates": 69,
+     "bytesDown": 36389672,
+     "bytesUp": 1490,
+     "cpu": 3.84,
+     "hostCpu": 0.381,
+     "xvncCpu": 3.86
+    }
+   ]
+  },
+  "scroll-150ms": {
+   "native": [
+    {
+     "firstFrameMs": 310,
+     "updates": 58,
+     "bytesDown": 29608040,
+     "bytesUp": 1260,
+     "cpu": 0.76,
+     "xvncCpu": 2.9,
+     "wallMs": 7245
+    },
+    {
+     "firstFrameMs": 309,
+     "updates": 54,
+     "bytesDown": 26861329,
+     "bytesUp": 1180,
+     "cpu": 0.73,
+     "xvncCpu": 3.04,
+     "wallMs": 7211
+    },
+    {
+     "firstFrameMs": 310,
+     "updates": 55,
+     "bytesDown": 28368183,
+     "bytesUp": 1200,
+     "cpu": 0.75,
+     "xvncCpu": 2.95,
+     "wallMs": 7219
+    }
+   ],
+   "native-nopipe": [
+    {
+     "firstFrameMs": 687,
+     "updates": 58,
+     "bytesDown": 30166389,
+     "bytesUp": 1260,
+     "cpu": 0.8,
+     "xvncCpu": 3.09,
+     "wallMs": 7606
+    },
+    {
+     "firstFrameMs": 686,
+     "updates": 57,
+     "bytesDown": 29361289,
+     "bytesUp": 1240,
+     "cpu": 0.81,
+     "xvncCpu": 3.13,
+     "wallMs": 7591
+    },
+    {
+     "firstFrameMs": 691,
+     "updates": 55,
+     "bytesDown": 29468389,
+     "bytesUp": 1200,
+     "cpu": 0.72,
+     "xvncCpu": 3.05,
+     "wallMs": 7586
+    }
+   ],
+   "novnc-relay": [
+    {
+     "firstFrameMs": 714,
+     "updates": 156,
+     "bytesDown": 21483947,
+     "bytesUp": 3294,
+     "cpu": 4.2,
+     "hostCpu": 0.323,
+     "xvncCpu": 1.08
+    },
+    {
+     "firstFrameMs": 704,
+     "updates": 147,
+     "bytesDown": 19881633,
+     "bytesUp": 3114,
+     "cpu": 3.86,
+     "hostCpu": 0.292,
+     "xvncCpu": 1.05
+    },
+    {
+     "firstFrameMs": 705,
+     "updates": 163,
+     "bytesDown": 21970221,
+     "bytesUp": 3434,
+     "cpu": 4.39,
+     "hostCpu": 0.333,
+     "xvncCpu": 1.18
+    }
+   ],
+   "novnc-channel": [
+    {
+     "firstFrameMs": 718,
+     "updates": 117,
+     "bytesDown": 16778119,
+     "bytesUp": 2514,
+     "cpu": 3.79,
+     "hostCpu": 1.3,
+     "xvncCpu": 1.05,
+     "batches": 183
+    },
+    {
+     "firstFrameMs": 714,
+     "updates": 119,
+     "bytesDown": 15514121,
+     "bytesUp": 2554,
+     "cpu": 3.2,
+     "hostCpu": 1.18,
+     "xvncCpu": 0.94,
+     "batches": 232
+    },
+    {
+     "firstFrameMs": 716,
+     "updates": 139,
+     "bytesDown": 19056979,
+     "bytesUp": 2954,
+     "cpu": 4.29,
+     "hostCpu": 1.36,
+     "xvncCpu": 1.06,
+     "batches": 196
+    }
+   ],
+   "novnc-zrle": [
+    {
+     "firstFrameMs": 714,
+     "updates": 50,
+     "bytesDown": 26301138,
+     "bytesUp": 1110,
+     "cpu": 2.76,
+     "hostCpu": 0.327,
+     "xvncCpu": 2.83
+    },
+    {
+     "firstFrameMs": 706,
+     "updates": 56,
+     "bytesDown": 29690013,
+     "bytesUp": 1230,
+     "cpu": 3.03,
+     "hostCpu": 0.325,
+     "xvncCpu": 3.01
+    },
+    {
+     "firstFrameMs": 715,
+     "updates": 50,
+     "bytesDown": 26191450,
+     "bytesUp": 1110,
+     "cpu": 2.77,
+     "hostCpu": 0.289,
+     "xvncCpu": 2.96
+    }
+   ]
+  },
+  "static-150ms": {
+   "native": [
+    {
+     "firstFrameMs": 310,
+     "updates": 2,
+     "bytesDown": 10110,
+     "bytesUp": 140,
+     "cpu": 0.03,
+     "xvncCpu": 0.02,
+     "wallMs": 5666
+    },
+    {
+     "firstFrameMs": 308,
+     "updates": 2,
+     "bytesDown": 10110,
+     "bytesUp": 140,
+     "cpu": 0.04,
+     "xvncCpu": 0,
+     "wallMs": 5615
+    },
+    {
+     "firstFrameMs": 308,
+     "updates": 2,
+     "bytesDown": 10110,
+     "bytesUp": 140,
+     "cpu": 0.04,
+     "xvncCpu": 0.01,
+     "wallMs": 5616
+    }
+   ],
+   "native-nopipe": [
+    {
+     "firstFrameMs": 685,
+     "updates": 2,
+     "bytesDown": 10110,
+     "bytesUp": 140,
+     "cpu": 0.06,
+     "xvncCpu": 0,
+     "wallMs": 6009
+    },
+    {
+     "firstFrameMs": 684,
+     "updates": 2,
+     "bytesDown": 10110,
+     "bytesUp": 140,
+     "cpu": 0.05,
+     "xvncCpu": 0.01,
+     "wallMs": 5997
+    },
+    {
+     "firstFrameMs": 685,
+     "updates": 2,
+     "bytesDown": 10110,
+     "bytesUp": 140,
+     "cpu": 0.03,
+     "xvncCpu": 0,
+     "wallMs": 6010
+    }
+   ],
+   "novnc-relay": [
+    {
+     "firstFrameMs": 712,
+     "updates": 39,
+     "bytesDown": 71034,
+     "bytesUp": 954,
+     "cpu": 0.21,
+     "hostCpu": 0.127,
+     "xvncCpu": 0.01
+    },
+    {
+     "firstFrameMs": 708,
+     "updates": 39,
+     "bytesDown": 74196,
+     "bytesUp": 954,
+     "cpu": 0.25,
+     "hostCpu": 0.137,
+     "xvncCpu": 0.01
+    },
+    {
+     "firstFrameMs": 707,
+     "updates": 39,
+     "bytesDown": 71097,
+     "bytesUp": 954,
+     "cpu": 0.25,
+     "hostCpu": 0.121,
+     "xvncCpu": 0.01
+    }
+   ],
+   "novnc-channel": [
+    {
+     "firstFrameMs": 715,
+     "updates": 39,
+     "bytesDown": 71812,
+     "bytesUp": 954,
+     "cpu": 0.27,
+     "hostCpu": 0.24,
+     "xvncCpu": 0.02,
+     "batches": 32
+    },
+    {
+     "firstFrameMs": 715,
+     "updates": 39,
+     "bytesDown": 72406,
+     "bytesUp": 954,
+     "cpu": 0.24,
+     "hostCpu": 0.23,
+     "xvncCpu": 0.01,
+     "batches": 40
+    },
+    {
+     "firstFrameMs": 711,
+     "updates": 39,
+     "bytesDown": 71350,
+     "bytesUp": 954,
+     "cpu": 0.23,
+     "hostCpu": 0.22,
+     "xvncCpu": 0.01,
+     "batches": 35
+    }
+   ],
+   "novnc-zrle": [
+    {
+     "firstFrameMs": 699,
+     "updates": 2,
+     "bytesDown": 10136,
+     "bytesUp": 150,
+     "cpu": 0.14,
+     "hostCpu": 0.108,
+     "xvncCpu": 0.01
+    },
+    {
+     "firstFrameMs": 702,
+     "updates": 2,
+     "bytesDown": 10136,
+     "bytesUp": 150,
+     "cpu": 0.17,
+     "hostCpu": 0.099,
+     "xvncCpu": 0
+    },
+    {
+     "firstFrameMs": 699,
+     "updates": 2,
+     "bytesDown": 10136,
+     "bytesUp": 150,
+     "cpu": 0.15,
+     "hostCpu": 0.098,
+     "xvncCpu": 0
+    }
+   ]
+  }
+ }
+}

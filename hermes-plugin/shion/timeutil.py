@@ -3,19 +3,41 @@
 from __future__ import annotations
 
 import re
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone, tzinfo
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .errors import ShionError
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
+# Zones that keep one offset all year. A host without the IANA database (Hermes's image is
+# Debian 13 with --no-install-recommends, which no longer brings tzdata) still gets these right.
+_FIXED_ZONES = {
+    "Asia/Tokyo": 9 * 60, "Asia/Seoul": 9 * 60, "Asia/Shanghai": 8 * 60, "Asia/Hong_Kong": 8 * 60,
+    "Asia/Taipei": 8 * 60, "Asia/Singapore": 8 * 60, "UTC": 0, "Etc/UTC": 0,
+}
 
-def zone(name: str) -> ZoneInfo:
+
+def zone(name: str) -> tzinfo:
     try:
         return ZoneInfo(name)
-    except (ZoneInfoNotFoundError, ValueError) as exc:
+    except ZoneInfoNotFoundError as exc:
+        minutes = _FIXED_ZONES.get(name)
+        if minutes is not None:
+            return timezone(timedelta(minutes=minutes), name)
+        missing = "" if tz_database() else " (this host has no time zone database; install tzdata)"
+        raise ShionError("invalid_params", f"unknown time zone {name!r}{missing}") from exc
+    except ValueError as exc:
         raise ShionError("invalid_params", f"unknown time zone {name!r}") from exc
+
+
+def tz_database() -> bool:
+    """Whether zoneinfo finds the IANA database on this host."""
+    try:
+        ZoneInfo("Europe/London")
+        return True
+    except (ZoneInfoNotFoundError, ValueError):
+        return False
 
 
 def to_storage(moment: datetime) -> str:

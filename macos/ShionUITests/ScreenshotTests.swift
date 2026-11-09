@@ -30,6 +30,23 @@ final class ScreenshotTests: XCTestCase {
         }
     }
 
+    /// 詩音's own settings page (`assistant-shion`), on the demo's content.
+    @MainActor
+    func testAssistantPage() throws {
+        continueAfterFailure = true
+        for appearance in ["light", "dark"] {
+            let app = launch(route: "assistant-shion", appearance: appearance)
+            let window = app.windows.firstMatch
+            if window.waitForExistence(timeout: 20) {
+                Thread.sleep(forTimeInterval: 1)
+                keep(window.screenshot(), name: "assistant-shion-\(appearance)")
+            } else {
+                XCTFail("No window for the assistant page (\(appearance))")
+            }
+            app.terminate()
+        }
+    }
+
     @MainActor
     func testMenuBarAndSettings() throws {
         continueAfterFailure = true
@@ -114,6 +131,12 @@ final class ScreenshotTests: XCTestCase {
         guard settings.waitForExistence(timeout: 5) else {
             keep(XCUIScreen.main.screenshot(), name: "settings-media-screen")
             return XCTFail("No Settings window")
+        }
+        // on its 服务器 tab, where the section is
+        if !settings.textFields["server-address"].waitForExistence(timeout: 1) {
+            let tabs = [settings.toolbarButtons["服务器"], settings.toolbars.buttons["服务器"], settings.buttons["服务器"],
+                        settings.radioButtons["服务器"]]
+            tabs.first(where: { $0.exists })?.click()
         }
         let usage = settings.descendants(matching: .any).matching(identifier: "media-cache").firstMatch
         let form = settings.scrollViews.firstMatch

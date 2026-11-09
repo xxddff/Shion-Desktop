@@ -1,0 +1,86 @@
+[
+  {
+    "name": "webkitgtk: the page from a custom scheme (ES modules, secure context, CSP)",
+    "ok": true,
+    "detail": {
+      "engine": "WebKitGTK 2.52.6",
+      "ready": {
+        "secureContext": true,
+        "subtleCrypto": true,
+        "nativeBase64": true,
+        "origin": "shion-webvnc://app"
+      },
+      "csp": {
+        "ua": "Mozilla/5.0 (X11; Ubuntu; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/60.5 Safari/605.1.15",
+        "inlineRan": false,
+        "fetchBlocked": true
+      },
+      "notRegisteredAsSecure": {
+        "secureContext": true,
+        "subtleCrypto": true,
+        "nativeBase64": true,
+        "origin": "shion-webvnc://app"
+      }
+    }
+  },
+  {
+    "name": "webkitgtk: relay, holder — clipboard + Ctrl+V reaches the remote",
+    "ok": true,
+    "detail": {
+      "firstFrameMs": 85,
+      "typed": {
+        "ok": true,
+        "bytes": 25
+      },
+      "origin": "shion-webvnc://app",
+      "sentUpstream": 1000
+    }
+  },
+  {
+    "name": "webkitgtk: HostChannel, holder — no socket in the page",
+    "ok": true,
+    "detail": {
+      "firstFrameMs": 110,
+      "typed": {
+        "ok": true,
+        "bytes": 5
+      },
+      "channel": {
+        "batches": 17,
+        "bytes_down": 49990,
+        "bytes_up": 439,
+        "close": 1000
+      }
+    }
+  },
+  {
+    "name": "webkitgtk: decode a recorded Chrome scroll (87 updates, 17.8 MB) through the relay",
+    "ok": true,
+    "detail": {
+      "updates": 87,
+      "seconds": 3.33,
+      "cpu": 9.3,
+      "webProcessCPU": 6.78,
+      "hostCPU": 2.43,
+      "bytesIn": 17751893
+    }
+  },
+  {
+    "name": "webkitgtk: decode a recorded Chrome scroll (87 updates, 17.8 MB) through the channel",
+    "ok": true,
+    "detail": {
+      "updates": 87,
+      "seconds": 3.15,
+      "cpu": 8.6,
+      "webProcessCPU": 6.14,
+      "hostCPU": 2.44,
+      "bytesIn": 17751893,
+      "channel": {
+        "batches": 2,
+        "bytes_down": 17751893,
+        "bytes_up": 1910,
+        "close": 1000
+      }
+    }
+  }
+]
