@@ -137,25 +137,30 @@ final class SignInTests: XCTestCase {
         // which sign of a wheel delta scrolls up is the runner's business: nudge, and see which
         // way a row on screen moved. Towards older messages rows move down; the chat is at its
         // bottom, so a nudge the other way moves nothing.
-        var direction: CGFloat = 1
+        // The wheel turns at the transcript's left margin, in no row (as BoardTests does).
+        let wheel = transcript.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.4))
+        var direction: CGFloat = -1
         if let row = findText("第 124 条", in: app) {
-            let before = row.frame.minY
-            transcript.hover()
-            transcript.scroll(byDeltaX: 0, deltaY: 200)
-            Thread.sleep(forTimeInterval: 0.5)
-            direction = row.exists && row.frame.minY > before + 1 ? 1 : -1
-            print("wheel: +200 moved 第 124 条 from \(before) to \(row.exists ? row.frame.minY : -1); up is \(direction)")
+            for sign: CGFloat in [1, -1] {
+                let before = row.frame.minY
+                wheel.scroll(byDeltaX: 0, deltaY: sign * 40)
+                Thread.sleep(forTimeInterval: 0.5)
+                let after = row.exists ? row.frame.minY : -1
+                positions.append("wheel: \(sign * 40) moved 第 124 条 from \(before) to \(after)")
+                if after > before + 1 {
+                    direction = sign
+                    break
+                }
+            }
         }
         var reachedTop = false
         var sawSecondPage = false
         for _ in 0..<40 {
-            // wheel events go where the pointer is: put it on the transcript, not the composer
-            transcript.hover()
             if !sawSecondPage {
                 // a little at a time until the second page lands: 第 82 条 led the first page, and
                 // when 第 81 条 and the rest come in above it, it stays in view where it was
                 let before = findText("第 82 条", in: app).map { $0.frame.minY }
-                transcript.scroll(byDeltaX: 0, deltaY: direction * 300)
+                wheel.scroll(byDeltaX: 0, deltaY: direction * 300)
                 if waitForText("第 81 条", in: app, timeout: 1.2) {
                     sawSecondPage = true
                     Thread.sleep(forTimeInterval: 0.3)
@@ -168,7 +173,7 @@ final class SignInTests: XCTestCase {
                 }
                 continue
             }
-            transcript.scroll(byDeltaX: 0, deltaY: direction * 1200)
+            wheel.scroll(byDeltaX: 0, deltaY: direction * 1200)
             if waitForText("第 1 条（你）", in: app, timeout: 1.5) {
                 reachedTop = true
                 break
@@ -178,8 +183,7 @@ final class SignInTests: XCTestCase {
         // stored on, as Hermes sends it: both rows show, with the tool calls after it in one line
         var summarized = waitForText("更早的对话压缩成了摘要", in: app, timeout: 2)
         if reachedTop && !summarized {
-            transcript.hover()
-            transcript.scroll(byDeltaX: 0, deltaY: direction * 1200)
+            wheel.scroll(byDeltaX: 0, deltaY: direction * 1200)
             summarized = waitForText("更早的对话压缩成了摘要", in: app, timeout: 3)
         }
         keep(window.screenshot(), "signin-6-oldest")

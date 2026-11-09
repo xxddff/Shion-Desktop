@@ -19,34 +19,46 @@ struct ChatView: View {
         let bot = store.bot(botId)
         let items = store.chats[botId] ?? []
         let lines = ChatLine.lines(items, replying: store.replying.contains(botId))
-        ScrollViewReader { reader in
-            transcript(lines, bot: bot)
-                // older rows arrived above: the rows that were at the top stay where they were (a
-                // run of tool calls the page boundary cut is one line with the calls before it)
-                .onChange(of: items.first?.id) { previous, _ in
-                    guard let previous, let line = lines.first(where: { line in line.items.contains { $0.id == previous } }) else { return }
-                    reader.scrollTo(line.id, anchor: .top)
+        Group {
+            // the transcript is made once there is something in it: it starts at its newest
+            // message with the rows there, and nothing has to be followed down to get there
+            if items.isEmpty {
+                Color.clear
+            } else {
+                ScrollViewReader { reader in
+                    transcript(lines, bot: bot)
+                        // older rows arrived above: the rows that were at the top stay where they
+                        // were (a run of tool calls the page boundary cut is one line with the
+                        // calls before it)
+                        .onChange(of: items.first?.id) { previous, _ in
+                            guard let previous,
+                                  let line = lines.first(where: { line in line.items.contains { $0.id == previous } })
+                            else { return }
+                            reader.scrollTo(line.id, anchor: .top)
+                        }
+                        // a message came, a reply grew or finished, a call was made: followed down
+                        // while the reader is at the end. Opening or closing a run changes none of
+                        // this, so the transcript keeps its top and the run's line stays put.
+                        .onChange(of: TranscriptEnd(lines)) {
+                            guard follow.on, let last = lines.last else { return }
+                            follow.until = Date().addingTimeInterval(1)
+                            reader.scrollTo(last.id, anchor: .bottom)
+                        }
+                        // the reader scrolled: to the end, or away from it. When the content's
+                        // height changed it was not the reader: the newest rows taking their real
+                        // heights, followed for a moment after a message, or a run opening
+                        .onScrollGeometryChange(for: EndGap.self) { geometry in
+                            EndGap(below: geometry.contentSize.height - geometry.visibleRect.maxY,
+                                   height: geometry.contentSize.height)
+                        } action: { old, new in
+                            if new.height == old.height {
+                                follow.on = new.below <= 40
+                            } else if follow.on, Date() < follow.until, new.below > 1, let last = lines.last {
+                                reader.scrollTo(last.id, anchor: .bottom)
+                            }
+                        }
                 }
-                // a message came, a reply grew or finished, a call was made: followed down while
-                // the reader is at the end. Opening or closing a run changes none of this, so the
-                // transcript keeps its top and the run's line stays under the pointer.
-                .onChange(of: TranscriptEnd(lines)) {
-                    guard follow.on, let last = lines.last else { return }
-                    follow.until = Date().addingTimeInterval(1)
-                    reader.scrollTo(last.id, anchor: .bottom)
-                }
-                // the reader scrolled: to the end, or away from it. When the content's height
-                // changed it was not the reader: the newest rows taking their real heights, which
-                // is followed for a moment after a message, or a run of tool calls opening
-                .onScrollGeometryChange(for: EndGap.self) { geometry in
-                    EndGap(below: geometry.contentSize.height - geometry.visibleRect.maxY, height: geometry.contentSize.height)
-                } action: { old, new in
-                    if new.height == old.height {
-                        follow.on = new.below <= 40
-                    } else if follow.on, Date() < follow.until, new.below > 1, let last = lines.last {
-                        reader.scrollTo(last.id, anchor: .bottom)
-                    }
-                }
+            }
         }
         .overlay {
             if let error = store.chatErrors[botId] {
