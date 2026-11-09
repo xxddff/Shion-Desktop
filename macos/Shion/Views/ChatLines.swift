@@ -54,65 +54,6 @@ enum ChatLine: Identifiable {
     }
 }
 
-/// Keeps the transcript where it is while a run of tool calls opens or closes. The transcript keeps
-/// its bottom as its content grows or shrinks (that is how it follows new messages), so a run
-/// opening anywhere would push what is above it up, the run's own line too. `top` is how far the
-/// content is scrolled; a hold keeps it as it is, and when it moves, a mark laid there is scrolled
-/// to the top. How far from the mark a scroll to it leaves the top (the insets, as the scroll view
-/// counts them) shows after the first one, and is allowed for from then on.
-final class TopKeeper {
-    /// How far the content is scrolled, as it last moved to; nil until it has moved.
-    private(set) var top: CGFloat?
-    private var kept: CGFloat?
-    private var until = Date.distantPast
-    private var tries = 0
-    /// Where the mark was asked for last, and whether the scroll to it is yet to show.
-    private var mark: CGFloat = 0
-    private var scrolled = false
-    /// Where a scroll to the mark leaves the top, from the mark.
-    private var landing: CGFloat = 0
-
-    /// A run is about to open or close: the top stays as it is now, for a while. Where to lay the
-    /// mark; nil while the top is not known, which the first move then tells.
-    func hold(for seconds: TimeInterval = 1, now: Date = Date()) -> CGFloat? {
-        until = now.addingTimeInterval(seconds)
-        tries = 0
-        scrolled = false
-        kept = top
-        guard let top else { return nil }
-        mark = top - landing
-        return mark
-    }
-
-    /// The content was scrolled from `oldTop` to `newTop`. While held and away from the kept top:
-    /// where to lay the mark, which is then scrolled to the top.
-    func moved(from oldTop: CGFloat, to newTop: CGFloat, now: Date = Date()) -> CGFloat? {
-        top = newTop
-        guard now < until, tries < 5 else {
-            kept = nil
-            until = .distantPast
-            return nil
-        }
-        let held = kept ?? oldTop
-        kept = held
-        if scrolled {
-            landing = newTop - mark
-            scrolled = false
-        }
-        guard abs(newTop - held) > 0.5 else { return nil }
-        tries += 1
-        mark = held - landing
-        scrolled = true
-        return mark
-    }
-
-    /// Held, and the top still away from the kept one: a scroll to the mark did not take.
-    func away(now: Date = Date()) -> Bool {
-        guard now < until, let kept, let top else { return false }
-        return abs(top - kept) > 0.5
-    }
-}
-
 extension ChatItem {
     /// A tool call's tool: its line reads "name · context" (AppStore.toolLine).
     var toolName: String {

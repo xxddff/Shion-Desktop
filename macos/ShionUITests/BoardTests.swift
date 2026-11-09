@@ -249,16 +249,18 @@ final class BoardTests: XCTestCase {
             return XCTFail("no button for the folded tool calls, or no reply below it")
         }
         var positions: [String] = []
-        openAndClose(run, above: reply, in: app, window: window, "at the end",
-                     shots: ("board-14-chat-tools-opened", "board-15-chat-tools-closed"), positions: &positions)
-        let back = scrollBack(over: run, by: 120)
-        positions.append("scrolled back from the end: the line moved \(back)")
-        if back >= 90 {
-            openAndClose(run, above: reply, in: app, window: window, "scrolled back",
-                         shots: ("board-16-chat-tools-opened-midway", "board-17-chat-tools-closed-midway"), positions: &positions)
-        } else {
-            keep(window.screenshot(), "board-16-not-scrolled-back")
-            XCTFail("the chat did not scroll back from its end: the line moved \(back)")
+        let measured = openAndClose(run, above: reply, in: app, window: window, "at the end",
+                                    shots: ("board-14-chat-tools-opened", "board-15-chat-tools-closed"), positions: &positions)
+        if measured {
+            let back = scrollBack(over: run, by: 120)
+            positions.append("scrolled back from the end: the line moved \(back)")
+            if back >= 90 {
+                openAndClose(run, above: reply, in: app, window: window, "scrolled back",
+                             shots: ("board-16-chat-tools-opened-midway", "board-17-chat-tools-closed-midway"), positions: &positions)
+            } else {
+                keep(window.screenshot(), "board-16-not-scrolled-back")
+                XCTFail("the chat did not scroll back from its end: the line moved \(back)")
+            }
         }
         note(positions.joined(separator: "\n"), "board-positions")
         app.terminate()
@@ -266,37 +268,65 @@ final class BoardTests: XCTestCase {
 
     /// Opens the folded calls with a click and closes them with another, measuring the line and
     /// the reply below it each time: the line stays put, and the reply moves down by as much as
-    /// the calls take, then back. The numbers go in the failures and in `positions`.
+    /// the calls take, then back. The numbers go in the failures and in `positions`; false when
+    /// the line was gone after a click, and nothing more can be measured.
     @MainActor
+    @discardableResult
     private func openAndClose(_ run: XCUIElement, above reply: XCUIElement, in app: XCUIApplication, window: XCUIElement,
-                              _ place: String, shots: (opened: String, closed: String), positions: inout [String]) {
-        let line = run.frame.minY
-        let below = reply.frame.minY
+                              _ place: String, shots: (opened: String, closed: String), positions: inout [String]) -> Bool {
+        let last = "web_extract · moodle.example（CI）"
+        guard let line = minY(run), let below = minY(reply) else {
+            positions.append("\(place): the line (\(run.exists)) or the reply below it (\(reply.exists)) is not there")
+            XCTFail("\(place): the line or the reply below it is not there")
+            return false
+        }
         run.click()
-        let opened = waitUntil(timeout: 5) { self.findText("web_extract · moodle.example（CI）", in: app) != nil }
-        settle { abs(run.frame.minY - line) <= 2 }
-        let openedLine = run.frame.minY
-        let openedBelow = reply.frame.minY
+        let opened = waitUntil(timeout: 5) { self.findText(last, in: app) != nil }
+        settle { self.minY(run).map { abs($0 - line) <= 2 } ?? true }
+        let openedLine = minY(run)
+        let openedBelow = minY(reply)
         // from the line's foot to the last call's: what opening added
-        let calls = (findText("web_extract · moodle.example（CI）", in: app)?.frame.maxY ?? run.frame.maxY) - run.frame.maxY
+        var calls: CGFloat?
+        if let call = findText(last, in: app), run.exists {
+            calls = call.frame.maxY - run.frame.maxY
+        }
         keep(window.screenshot(), shots.opened)
+        guard openedLine != nil else {
+            let numbers = "\(place): the line at \(line), the reply below at \(below); after the click the line is gone "
+                + "(the chat moved elsewhere), the reply \(say(openedBelow))"
+            positions.append(numbers)
+            XCTFail(numbers)
+            return false
+        }
         run.click()
         let closed = waitUntil(timeout: 5) { self.findText("read_file · syllabus（CI）", in: app) == nil }
-        settle { abs(run.frame.minY - line) <= 2 }
-        let closedLine = run.frame.minY
-        let closedBelow = reply.frame.minY
+        settle { self.minY(run).map { abs($0 - line) <= 2 } ?? true }
+        let closedLine = minY(run)
+        let closedBelow = minY(reply)
         keep(window.screenshot(), shots.closed)
-        let numbers = "\(place): the line at \(line), opened \(openedLine), closed \(closedLine); "
-            + "the reply below at \(below), opened \(openedBelow), closed \(closedBelow); the calls take \(calls)"
+        let numbers = "\(place): the line at \(line), opened \(say(openedLine)), closed \(say(closedLine)); "
+            + "the reply below at \(below), opened \(say(openedBelow)), closed \(say(closedBelow)); the calls take \(say(calls))"
         positions.append(numbers)
         print("positions: \(numbers)")
         XCTAssertTrue(opened, "\(place): the folded tool calls did not open on a click")
         XCTAssertTrue(closed, "\(place): the opened tool calls did not close on a second click")
-        XCTAssertEqual(openedLine, line, accuracy: 4, "\(place): the line moved as the calls opened. \(numbers)")
-        XCTAssertGreaterThan(calls, 30, "\(place): the opened calls take no room. \(numbers)")
-        XCTAssertEqual(openedBelow - below, calls, accuracy: 6, "\(place): the reply did not move down by as much as the calls take. \(numbers)")
-        XCTAssertEqual(closedLine, line, accuracy: 4, "\(place): the line moved as the calls closed. \(numbers)")
-        XCTAssertEqual(closedBelow, below, accuracy: 4, "\(place): the reply did not come back as the calls closed. \(numbers)")
+        XCTAssertEqual(openedLine ?? .nan, line, accuracy: 4, "\(place): the line moved as the calls opened. \(numbers)")
+        XCTAssertGreaterThan(calls ?? 0, 30, "\(place): the opened calls take no room. \(numbers)")
+        XCTAssertEqual((openedBelow ?? .nan) - below, calls ?? .nan, accuracy: 6,
+                       "\(place): the reply did not move down by as much as the calls take. \(numbers)")
+        XCTAssertEqual(closedLine ?? .nan, line, accuracy: 4, "\(place): the line moved as the calls closed. \(numbers)")
+        XCTAssertEqual(closedBelow ?? .nan, below, accuracy: 4, "\(place): the reply did not come back as the calls closed. \(numbers)")
+        return closedLine != nil
+    }
+
+    /// Where `element` starts, or nil when it is not there (asking a missing element ends the test).
+    @MainActor
+    private func minY(_ element: XCUIElement) -> CGFloat? {
+        element.exists ? element.frame.minY : nil
+    }
+
+    private func say(_ value: CGFloat?) -> String {
+        value.map { "\($0)" } ?? "gone"
     }
 
     /// Scrolls the chat back from its end by about `distance` with the wheel over `handle` (a line
@@ -305,23 +335,23 @@ final class BoardTests: XCTestCase {
     /// ways, growing until one moves the chat back (at the end, the other way moves nothing).
     @MainActor
     private func scrollBack(over handle: XCUIElement, by distance: CGFloat) -> CGFloat {
-        let start = handle.frame.minY
-        let moved = { handle.frame.minY - start }
+        guard let start = minY(handle) else { return 0 }
+        let moved = { (self.minY(handle) ?? start) - start }
         var step: CGFloat = 0
         var size: CGFloat = 10
-        while step == 0, size <= 160 {
+        while step == 0, size <= 160, handle.exists {
             for sign: CGFloat in [1, -1] {
-                let before = handle.frame.minY
+                let before = moved()
                 handle.scroll(byDeltaX: 0, deltaY: sign * size)
                 Thread.sleep(forTimeInterval: 0.3)
-                if handle.frame.minY > before + 1 {
+                if moved() > before + 1 {
                     step = sign * size
                     break
                 }
             }
             size *= 2
         }
-        for _ in 0..<20 where step != 0 && moved() < distance {
+        for _ in 0..<20 where step != 0 && handle.exists && moved() < distance {
             handle.scroll(byDeltaX: 0, deltaY: step)
             Thread.sleep(forTimeInterval: 0.3)
         }
