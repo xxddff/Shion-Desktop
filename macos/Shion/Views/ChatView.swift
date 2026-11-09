@@ -5,12 +5,19 @@ struct ChatView: View {
     @Environment(AppStore.self) private var store
     let botId: String
     @State private var draft = ""
+    /// The visible height, which the transcript fills even when it is short.
+    @State private var viewport: CGFloat = 0
+    /// The top of the transcript is in or near view: time for the next older page.
+    @State private var nearTop = false
 
     var body: some View {
         let bot = store.bot(botId)
         let items = store.chats[botId] ?? []
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 14) {
+                if store.olderPages[botId] != nil || store.olderErrors[botId] != nil {
+                    OlderMessages(botId: botId)
+                }
                 ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                     ChatRow(item: item, bot: bot, showHead: showsHead(items, index))
                 }
@@ -18,9 +25,33 @@ struct ChatView: View {
             .padding(.horizontal, 40)
             .padding(.vertical, 24)
             .frame(maxWidth: 760)
-            .frame(maxWidth: .infinity)
+            // a short chat sits at the bottom of a full-height page, not on a short one
+            .frame(maxWidth: .infinity, minHeight: viewport, alignment: .bottom)
         }
+        // starts at the newest message, and keeps the rows in view still when older ones arrive above
         .defaultScrollAnchor(.bottom)
+        .onScrollGeometryChange(for: CGFloat.self) { geometry in
+            geometry.containerSize.height - geometry.contentInsets.top - geometry.contentInsets.bottom
+        } action: { _, height in
+            viewport = max(0, height)
+        }
+        .onScrollGeometryChange(for: Bool.self) { geometry in
+            geometry.contentOffset.y + geometry.contentInsets.top < 400
+        } action: { _, isNear in
+            nearTop = isNear
+            if isNear {
+                Task { await store.loadOlder(botId) }
+            }
+        }
+        // a page that leaves the top still in view asks for the next one, once the rows are laid out
+        .onChange(of: store.olderPages[botId]) {
+            Task {
+                try? await Task.sleep(for: .milliseconds(150))
+                if nearTop {
+                    await store.loadOlder(botId)
+                }
+            }
+        }
         .overlay {
             if let error = store.chatErrors[botId] {
                 ContentUnavailableView("打不开这个对话", systemImage: "exclamationmark.bubble", description: Text(error))
@@ -53,6 +84,33 @@ struct ChatView: View {
         guard index > 0 else { return true }
         let previous = items[index - 1]
         return previous.role != .assistant || items[index].at.timeIntervalSince(previous.at) > 600
+    }
+}
+
+/// The top of a paged transcript: a spinner while the next older page loads, or why it did not.
+struct OlderMessages: View {
+    @Environment(AppStore.self) private var store
+    let botId: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if let error = store.olderErrors[botId] {
+                Text("更早的消息没加载出来：\(error)")
+                    .font(.t12)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                Button("重试") {
+                    Task { await store.retryOlder(botId) }
+                }
+                .controlSize(.small)
+            } else {
+                ProgressView()
+                    .controlSize(.small)
+                    .opacity(store.loadingOlder.contains(botId) ? 1 : 0.4)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 4)
     }
 }
 
@@ -101,6 +159,12 @@ struct AssistantMessage: View {
     let bot: Bot?
     let showHead: Bool
 
+    /// Bold, italics, code and links, with the line breaks kept; headings and lists stay as written.
+    static func markdown(_ text: String) -> AttributedString {
+        let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        return (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)
+    }
+
     var body: some View {
         let todos = item.todoIds.compactMap { store.todo($0) }
         VStack(alignment: .leading, spacing: 6) {
@@ -121,7 +185,7 @@ struct AssistantMessage: View {
                     .lineSpacing(3)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
-                Text(item.text)
+                Text(Self.markdown(item.text))
                     .font(.t13)
                     .lineSpacing(3)
                     .textSelection(.enabled)

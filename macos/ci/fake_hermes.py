@@ -17,13 +17,19 @@ hermes_cli/dashboard_auth and the Canonical Gateway Protocol:
   POST /auth/native/token      code + verifier -> bearer tokens
   POST /auth/native/refresh    refresh token -> the next pair
   GET  /api/auth/me            the bearer's identity, or 401
-  GET  /api/ws?token=…         JSON-RPC 2.0 over WebSocket: gateway.ready, profiles, a Bot Chat
+  GET  /api/ws?token=…         JSON-RPC 2.0 over WebSocket: gateway.ready, runtime.describe,
+                               profiles, Bot Chats (詩音's is long and paged with
+                               session.transcript; 课程's is created on first open)
+
+Like Hermes's contracts (extra="forbid"), session.resume and session.transcript refuse keys
+they do not know, so a client's wrong parameter fails here as it would on a real server.
 
 Every request is logged (path, which credentials came, the answer), so a failing run shows
 where the flow stopped. Stdlib only.
 """
 import argparse
 import base64
+import re
 import hashlib
 import json
 import secrets
@@ -44,7 +50,41 @@ pending = {}  # broker -> {challenge, redirect_uri, state}
 codes = {}  # code -> challenge
 access_tokens = {}  # token -> expiry
 refresh_tokens = set()
-sessions = {}  # profile -> session id
+sessions = {"shion": "sess-shion"}  # profile -> its Bot Chat (課程 has none until opened)
+transcripts = {}  # session id -> rows, oldest first, shaped like session.transcript rows
+
+
+def seed_transcripts():
+    """詩音's Bot Chat: 130 numbered messages, a compaction marker near the start, a greeting last."""
+    start = time.time() - 86400
+    rows = [{"row_id": 1, "row_kind": "compaction", "role": "system", "text": "（之前 40 条的摘要）",
+             "compacted_messages": 40, "timestamp": start}]
+    for n in range(1, 131):
+        who = "user" if n % 2 else "assistant"
+        rows.append({"row_id": n + 1, "row_kind": "message", "role": who,
+                     "text": f"第 {n} 条（{'你' if who == 'user' else '詩音'}）", "timestamp": start + n * 60})
+    rows.append({"row_id": 200, "row_kind": "message", "role": "assistant", "text": "CI 替身服务器连上了。",
+                 "timestamp": time.time()})
+    transcripts["sess-shion"] = rows
+
+
+seed_transcripts()
+
+# what Hermes's canonical contracts accept (tui_gateway/contracts/canonical_sessions.py and
+# canonical_stored_reads.py)
+RESUME_KEYS = {"profile", "session_id", "title", "latest", "workspace", "source", "editor", "api_key",
+               "defer_history", "omit_messages", "cols", "display_projection"}
+TRANSCRIPT_KEYS = {"session_id", "profile", "subagent_id", "cursor", "limit", "order", "inline_images"}
+# gateway/session_policy.py: CREATE_FIELDS (+ title, and hidden/profile, which it takes off first),
+# and SURFACES: the source names a session can be created with, and the interface each one means
+SURFACES = {"cli": "cli", "tui": "tui", "gui": "desktop", "acp": "acp", "tool": "cli", "oneshot": "cli"}
+CREATE_KEYS = {"request_id", "source", "cwd", "model", "toolsets", "provider", "base_url", "reasoning", "max_turns",
+               "ignore_rules", "api_key", "editor", "yolo", "safe_mode", "ignore_user_config", "skills",
+               "checkpoints", "accept_hooks", "pass_session_id", "follow_profile_config", "service_tier",
+               "cwd_explicit", "run_budget", "verbose", "row_cwd", "client_env", "client", "title", "hidden",
+               "profile"}
+CLIENT_NAME = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}")
+CLIENT_VERSION = re.compile(r"[!-~]{1,64}")
 
 
 print_lock = threading.Lock()
@@ -210,8 +250,19 @@ class Handler(BaseHTTPRequestHandler):
         if not self.access():
             return
         if url.path == "/api/status":
+            # memory as gateway/memory_status.py reports it: a 2 GB server, so the board's
+            # default limit is 2048 // 512 = 4
             return self.answer(200, {"auth_required": True, "auth_providers": ["basic"],
-                                     "auth_flows": ["cookie", "native_pkce"]})
+                                     "auth_flows": ["cookie", "native_pkce"],
+                                     "memory": {"pressure": "ok", "gateway_rss_mb": 310,
+                                                "system_total_mb": 2048, "system_available_mb": 1200}})
+        if url.path == "/api/config":
+            bearer = self.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+            if not valid_access(bearer):
+                return self.answer(401, {"detail": "Unauthorized"})
+            # the overall limit unset (so it comes from memory), one task per assistant
+            return self.answer(200, {"model": "ci-model", "kanban": {
+                "max_in_progress": None, "max_in_progress_per_profile": 1, "dispatch_interval_seconds": 60}})
         if url.path == "/auth/native/authorize":
             return self.authorize(query)
         if url.path == "/login":
@@ -371,11 +422,47 @@ class Handler(BaseHTTPRequestHandler):
             params["session_id"] = session_id
         self.send_json({"jsonrpc": "2.0", "method": "event", "params": params})
 
-    def snapshot(self, profile):
+    def snapshot(self, session_id, params):
+        """session.resume's reply: no rows with omit_messages, every row projected with
+        display_projection, raw rows otherwise."""
         with lock:
-            session_id = sessions.setdefault(profile, f"sess-{profile}")
-        return {"session_id": session_id, "running": False, "prompts": [],
-                "display_messages": [{"role": "assistant", "text": "CI 替身服务器连上了。", "timestamp": time.time()}]}
+            rows = list(transcripts.setdefault(session_id, []))
+        reply = {"session_id": session_id, "running": False, "prompts": [], "message_count": len(rows)}
+        if params.get("omit_messages") is True:
+            return {**reply, "messages": [], "messages_omitted": True}
+        shown = [{k: v for k, v in row.items() if k != "row_kind"} for row in rows if row["row_kind"] == "message"]
+        reply["messages"] = shown
+        if params.get("display_projection"):
+            reply["display_messages"] = shown
+        return reply
+
+    def transcript(self, params):
+        """session.transcript in latest order: newest page first, then older ones by cursor."""
+        session_id, limit = params.get("session_id", ""), params.get("limit", 100)
+        order, cursor = params.get("order", "oldest"), params.get("cursor")
+        # as gateway/session_stored_reads.py: `type(limit) is int`, so 50.0 (or true) is refused
+        if type(limit) is not int or not 1 <= limit <= 500 or order not in ("oldest", "latest"):
+            return None, ["limit" if type(limit) is not int or not 1 <= limit <= 500 else "order"]
+        if order != "latest":
+            return None, ["order"]  # the stand-in only pages newest first, as Shion does
+        with lock:
+            rows = list(transcripts.get(session_id, []))
+        end = len(rows)
+        if cursor is not None:
+            prefix = f"c:{session_id}:latest:"
+            if not isinstance(cursor, str) or not cursor.startswith(prefix):
+                return None, ["cursor"]
+            end = int(cursor[len(prefix):])
+        begin = max(0, end - limit)
+        page = rows[begin:end]
+        log(f"    transcript rows {begin}..{end - 1} of {len(rows)}" + (" (first page)" if cursor is None else ""))
+        return {"session_id": session_id, "rows": page, "reset": cursor is None,
+                "next_cursor": f"c:{session_id}:latest:{begin}" if begin > 0 else None}, None
+
+    def refuse(self, rid, fields):
+        log(f"    invalid_params {fields}")
+        self.send_json({"jsonrpc": "2.0", "id": rid, "error": {
+            "code": 4001, "message": "invalid_params", "data": {"reason": "invalid_params", "fields": fields}}})
 
     def rpc(self, request):
         method, params, rid = request.get("method", ""), request.get("params") or {}, request.get("id")
@@ -392,15 +479,60 @@ class Handler(BaseHTTPRequestHandler):
                 {"name": "study", "display_name": "study", "description": "课程", "is_default": False,
                  "ui_meta": {"hermes-bots": {"title": "课程（CI）"}}},
             ]}
+        elif method == "runtime.describe":
+            if params:
+                return self.refuse(rid, sorted(params))
+            result = {"instance_id": "ci", "profile_id": "/ci/.hermes", "authority_epoch": 1,
+                      "capabilities": ["durable-admission-v1", "event-replay-v1", "session-client-v1",
+                                       "session-transcript-v1"],
+                      "session_create": {"sources": sorted(SURFACES),
+                                         "parameters": sorted(CREATE_KEYS - {"hidden", "profile"})}}
         elif method == "session.list":
+            if type(params.get("limit", 200)) is not int:
+                return self.refuse(rid, ["limit"])
             with lock:
                 known = sessions.get(params.get("profile"))
             result = {"sessions": [{"id": known, "title": "Bot Chat", "root_title": "Bot Chat"}] if known else []}
-        elif method in ("session.create", "session.resume"):
-            result = self.snapshot(params.get("profile", "shion"))
+        elif method == "session.resume":
+            unknown = sorted(set(params) - RESUME_KEYS)
+            if unknown:
+                return self.refuse(rid, unknown)
+            result = self.snapshot(params.get("session_id", ""), params)
+        elif method == "session.create":
+            unknown = sorted(set(params) - CREATE_KEYS)
+            if unknown:
+                return self.refuse(rid, unknown)
+            source, client = params.get("source", "cli"), params.get("client")
+            if source not in SURFACES:
+                return self.refuse(rid, ["source"])
+            if client is not None and not (
+                    isinstance(client, dict) and set(client) <= {"name", "version"}
+                    and CLIENT_NAME.fullmatch(str(client.get("name", "")))
+                    and ("version" not in client or CLIENT_VERSION.fullmatch(str(client["version"])))):
+                return self.refuse(rid, ["client"])
+            log(f"    created as {source} -> the assistant is told: {SURFACES[source]}; client {client}")
+            profile = params.get("profile", "shion")
+            with lock:
+                session_id = sessions.setdefault(profile, f"sess-{profile}")
+                transcripts.setdefault(session_id, [{"row_id": 1, "row_kind": "message", "role": "assistant",
+                                                     "text": "新的 Bot Chat。", "timestamp": time.time()}])
+            result = self.snapshot(session_id, {})
+        elif method == "session.transcript":
+            unknown = sorted(set(params) - TRANSCRIPT_KEYS)
+            if unknown:
+                return self.refuse(rid, unknown)
+            result, bad = self.transcript(params)
+            if bad:
+                return self.refuse(rid, bad)
         elif method == "prompt.submit":
             self.send_json({"jsonrpc": "2.0", "id": rid, "result": {"accepted": True}})
             session_id, text = params.get("session_id"), params.get("text", "")
+            with lock:
+                rows = transcripts.setdefault(session_id, [])
+                rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "user", "text": text,
+                             "timestamp": time.time()})
+                rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "assistant",
+                             "text": "收到：" + text, "timestamp": time.time()})
             self.event("message.start", session_id, {})
             self.event("message.delta", session_id, {"text": "收到："})
             self.event("message.delta", session_id, {"text": text})

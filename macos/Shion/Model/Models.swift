@@ -182,3 +182,22 @@ struct BotScreen: Hashable {
     var needsHuman = false
     var url = ""
 }
+
+/// How many board tasks the server runs at once: `kanban.max_in_progress` and
+/// `kanban.max_in_progress_per_profile` from its config.yaml, read once when the gateway starts.
+struct BoardLimits: Equatable {
+    /// Across the whole server, every board; nil when unset.
+    var maxInProgress: Int?
+    /// Per assistant, counted on each board separately; nil when unset (no limit).
+    var perAssistant: Int?
+    /// The server's memory, which sets the default when `maxInProgress` is unset.
+    var memoryMB: Int?
+
+    /// What the dispatcher uses: the setting; unset, total memory ÷ 512 MB kept between 2 and 8;
+    /// with the memory unknown (a server not on Linux), no limit.
+    var effectiveMax: Int? {
+        maxInProgress ?? memoryMB.map { min(8, max(2, $0 / 512)) }
+    }
+
+    var derivedFromMemory: Bool { maxInProgress == nil && memoryMB != nil }
+}

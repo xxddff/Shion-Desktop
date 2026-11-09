@@ -47,8 +47,25 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Section("看板") {
-                LabeledContent("同时进行", value: "最多 4 件，每个助手一次一件")
+            Section {
+                if let limits = store.boardLimits {
+                    LabeledContent("整台服务器同时进行") {
+                        Text(Self.count(limits.effectiveMax, derived: limits.derivedFromMemory))
+                            .accessibilityIdentifier("board-limit-total")
+                    }
+                    LabeledContent("每个助手同时进行") {
+                        Text(Self.count(limits.perAssistant, derived: false))
+                            .accessibilityIdentifier("board-limit-assistant")
+                    }
+                } else {
+                    LabeledContent("同时进行", value: store.live ? "读不到服务器的设置" : "连上服务器后显示")
+                }
+            } header: {
+                Text("看板")
+            } footer: {
+                Text("取自服务器 config.yaml 里的 kanban.max_in_progress 和 kanban.max_in_progress_per_profile，改了要重启 gateway 才生效。整台服务器那项不设时，Linux 上按内存算：每 512 MB 一件，最少 2 件、最多 8 件。每个助手那项在每块看板上分开算。")
+                    .font(.t12)
+                    .foregroundStyle(.secondary)
             }
 
             Section("这台 Mac 发出去的") {
@@ -67,6 +84,11 @@ struct SettingsView: View {
         .onAppear {
             draft = store.serverSettings
         }
+    }
+
+    static func count(_ value: Int?, derived: Bool) -> String {
+        guard let value else { return "不限" }
+        return derived ? "\(value) 件（按内存推算）" : "\(value) 件"
     }
 
     private var footer: String {

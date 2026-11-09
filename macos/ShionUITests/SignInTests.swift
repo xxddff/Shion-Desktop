@@ -78,6 +78,46 @@ final class SignInTests: XCTestCase {
         let replied = waitForText("收到：hello", in: app, timeout: 15)
         keep(app.windows.firstMatch.screenshot(), "signin-5-reply")
         XCTAssertTrue(replied, "no reply streamed back")
+
+        // 詩音's chat on the stand-in is 132 rows: it opened on the newest 50, and the older ones
+        // come a page at a time as the top scrolls into view
+        XCTAssertFalse(waitForText("第 1 条（你）", in: app, timeout: 1), "the whole transcript came at once")
+        let window = app.windows.firstMatch
+        var direction: CGFloat = 1
+        var reachedTop = false
+        for attempt in 0..<16 {
+            window.scroll(byDeltaX: 0, deltaY: direction * 1200)
+            if waitForText("第 1 条（你）", in: app, timeout: 1.5) {
+                reachedTop = true
+                break
+            }
+            // which sign scrolls up is the runner's business: turn round if a second page never came
+            if attempt == 3 && !waitForText("第 81 条", in: app, timeout: 0.5) {
+                direction = -direction
+            }
+        }
+        keep(window.screenshot(), "signin-6-oldest")
+        XCTAssertTrue(reachedTop, "older pages did not load on scrolling up")
+
+        // 课程 has no Bot Chat on the stand-in yet: Shion creates one (the stand-in checks the
+        // fields against Hermes's, and logs which interface the assistant would be told)
+        element("bot-study", in: app).click()
+        let created = waitForText("新的 Bot Chat。", in: app, timeout: 15)
+        keep(window.screenshot(), "signin-7-new-chat")
+        XCTAssertTrue(created, "the new Bot Chat did not open")
+
+        // the board limits in Settings come from the server: unset overall (4 by its 2 GB), 1 each
+        app.typeKey(",", modifierFlags: .command)
+        let again = app.windows.matching(NSPredicate(format: "identifier CONTAINS[c] 'settings'")).firstMatch
+        XCTAssertTrue(again.waitForExistence(timeout: 5))
+        again.scroll(byDeltaX: 0, deltaY: -direction * 600)
+        let total = element("board-limit-total", in: again)
+        let shown = total.waitForExistence(timeout: 5)
+        keep(again.screenshot(), "signin-8-board-limits")
+        XCTAssertTrue(shown, "no board limits in Settings")
+        XCTAssertTrue(says(total, "4 件（按内存推算）"), "overall: \(total.label) / \(String(describing: total.value))")
+        let each = element("board-limit-assistant", in: again)
+        XCTAssertTrue(says(each, "1 件"), "per assistant: \(each.label) / \(String(describing: each.value))")
         app.terminate()
     }
 

@@ -194,6 +194,21 @@ final class Gateway {
         }
     }
 
+    /// A REST read on the server, signed as the socket is (session token or sign-in bearer).
+    func rest(_ path: String) async throws -> JSONValue {
+        guard let url = settings.httpURL(path), let credential else { throw GatewayError.notConfigured }
+        let signed = try await credential(settings, false)
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 15
+        settings.applyAccessHeaders(to: &request)
+        signed.sign(&request)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try ServerSettings.checkAccess(response)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard status == 200 else { throw GatewayError.http(status) }
+        return try JSONValue.parse(String(decoding: data, as: UTF8.self))
+    }
+
     private func waitForReady(seconds: Double) async throws -> JSONValue {
         readyAttempt += 1
         let attempt = readyAttempt

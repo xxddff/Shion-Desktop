@@ -126,7 +126,8 @@ struct ServerSettings: Equatable {
         return ServerStatus(
             authRequired: body["auth_required"]?.bool ?? false,
             providers: (body["auth_providers"]?.array ?? []).compactMap { $0.string },
-            flows: (body["auth_flows"]?.array ?? []).compactMap { $0.string }
+            flows: (body["auth_flows"]?.array ?? []).compactMap { $0.string },
+            memoryMB: body["memory"]?["system_total_mb"]?.int
         )
     }
 
@@ -148,6 +149,8 @@ nonisolated struct ServerStatus: Sendable {
     var authRequired: Bool
     var providers: [String]
     var flows: [String]
+    /// The server's memory; nil where it cannot read it (it reads /proc/meminfo, so Linux only).
+    var memoryMB: Int?
 
     /// The gateway brokers RFC 8252 sign-in when a provider has a login page (password or OAuth).
     var takesBrowserSignIn: Bool { flows.contains("native_pkce") }

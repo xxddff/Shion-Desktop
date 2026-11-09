@@ -75,12 +75,16 @@ Shion 里的对应：
 
 | 配置 | 默认 | 说明 |
 | --- | --- | --- |
-| `kanban.max_in_progress`（整个看板同时在做的上限） | 不设时，Linux 上按内存推导：总内存 ÷ 512 MB，最少 2、最多 8；macOS、Windows 上不限 | 文档里还写着"不设就不限"，但代码（`hermes_cli/kanban_db_dispatch.py` 的 `derive_default_max_in_progress`）已经改成按内存推导。2 GB 的 VPS 就是 4，4 GB 及以上是 8 |
-| `kanban.max_in_progress_per_profile`（每个助手同时在做的上限） | 不限 | 同一个助手可以同时跑好几张卡 |
+| `kanban.max_in_progress`（整台服务器同时在做的上限，所有看板加在一起） | 不设时，Linux 上按内存推导：总内存 ÷ 512 MB，最少 2、最多 8；macOS、Windows 上不限 | 文档里还写着"不设就不限""整个看板"，但代码（`hermes_cli/kanban_db_dispatch.py` 的 `derive_default_max_in_progress`、`_tick_spawn_budget`）已经改成按内存推导，而且数的是所有看板上在做的卡。2 GB 的 VPS 就是 4，4 GB 及以上是 8。写成 0、负数或不是整数，都当没设（按内存推导） |
+| `kanban.max_in_progress_per_profile`（每个助手同时在做的上限） | 不限 | 同一个助手可以同时跑好几张卡。这个上限在每块看板上分开算：设成 1，一个助手在两块看板上可以各做一件 |
 | `kanban.dispatch_interval_seconds` | 60 秒 | 卡片变成就绪后，最多等一分钟被派发；调用 `POST /api/plugins/kanban/dispatch` 可以马上派发 |
 | 内存压力保护 | 自动 | 内存偏紧时这一轮最多派 1 件，告急时这一轮一件都不派（延后，不会丢） |
 
 依赖（`parents`）不属于并发限制：前一张没做完，后一张会一直留在「排队」。
+
+这些值在 gateway 启动时读一次，改了 `config.yaml`（或经 `PUT /api/config`）要重启 gateway 才生效。没有接口能读到正在用的值；`GET /api/config` 给的是配置里写的（没设就是 `null`），按内存推导的那个要拿 `/api/status` 的 `memory.system_total_mb` 自己算。Shion 的设置页就是这样显示的。
+
+**`POST /api/plugins/kanban/dispatch` 不管这两个上限。** 它是「马上派发一轮」，只受每块看板 8 件和内存压力保护的限制。官方桌面端每次改完看板都会调它，所以上限在它手里会被越过。
 
 **Shion 建议的配置**（原型就是按这个跑的）：
 
@@ -90,7 +94,7 @@ kanban:
   max_in_progress_per_profile: 1   # 每个助手一次只做一件
 ```
 
-每个助手只有一块云桌面、一个浏览器配置。同一个助手的两张卡要是同时跑，会抢同一块屏幕和同一套登录状态。所以建议每个助手一次一件，不同助手之间照样并行。另外，Shion 在你新建卡、解除阻塞、交还云桌面之后会主动调用 `/dispatch`，不用等下一轮。看板里排队的卡会写明在等什么：等前一张做完、这个助手手上还有一件、整个看板满了，或者等下一轮派发。
+每个助手只有一块云桌面、一个浏览器配置。同一个助手的两张卡要是同时跑，会抢同一块屏幕和同一套登录状态。所以建议每个助手一次一件，不同助手之间照样并行。Shion 不调 `/dispatch`（它会越过上限），等下一轮派发；`dispatch_interval_seconds` 可以调短。看板里排队的卡要写明在等什么：等前一张做完、这个助手手上还有一件、整台服务器满了，或者等下一轮派发。后两种 Hermes 不留记录，要拿 `/boards` 和 `/assignees` 里正在做的数量跟上限比出来。
 
 ## 场景由谁负责
 
@@ -143,7 +147,9 @@ kanban:
 
 - **连接**：WebSocket `/api/ws`，子协议 `hermes-gateway-v1`，方法表是 `CANONICAL_METHODS`。连上后先 `client.capabilities {server_requests: true}`，否则审批和提问会被直接撤回。
 - **鉴权**：本机由 profile 目录下的私有 control socket 签发一次性 ticket（30 秒）。远端经 Cloudflare Access，再加可选的 Hermes 会话 token（见下一节）。
-- **身份**：`session.create` 带 `source`（必须在 `runtime.describe` 的 `session_create.sources` 里）和 `client: {name: "shion"}`。
+- **身份**：`session.create` 带 `source`（必须在 `runtime.describe` 的 `session_create.sources` 里）和 `client: {name: "shion"}`（服务器有 `session-client-v1` 时；只是个标签，什么都不影响）。
+- **助手以为你在用什么界面**：系统提示里的平台说明和 `Platform:` 一行来自会话的 `source`，建会话时定下，之后改不了：`gui` 是桌面应用（`desktop`，按 Markdown 写），`cli` 是终端（不用 Markdown），不带 `source` 默认 `cli`。Shion 建的 Bot Chat 用 `gui`。可是按标题建 `Bot Chat` 时已经有一个，就直接沿用旧的；而 Hermes 自己替还没有 Bot Chat 的 profile 建的（定时任务送达、助手之间私信、`hermes chat -c "Bot Chat"`）都是 `cli`。所以较早的 Bot Chat 多半是 `cli`，要换只能新开一个。
+- **对话分页**：`session.resume` 带 `omit_messages: true` 只接上会话、不带历史；再用 `session.transcript {order: "latest", limit, cursor}` 一页一页往前取（服务器有 `session-transcript-v1` 时），每页最多 500 行，按存的行数算，工具调用一行算一行。不带 `omit_messages` 的 resume 会把整段历史发两遍（`messages` 和 `display_messages` 各一份）。官方桌面端用的是 REST 的 `/api/sessions/{id}/messages?order=latest&offset=`。
 - **Bot Chat**：一个助手 = 一个 profile = 唯一一个标题为 `Bot Chat` 的会话。用 `session.list {title, include_hidden: true}` 按标题找，`profiles.list` 也直接给出 `canonical_session`。不存会话 id 指针。
 - **可靠提交**：客户端的 `input_id` 和服务端的 `admission_id` 分开，以回执为准（`prompt.receipt`、`prompt.resolve_unknown`）。
 - **审批、提问**：回复要对准 `prompt_id` 和 `execution_generation`；断线重连后用 `session.events.since` 恢复还没回答的请求。
@@ -379,7 +385,7 @@ open Shion.xcodeproj
 
   设置看 `hermes config show`（或 `~/.hermes/config.yaml` 里的 `dashboard:` 一节）。改了令牌要重启 gateway。
 - **开会话令牌登录**：在运行 `hermes gateway` 的环境里设 `HERMES_DASHBOARD_SESSION_TOKEN`（可以写进 `~/.hermes/.env`；也可以写成 `file:<路径>` 指向一个只放令牌的文件），确认 `dashboard.session_token_auth.enabled` 没设成 `false`，再重启 gateway。令牌用 `python3 -c "import secrets; print(secrets.token_urlsafe(32))"` 生成，至少 32 个字符。它能完全操作这台 Hermes，当密码保管；换了令牌，Shion 里也要换。
-- **现在能用的**：助手列表（每个 profile 一个助手）、每个助手的 Bot Chat（历史、发消息、流式回复、工具调用）、批准和提问（在「等你确认」里回答）。今天、待办、日程、日报、看板和云桌面还是示例数据，要等 `shion` 插件和看板接口接上。
+- **现在能用的**：助手列表（每个 profile 一个助手）、每个助手的 Bot Chat（打开时先取最近 50 行，往上滑再一页一页取更早的；发消息、流式回复、工具调用；回复里的粗体、斜体、代码和链接按 Markdown 显示）、批准和提问（在「等你确认」里回答）、设置里的看板上限（取自服务器）。今天、待办、日程、日报、看板和云桌面还是示例数据，要等 `shion` 插件和看板接口接上。
 - **连接方式**照官方桌面端连远端的做法：`wss://<地址>/api/ws?token=<登录凭证或会话令牌>`，不带子协议，每个请求带 Cloudflare Access 的两个头；连上后等 `gateway.ready`、发 `client.capabilities`，按服务器要求每 15 秒 `gateway.ping`；连上过又断了会自动重连，并重新打开刚才的对话。登录凭证被拒时先续一次再试，续不上才算登录过期。
 
 ### 原生 App 的界面检查
@@ -387,7 +393,7 @@ open Shion.xcodeproj
 界面靠 CI 截图来看，不在本地开模拟器：
 - **什么时候跑**：只有 `macos/` 或这个工作流改了才跑，也可以在 Actions 里手动触发；同一分支上新的提交会取消还没跑完的那次。
 - **跑什么**：在 `xcode-27` runner（macOS 27、Apple 芯片）上生成工程、编译，再跑 `ShionUITests`：每个页面用启动参数直接打开（`-ShionSnapshot YES -ShionRoute today -ShionAppearance dark`），等界面稳定后截窗口；另外点开菜单栏面板截整个屏幕，按 ⌘, 截设置窗口（还有已登录和会话令牌两种设置）。
-- **浏览器登录的端到端测试**：runner 上没有真的 Cloudflare 和 Hermes，`macos/ci/fake_hermes.py` 两个都演：Access 按严格 service token 认证来（带 token 的请求只看 token、不发 cookie，错的 token 直接 403；不带 token 的浏览器转去另一个域名上的 Access 登录页，登录后靠 cookie 放行）；登录页自己填用户名密码提交；检查 PKCE、回调地址和 state；发登录凭证；`/api/ws` 说 JSON-RPC。`SignInTests` 在设置里填好地址，点「用浏览器登录…」，等登录完、连上、助手列表换成服务器的，再打开詩音的对话发一句、等回复，每一步截一张（`signin-*.png`）。替身的请求记录 `fake_hermes.log` 也在附件里。这一步失败只报警告，截图和安装包照样出。
+- **浏览器登录的端到端测试**：runner 上没有真的 Cloudflare 和 Hermes，`macos/ci/fake_hermes.py` 两个都演：Access 按严格 service token 认证来（带 token 的请求只看 token、不发 cookie，错的 token 直接 403；不带 token 的浏览器转去另一个域名上的 Access 登录页，登录后靠 cookie 放行）；登录页自己填用户名密码提交；检查 PKCE、回调地址和 state；发登录凭证；`/api/ws` 说 JSON-RPC。替身还照 Hermes 的接口检查参数：`session.resume`、`session.transcript`、`session.create` 不认识的键一律 `invalid_params`，`source` 和 `client` 也照规则查。`SignInTests` 在设置里填好地址，点「用浏览器登录…」，等登录完、连上、助手列表换成服务器的；打开詩音的对话（132 行，先只来最近 50 行），发一句、等回复，再往上滑到第一条；打开课程的对话（新建）；最后看设置里的看板上限是不是服务器的值。每一步截一张（`signin-*.png`）。替身的请求记录 `fake_hermes.log` 也在附件里。这一步失败只报警告，截图和安装包照样出。
 - **截图模式**：日期固定在 2026 年 11 月 9 日（周一）10:52，外观对整个 App 生效（菜单栏面板也跟着变），呼吸点不动。动画停下来 App 才算空闲，XCTest 不用干等，一次运行从 4.3 分钟降到 2.3 分钟。
 - **runner 的屏幕**：1024×768、1 倍，所以窗口截出来是 1024×674，比默认窗口小，正好看窄窗口下的布局。
 - **看哪里**：截图打包成这次运行的 `shots` 附件（保留 14 天），文件名是「页面-外观.png」。编译失败时，最后一步会列出错误。

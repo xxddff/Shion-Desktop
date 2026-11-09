@@ -32,7 +32,13 @@ nonisolated enum JSONValue: Codable, Sendable, Equatable {
         switch self {
         case .null: try container.encodeNil()
         case .bool(let value): try container.encode(value)
-        case .number(let value): try container.encode(value)
+        case .number(let value):
+            // whole numbers go out as integers: Hermes checks `type(limit) is int`, and 50.0 is not
+            if value.rounded() == value, abs(value) < 9_007_199_254_740_992 {
+                try container.encode(Int64(value))
+            } else {
+                try container.encode(value)
+            }
         case .string(let value): try container.encode(value)
         case .array(let value): try container.encode(value)
         case .object(let value): try container.encode(value)

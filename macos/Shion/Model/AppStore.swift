@@ -33,6 +33,17 @@ final class AppStore {
     /// Bot ids whose Bot Chat is being opened, and why one could not be.
     private(set) var openingChats: Set<String> = []
     private(set) var chatErrors: [String: String] = [:]
+    /// bot id → the cursor of its next older transcript page; absent once the oldest is shown
+    private(set) var olderPages: [String: String] = [:]
+    /// bot ids whose older page is on its way, and why one did not come
+    private(set) var loadingOlder: Set<String> = []
+    private(set) var olderErrors: [String: String] = [:]
+    /// The server's board limits, read after connecting.
+    private(set) var boardLimits: BoardLimits?
+    /// What `runtime.describe` says the server can do (`session-transcript-v1`, …).
+    @ObservationIgnored private var serverCapabilities: Set<String> = []
+    /// bot id → how many of its rows came before the attach that is waiting for its first page
+    @ObservationIgnored private var attachMarks: [String: Int] = [:]
     @ObservationIgnored private var demoBots: [Bot] = []
     @ObservationIgnored private var demoChats: [String: [ChatItem]] = [:]
     @ObservationIgnored private var demoAsks: [Ask] = []
@@ -173,7 +184,40 @@ extension AppStore {
         keepSettings()
         await gateway.connect(serverSettings)
         guard gateway.phase == .online else { return }
+        await describeRuntime()
         await loadProfiles()
+        await loadBoardLimits()
+    }
+
+    /// `GET /api/config` (the configured values) and the server's memory (`/api/status`), which
+    /// sets the default when the overall limit is unset.
+    private func loadBoardLimits() async {
+        guard let config = try? await gateway.rest("/api/config") else {
+            boardLimits = nil
+            return
+        }
+        // as the dispatcher reads them: anything but a positive whole number counts as unset
+        func positive(_ value: JSONValue?) -> Int? {
+            value?.int.flatMap { $0 >= 1 ? $0 : nil }
+        }
+        let status = try? await serverSettings.status()
+        boardLimits = BoardLimits(
+            maxInProgress: positive(config["kanban"]?["max_in_progress"]),
+            perAssistant: positive(config["kanban"]?["max_in_progress_per_profile"]),
+            memoryMB: status?.memoryMB
+        )
+    }
+
+    /// One transcript page: rows counted on the server before projection, so a page of tool
+    /// calls shows fewer lines.
+    static let pageSize = 50
+
+    /// The transcript is paged where the server has `session.transcript`; older servers send it whole.
+    private var pagesTranscripts: Bool { serverCapabilities.contains("session-transcript-v1") }
+
+    private func describeRuntime() async {
+        guard let reply = try? await gateway.call("runtime.describe", [:]) else { return }
+        serverCapabilities = Set((reply["capabilities"]?.array ?? []).compactMap { $0.string })
     }
 
     /// Saves the settings, signs in through the server's login page, then connects.
@@ -272,6 +316,7 @@ extension AppStore {
         sessionBots = [:]
         streaming = [:]
         chatErrors = [:]
+        resetPages()
         live = true
         if case .chat(let id)? = route, bot(id) == nil {
             route = .today
@@ -279,6 +324,7 @@ extension AppStore {
     }
 
     private func leaveLive() {
+        boardLimits = nil
         guard live else { return }
         live = false
         bots = demoBots
@@ -288,9 +334,17 @@ extension AppStore {
         sessionBots = [:]
         streaming = [:]
         chatErrors = [:]
+        resetPages()
         if case .chat(let id)? = route, bot(id) == nil {
             route = .today
         }
+    }
+
+    private func resetPages() {
+        olderPages = [:]
+        loadingOlder = []
+        olderErrors = [:]
+        attachMarks = [:]
     }
 
     /// Finds the assistant's Bot Chat (the session titled "Bot Chat" in its profile), creates it
@@ -310,19 +364,39 @@ extension AppStore {
             })
             let snapshot: JSONValue
             if let row, let id = row["resolved_id"]?.string ?? row["id"]?.string ?? row["session_id"]?.string {
-                snapshot = try await gateway.call("session.resume", [
-                    "profile": .string(botId), "session_id": .string(id), "display_projection": true,
-                ])
+                snapshot = try await gateway.call("session.resume", resumeParams(botId, id))
             } else {
-                snapshot = try await gateway.call("session.create", [
-                    "profile": .string(botId), "title": "Bot Chat", "hidden": true, "follow_profile_config": true,
-                    "request_id": .string(UUID().uuidString), "source": "gui",
-                ])
+                snapshot = try await gateway.call("session.create", createParams(botId))
             }
             attach(botId, snapshot: snapshot)
+            try await loadLatestPage(botId, snapshot: snapshot)
         } catch {
             chatErrors[botId] = error.localizedDescription
         }
+    }
+
+    /// A new Bot Chat. `source` is the interface the assistant is told it talks through, fixed for
+    /// the session's life: `gui` reads as the desktop app (`cli`, the default, as a terminal). Where
+    /// the server takes it, `client` names Shion; a label for viewers, it changes nothing else.
+    private func createParams(_ botId: String) -> JSONValue {
+        var fields: [String: JSONValue] = [
+            "profile": .string(botId), "title": "Bot Chat", "hidden": true, "follow_profile_config": true,
+            "request_id": .string(UUID().uuidString), "source": "gui",
+        ]
+        if serverCapabilities.contains("session-client-v1") {
+            let info = Bundle.main.infoDictionary ?? [:]
+            let version = "\(info["CFBundleShortVersionString"] as? String ?? "0")+\(info["CFBundleVersion"] as? String ?? "0")"
+            fields["client"] = ["name": "shion", "version": .string(version)]
+        }
+        return .object(fields)
+    }
+
+    /// With paging, the resume only attaches (`omit_messages`) and the rows come a page at a time;
+    /// otherwise it carries the whole transcript, projected for display.
+    private func resumeParams(_ botId: String, _ sessionId: String) -> JSONValue {
+        pagesTranscripts
+            ? ["profile": .string(botId), "session_id": .string(sessionId), "omit_messages": true]
+            : ["profile": .string(botId), "session_id": .string(sessionId), "display_projection": true]
     }
 
     private func attach(_ botId: String, snapshot: JSONValue) {
@@ -330,24 +404,90 @@ extension AppStore {
         sessions[botId] = sessionId
         sessionBots[sessionId] = botId
         streaming[botId] = nil
-        let rows = snapshot["display_messages"]?.array ?? snapshot["messages"]?.array ?? []
-        chats[botId] = rows.compactMap(chatItem(from:))
+        if snapshot["messages_omitted"]?.bool == true {
+            // the rows held now stay up until the latest page replaces them; anything that
+            // streams in meanwhile lands after this mark and is kept
+            attachMarks[botId] = chats[botId]?.count ?? 0
+        } else {
+            let rows = snapshot["display_messages"]?.array ?? snapshot["messages"]?.array ?? []
+            chats[botId] = rows.compactMap(chatItem(from:))
+            olderPages[botId] = nil
+        }
         setRunning(botId, snapshot["running"]?.bool ?? false)
         for prompt in snapshot["prompts"]?.array ?? [] {
             addPrompt(prompt, sessionId: sessionId, botId: botId)
         }
     }
 
-    /// Attachments are per socket: after a reconnect every open Bot Chat resumes.
+    /// The newest page of a resumed transcript (`session.transcript`, latest first), in place of
+    /// whatever was held, keeping what streamed in since the attach.
+    private func loadLatestPage(_ botId: String, snapshot: JSONValue) async throws {
+        guard snapshot["messages_omitted"]?.bool == true, let sessionId = sessions[botId] else { return }
+        let page = try await gateway.call("session.transcript", [
+            "profile": .string(botId), "session_id": .string(sessionId),
+            "order": "latest", "limit": .number(Double(Self.pageSize)),
+        ])
+        guard sessions[botId] == sessionId else { return }
+        let rows = transcriptItems(page)
+        let held = chats[botId] ?? []
+        let mark = min(attachMarks.removeValue(forKey: botId) ?? 0, held.count)
+        // a turn that finished between the attach and this read is in both: keep the page's copy
+        let recent = rows.suffix(8)
+        let streamed = held[mark...].filter { item in
+            item.streaming || !recent.contains { $0.role == item.role && $0.text == item.text }
+        }
+        chats[botId] = rows + streamed
+        olderPages[botId] = page["next_cursor"]?.string
+        olderErrors[botId] = nil
+    }
+
+    /// The next older page, above what is shown. Called as the transcript's top comes into view.
+    func loadOlder(_ botId: String) async {
+        guard live, let cursor = olderPages[botId], let sessionId = sessions[botId],
+              !loadingOlder.contains(botId), olderErrors[botId] == nil
+        else { return }
+        loadingOlder.insert(botId)
+        defer { loadingOlder.remove(botId) }
+        do {
+            let page = try await gateway.call("session.transcript", [
+                "profile": .string(botId), "session_id": .string(sessionId),
+                "order": "latest", "limit": .number(Double(Self.pageSize)), "cursor": .string(cursor),
+            ])
+            guard sessions[botId] == sessionId, olderPages[botId] == cursor else { return }
+            let rows = transcriptItems(page)
+            // `reset`: the server started over from the newest page (a rotated lineage)
+            chats[botId] = page["reset"]?.bool == true ? rows : rows + (chats[botId] ?? [])
+            olderPages[botId] = page["next_cursor"]?.string
+        } catch {
+            olderErrors[botId] = error.localizedDescription
+        }
+    }
+
+    func retryOlder(_ botId: String) async {
+        olderErrors[botId] = nil
+        await loadOlder(botId)
+    }
+
+    /// A transcript page's rows, oldest first. A compaction row stands where older messages
+    /// were folded into a summary.
+    private func transcriptItems(_ page: JSONValue) -> [ChatItem] {
+        (page["rows"]?.array ?? []).compactMap { row in
+            guard row["row_kind"]?.string == "compaction" else { return chatItem(from: row) }
+            let at = row["timestamp"]?.number.map { Date(timeIntervalSince1970: $0) } ?? Date()
+            let id = row["row_id"]?.int.map { "row-\($0)" } ?? UUID().uuidString
+            return ChatItem(id: id, role: .system, at: at, text: "更早的对话压缩成了摘要")
+        }
+    }
+
+    /// Attachments are per socket: after a reconnect every open Bot Chat resumes, from its
+    /// newest page again.
     private func reattach() {
         let open = sessions
         Task {
             for (botId, sessionId) in open {
-                if let snapshot = try? await gateway.call("session.resume", [
-                    "profile": .string(botId), "session_id": .string(sessionId), "display_projection": true,
-                ]) {
-                    attach(botId, snapshot: snapshot)
-                }
+                guard let snapshot = try? await gateway.call("session.resume", resumeParams(botId, sessionId)) else { continue }
+                attach(botId, snapshot: snapshot)
+                try? await loadLatestPage(botId, snapshot: snapshot)
             }
         }
     }
