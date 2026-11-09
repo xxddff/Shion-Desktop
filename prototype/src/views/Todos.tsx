@@ -6,7 +6,7 @@ import { dayDiff } from '../data/clock';
 import type { AppState, Area, Todo } from '../data/model';
 import { addTodo, updateTodo } from '../data/store';
 import { AREA, Avatar } from '../ui/bits';
-import { until, useNow, when } from '../ui/format';
+import { until, useNow } from '../ui/format';
 
 type Filter = 'all' | Area;
 
@@ -135,7 +135,7 @@ function TodoInspector({ t, state, now, onClose }: { t: Todo; state: AppState; n
       </div>
       <div className="insp-body">
         <input id={`title-${t.id}`} className="insp-title-input" value={t.title} onChange={(e) => updateTodo(t.id, { title: e.target.value })} aria-label="标题" />
-        {t.proposed && <p className="insp-note warm">日期是「{bot?.name}」建议的，改好或直接确认都行。</p>}
+        {t.proposed && <p className="insp-note warm">日期是「{bot?.name}」建议的</p>}
         <dl className="fields">
           <dt>执行</dt>
           <dd>
@@ -163,19 +163,16 @@ function TodoInspector({ t, state, now, onClose }: { t: Todo; state: AppState; n
               {t.source.label}
             </a>
           </dd>
+          {t.nudges > 0 && (
+            <>
+              <dt>催过</dt>
+              <dd>{t.nudges} 次</dd>
+            </>
+          )}
         </dl>
         <section className="insp-sec">
-          <h4>詩音会这样提醒你</h4>
-          <ul className="plain">
-            {t.doAt && <li>到执行时间（{when(t.doAt, now)}）提醒一次</li>}
-            {t.dueAt && <li>截止前 24 小时、3 小时各催一次</li>}
-            <li>还没动的话，晚上 21:00 再提一次</li>
-            {t.nudges > 0 && <li className="quiet">已经催过 {t.nudges} 次</li>}
-          </ul>
-        </section>
-        <section className="insp-sec">
           <h4>备注</h4>
-          <textarea id={`notes-${t.id}`} className="field" rows={4} value={t.notes ?? ''} onChange={(e) => updateTodo(t.id, { notes: e.target.value })} placeholder="写点什么，助手处理这件事时会读到" />
+          <textarea id={`notes-${t.id}`} className="field" rows={4} value={t.notes ?? ''} onChange={(e) => updateTodo(t.id, { notes: e.target.value })} placeholder="写点什么" />
         </section>
       </div>
     </aside>

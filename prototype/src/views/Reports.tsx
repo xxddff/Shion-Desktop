@@ -47,7 +47,7 @@ export function Reports({ state, kind }: { state: AppState; kind: ReportKind }) 
                 <h2>{r.headline}</h2>
                 <p className="byline">
                   <Avatar bot={bot} size={18} />
-                  {bot?.name} {hm(r.date)} 写 · 也发到了你的手机 ·
+                  {bot?.name} {hm(r.date)} 写 ·
                   <a className="inline-link" href={`#chat-${bot?.id}`}>
                     追问
                   </a>
@@ -72,7 +72,7 @@ export function Reports({ state, kind }: { state: AppState; kind: ReportKind }) 
                     ))}
                   </div>
                   <table className="apps">
-                    <caption>按应用，来自这台 Mac 的使用记录</caption>
+                    <caption>按应用</caption>
                     <tbody>
                       {state.apps.map((a) => (
                         <tr key={a.app}>
@@ -135,11 +135,9 @@ export function Confirm({ state }: { state: AppState }) {
           {asks.length === 0 ? (
             <div className="empty-state">
               <h2>都处理完了</h2>
-              <p>助手要发出去、改掉或替你决定的事，会先停在这里。Mac 上也会弹通知，可以直接在通知里回复。</p>
             </div>
           ) : (
             <>
-              <p className="quiet">助手要发出去、改掉或替你决定的事，都会先停在这里，等你点头。</p>
               {asks.map((a) => (
                 <AskCard key={a.id} ask={a} state={state} now={now} />
               ))}

@@ -59,7 +59,6 @@ export function DesktopView({ state, botId }: { state: AppState; botId?: string 
               )}
             </header>
             <LiveScreen key={bot.id} bot={bot} screen={screen} />
-            <p className="viewer-note">画面在 VPS 上运行，合上 Mac 也不影响。你帮它登录过的网站，之后它能自己用。</p>
           </section>
 
           <aside className="screens" aria-label="所有桌面">
@@ -284,7 +283,6 @@ function LiveScreen({ bot, screen }: { bot: Bot; screen: Screen }) {
           {armed ? `${bot.name}正在用，再点一次接管` : '点击画面接管'}
         </div>
       )}
-      {held && !releasing && <div className="held-tag">你在操作 · 点画面外交还</div>}
       {releasing && (
         <div className="release-bar">
           <span>马上交还给{bot.name}，点画面继续操作</span>

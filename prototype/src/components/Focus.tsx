@@ -1,8 +1,8 @@
-import { ChevronDown, Laptop, Target } from 'lucide-react';
+import { ChevronDown, Target } from 'lucide-react';
 import { useState } from 'react';
-import { DEMO_WINDOWS, KIND_LABEL, focusNow } from '../data/focus';
+import { KIND_LABEL, focusNow } from '../data/focus';
 import type { AppState, FocusSample } from '../data/model';
-import { frontWindow, pauseFocus, resumeFocus } from '../data/store';
+import { pauseFocus, resumeFocus } from '../data/store';
 import { hm } from '../ui/format';
 
 /** A window's line in the local log: what it was against the plan. */
@@ -64,10 +64,6 @@ export function FocusRow({ state, now }: { state: AppState; now: number }) {
               );
             })}
           </ol>
-          <p className="focus-note">
-            <Laptop size={12} />
-            <span>窗口标题只留在这台 Mac 上。{f.sent ? `詩音收到的只有：${f.sent.text}` : '还没有告诉詩音什么。'}</span>
-          </p>
           <div className="focus-actions">
             {v.state === 'paused' ? (
               <button className="btn sm" onClick={resumeFocus}>
@@ -79,22 +75,6 @@ export function FocusRow({ state, now }: { state: AppState; now: number }) {
               </button>
             )}
           </div>
-          <label className="focus-demo">
-            <span>原型演示：换一个前台窗口</span>
-            <select
-              value=""
-              onChange={(e) => {
-                if (e.target.value !== '') frontWindow(Number(e.target.value));
-              }}
-            >
-              <option value="">选一个…</option>
-              {DEMO_WINDOWS.map((w, i) => (
-                <option key={w.app + w.title} value={i}>
-                  {w.title ? `${w.app} · ${w.title}` : w.app}
-                </option>
-              ))}
-            </select>
-          </label>
         </div>
       )}
     </div>

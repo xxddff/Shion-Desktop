@@ -4,7 +4,7 @@ macOS 上的私人秘书。你主要和总秘书「詩音」打交道，她带�
 
 背后跑的是部署在 VPS 上的 [Hermes Agent](https://github.com/NousResearch/hermes-agent)，Shion 通过 Canonical Gateway Protocol 连接它，完全取代官方桌面端的 Bot Mode。
 
-> 现阶段：`prototype/` 是 UI 原型（React，示例数据，可交互），用来对齐界面和流程。正式的 App 用 SwiftUI + AppKit 写，不套浏览器，最低支持 macOS 26。
+> 现阶段：`prototype/` 是 UI 原型（React，示例数据，可交互），用来对齐界面和流程。正式的 App 用 SwiftUI + AppKit 写，不套浏览器，最低支持 macOS 27。
 
 ## 已经定下来的
 
@@ -14,7 +14,7 @@ macOS 上的私人秘书。你主要和总秘书「詩音」打交道，她带�
 | 组织方式 | 一个总秘书带一组助手；每个助手的 Bot Chat 也能单独访问 |
 | Hermes 跑在哪 | 远端 VPS；以后可能也接入这台 Mac，让助手在本机做事（暂不实现） |
 | 技术栈 | 原型不限；正式版用 SwiftUI + AppKit，不套浏览器；[MyGo](https://github.com/egoist/mygo)（Go，自绘原生 UI）留作以后跨平台的备选，见下文 |
-| 最低系统 | macOS 26，直接用新系统的能力（Liquid Glass、Spotlight 里的动作、本机模型等），不写旧系统的兼容分支 |
+| 最低系统 | macOS 27，直接用新系统的能力（Liquid Glass、Siri 和 Spotlight、本机模型等），不写旧系统的兼容分支 |
 | 连接方式 | 沿用现在的 Cloudflare Tunnel + Cloudflare Access，用 service token 过认证（官方桌面端也用同样的方式：给连接加额外请求头） |
 | 云桌面 | VPS 上的 Hermes 开了 Bot Screen（每个助手一块桌面），Shion 里要能看画面、接管、交还 |
 | 委派方式 | 看板为主：詩音建卡交给助手，助手在单独的工作会话里完成；一问一答的小事才用助手之间的直接消息 |
@@ -132,11 +132,10 @@ kanban:
 
 隐私：
 - 窗口标题、应用名和这段时间线只存在这台 Mac 上，保留 7 天，可以随时清空。
-- 发给詩音的那句话就是她收到的全部，Shion 在她的 Bot Chat 里原样显示。
-- 詩音来催时，Shion 在她的消息下面补一行「仅本机可见」的细节（那会儿前台是哪个窗口），这一行不会发出去。
+- 发给詩音的只有：此刻的计划、偏离了几分钟、在做哪类事。设置里专注检查的开关下面写明发什么、不发什么，界面里不另加说明；插件放进詩音对话里的那句话，Shion 也不显示。
 - 菜单栏里可以暂停 1 小时，设置里可以关掉。
 
-原型里：菜单栏弹出面板的第一行就是专注检查，点开能看到本机记录和发给詩音的原话，还能换一个"前台窗口"来演示。
+原型里：菜单栏弹出面板的第一行就是专注检查，点开能看到最近的几个窗口和暂停按钮；设置里的「原型演示」可以换一个"前台窗口"。
 
 ## Canonical Gateway Protocol 要点（写 Swift 客户端时用）
 
@@ -243,20 +242,28 @@ Shion 里的位置：
 
 只做 macOS、又要深度用系统能力，所以选 SwiftUI。以后真要出 Windows、Linux 版，再考虑 MyGo。
 
-### 最低 macOS 26：用上的新能力
+### 最低 macOS 27：用上的新能力
 
-不写旧系统的兼容分支，也不准备两套外观。之后的系统新加的东西，要用时再单独判断可用性。
+不写旧系统的兼容分支，也不准备两套外观。工具链是 Xcode 27（Swift 6.4）。
 
 | 能力 | 用在哪 |
 | --- | --- |
-| Liquid Glass：`.glassEffect`、`GlassEffectContainer`、`.buttonStyle(.glass)` / `.glassProminent` | 只给浮在内容上面的控件：输入框、⌘K 面板、云桌面的接管条、菜单栏弹出面板（规则见「界面原则」）。侧栏和工具栏系统自己会换成玻璃 |
+| Liquid Glass：`.glassEffect`、`GlassEffectContainer`、`.buttonStyle(.glass)` / `.glassProminent`；27 起 `Glass.interactive()` 在 Mac 上响应点击 | 只给浮在内容上面的控件：输入框、⌘K 面板、云桌面的接管条、菜单栏弹出面板（规则见「界面原则」）。侧栏和工具栏系统自己会换成玻璃 |
+| 同心圆角：SwiftUI 的 `GeometryProxy.concentricCornerRadii`，AppKit 的 `NSView.cornerConfiguration`（`.containerConcentric`） | 云桌面画面（AppKit 视图）的圆角和窗口同心 |
 | `ToolbarSpacer` | 工具栏按钮分组，「跟詩音说」单独一组 |
-| Spotlight 里直接执行 App 的动作（App Intents） | 不打开窗口就能「问詩音」「记一条待办」「打开某个助手」；待办和任务卡做成 `IndexedEntity`，在 Spotlight 里搜得到 |
+| 任意容器里的轻扫和拖动排序：`swipeActions` + `swipeActionsContainer()`，`.reorderable()` + `reorderContainer(for:isEnabled:move:)` | 待办行轻扫完成或推迟，今天的待办拖动排序；不用为了这些换成 `List` |
+| AppKit `NSStatusItem` 的 `expandedInterfaceDelegate` | 菜单栏用 `NSStatusItem`（橙色数字角标好画），弹出面板显示时告诉系统，键盘焦点才对 |
+| Siri 和 Spotlight（App Intents）：App Schema（`@AppIntent(schema:)`、`@AppEntity(schema:)`），`IndexedEntity` 和 27 新增的 `IndexedEntityQuery`，屏幕感知（`appEntityIdentifier`） | 待办、任务卡、日程做成实体：Spotlight 里搜得到；新 Siri 能拿它们回答"我今天还有什么没做"，也知道你正在看哪张卡。Siri AI 还是测试版，27.2 起支持日语，简体中文还没有，所以 Mac 的 Siri 语言要设成日语 |
+| 通知关联实体：`UNMutableNotificationContent.appEntityIdentifiers` | 詩音的催促、等你确认的通知带上对应的待办或任务卡，Siri 知道"这个"指的是哪件 |
 | 控制中心和菜单栏里的控件（`ControlWidget`） | 「跟詩音说」「暂停催促一小时」 |
 | 桌面小组件（WidgetKit） | 下一件事、通勤延误、等你确认的数量 |
 | Foundation Models（本机模型） | 只做离线、隐私、要即时反应的小事，见下面「本机模型」 |
-| Swift 6.2：默认主线程隔离、`@Observable` 和 `Observations`、`Span` | 界面状态在主线程；Gateway 连接和 RFB 解码各放在自己的 actor 里；`Observations` 把状态变化接成异步序列，用来刷新小组件；RFB 解码用 `Span` / `RawSpan` 读写字节，不用 unsafe 指针 |
+| Swift 6.4：`defer` 里能 `await`，`withTaskCancellationShield`；还有默认主线程隔离、`@Observable` 和 `Observations`、`Span` | 离开画面时 `defer { await 交还 }` 并加上取消保护，保证一定交还；界面状态在主线程，Gateway 连接和 RFB 解码各放在自己的 actor 里；RFB 解码用 `Span` 读写字节，不用 unsafe 指针 |
 | SwiftUI `WebView` / `WebPage` | 只在 RFB 客户端做好之前，用来跑 noVNC 过渡 |
+
+等 27.3 正式发布再用：Mac 上原生的实时活动（ActivityKit），把助手在做的事和进度放进菜单栏；Siri 把任意 App Intent 当工具调用（`@AppIntent(.tool)`）和 App 技能，现在是开发者预览，不能分发。
+
+查过、27 没有新接口的：读前台应用和窗口标题（仍然是 `NSWorkspace` 加辅助功能接口）、Screen Time（macOS 上仍然没有 DeviceActivity）、EventKit、可操作的通知、`MenuBarExtra`。
 
 ### 本机模型
 
@@ -269,12 +276,10 @@ Shion 里的位置：
 | 专注检查：判断前台窗口和此刻的计划对不对得上，只把结论告诉詩音（见上面「专注检查」） | 窗口标题不出 Mac，而且要即时 |
 
 用哪个模型：
-- **macOS 26 上用系统自带的本机模型**（Foundation Models）。这一版约 3B 参数，上下文 4096 个 token，输入和输出一起算；支持中文、日文，能直接输出成 Swift 类型（`@Generable`），也能调工具。常识和推理弱，所以只让它做归类、摘要、抽取这类小事。要 Apple 芯片并开着 Apple 智能，用不了就跳过。
-- **macOS 27（2026 年 9 月发布）上能做得更多**，用 `#available` 判断：
-  - 系统模型重做过，WWDC26 的示例里上下文是 8192，还能看图；
-  - 同一个 `LanguageModelSession` 能换成别的模型。Apple 开源了 `MLXLanguageModel`（GPU）和 `CoreAILanguageModel`（神经引擎），可以在本机跑开源模型。系统模型的中文、日文摘要不够好时就换，代价是要下载几个 GB、占内存；
-  - Apple 的 Private Cloud Compute 模型上下文 32K、不用 API key，下载量 200 万以下的开发者不付费；但数据要离开 Mac，所以不用在上面和窗口标题有关的事上。
-- 上下文大小用 `contextSize` 查，token 数用 `tokenCount(for:)` 算（26.4 起），不写死。
+- **默认用系统自带的本机模型**（Foundation Models）。macOS 27 上它重做过：WWDC26 的示例里上下文是 8192 个 token（26 上是 4096，输入和输出一起算），还能看图。支持中文、日文，能直接输出成 Swift 类型（`@Generable`），也能调工具。常识和推理弱，所以只让它做归类、摘要、抽取这类小事。要 Apple 芯片并开着 Apple 智能，用不了就跳过。
+- **不够用时换模型，其余代码不变。** 同一个 `LanguageModelSession` 可以换成 Apple 开源的 `MLXLanguageModel`（GPU）或 `CoreAILanguageModel`（神经引擎，底下是 27 新增的 Core AI 框架），在本机跑开源模型。系统模型的中文、日文摘要不够好时就换，代价是要下载几个 GB、占内存。
+- **Private Cloud Compute 模型**上下文 32K、不用 API key，下载量 200 万以下的开发者不付费；但数据要离开 Mac，所以不用在上面和窗口标题有关的事上。
+- 上下文大小用 `contextSize` 查，token 数用 `tokenCount(for:)` 算，不写死。
 
 ### 原型到 SwiftUI 的对照
 
@@ -282,9 +287,9 @@ macOS 上是 SwiftUI 加 AppKit（UIKit 是 iOS 的；Mac Catalyst 做菜单栏�
 
 | 原型里的部分 | 原生实现 | 难度 |
 | --- | --- | --- |
-| 窗口、侧栏、工具栏、红绿灯 | `NavigationSplitView` + `.toolbar`；侧栏和工具栏在 macOS 26 上自动是 Liquid Glass | 低 |
+| 窗口、侧栏、工具栏、红绿灯 | `NavigationSplitView` + `.toolbar`；侧栏和工具栏系统自动用 Liquid Glass | 低 |
 | 页面切换、深链接（`#card-…`） | 侧栏选中状态 + 自定义 URL scheme 和 `.onOpenURL`，通知点进来直接到卡片 | 低 |
-| 待办、等你确认、日报列表 | `List` / `LazyVStack`，`.contextMenu`，`.onHover` 显示「现在运行」 | 低 |
+| 待办、等你确认、日报列表 | `LazyVStack` 加 `swipeActionsContainer()`、`reorderContainer`，`.contextMenu`，`.onHover` 显示「现在运行」 | 低 |
 | 任务详情、待办详情 | `.inspector` | 低 |
 | 看板拖卡片 | `.draggable` + `.dropDestination` | 低 |
 | 日程周视图、时间线 | 自定义 `Layout` 或 `Canvas` | 中 |
@@ -292,11 +297,11 @@ macOS 上是 SwiftUI 加 AppKit（UIKit 是 iOS 的；Mac Catalyst 做菜单栏�
 | 流式回复、呼吸点 | `Text` 增量更新；`ellipsis` 符号加 `.symbolEffect` | 低 |
 | 助手回复里的 Markdown | 系统自带只支持行内样式，列表、代码块要用第三方渲染库或自己写 | 中 |
 | 复制消息 | 每条消息 `.textSelection(.enabled)`，再加一个「复制」按钮；不做跨多条消息的连续选中 | 低 |
-| 菜单栏常驻和弹出面板 | `MenuBarExtra` + `.menuBarExtraStyle(.window)`；橙色数字角标要画成图片 | 低 |
+| 菜单栏常驻和弹出面板 | AppKit `NSStatusItem`，面板里放 SwiftUI，用 `expandedInterfaceDelegate` 管键盘焦点；橙色数字角标画成图片 | 中 |
 | 可直接回复的系统通知 | `UNUserNotificationCenter` + `UNTextInputNotificationAction` | 低 |
 | ⌥Space 全局唤出 | 系统没有 SwiftUI 接口；用 Carbon 的 `RegisterEventHotKey`（不需要辅助功能权限），或 KeyboardShortcuts 这类封装库 | 中 |
 | ⌘K 浮动输入框（像 Spotlight） | AppKit `NSPanel`（不激活主窗口）里放 SwiftUI，背景用 `.glassEffect` | 中 |
-| 应用使用记录 | `NSWorkspace` 的前台应用通知，不需要权限；只记应用名和时长；要窗口标题才需要屏幕录制或辅助功能权限 | 低 |
+| 应用使用记录 | `NSWorkspace` 的前台应用通知，不需要权限，只记应用名和时长；专注检查读窗口标题用辅助功能接口 | 低 |
 | 本机提醒事项（以后） | EventKit，申请提醒事项的完整访问权限 | 低 |
 | 开机启动、常驻 | `SMAppService`；关掉窗口后留在菜单栏 | 低 |
 | 凭证 | 钥匙串 | 低 |
@@ -310,6 +315,7 @@ macOS 上是 SwiftUI 加 AppKit（UIKit 是 iOS 的；Mac Catalyst 做菜单栏�
 - **颜色只表达三件事。** 紫色（詩音的主题色）表示选中和主操作；暖橙表示在等你；红色表示逾期、"此刻"、你在操作云桌面。领域和助手的颜色只出现在小圆点、头像和日程色条上。
 - **玻璃只给浮在内容上面的控件**：输入框、⌘K 面板、云桌面的接管条、菜单栏弹出面板；同一处的几个玻璃控件放进一个 `GlassEffectContainer`。列表、看板卡片、确认卡片这些内容层不用玻璃，玻璃上也不叠玻璃。只有主操作按钮用 `.glassProminent` 染成紫色。
 - **字号五档**：11（角标）、12（次要信息）、13（正文）、15（小节标题）、20（详情标题），外加今天页 30 号的日期。
+- **说明只写在设置里。** 发什么、不发什么，一个功能怎么运作，写在设置里对应开关的下面。主窗口和菜单栏只放状态和操作，不加解释性的注释、提示，也不加"仅本机可见"这类标注。
 - **界面里不出现编号和协议词。** 任务卡编号、profile、模型名只放在详情底部的技术信息里。工具步骤默认折叠成一行。
 - **动的东西只有两种**：助手在做事时的三个呼吸点，和流式输出的光标。系统控件自带的反馈（按下玻璃按钮、弹出层出现）照常保留，但不自己另加动画。
 - **一个入口找詩音**：今天页的输入框；其他页面右上角的「跟詩音说」按钮（⌘K）；在 Mac 任何地方按 ⌥Space。

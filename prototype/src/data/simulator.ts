@@ -147,7 +147,7 @@ const scripts: Runner[] = [
               botId: 'study',
               at: demoNow(),
               title: '学校统一认证要两步验证，需要你在云桌面上登录一次',
-              detail: '下载课件卡在这一步。接管后登录、在手机上确认，然后交还，它会接着做。',
+              detail: '下载课件卡在这一步。',
               options: [
                 { label: '去接管', value: 'go', primary: true },
                 { label: '稍后', value: 'later' },
@@ -251,15 +251,12 @@ const scripts: Runner[] = [
         // with the check on, she goes by the last verdict she heard: no nudge while you are on the plan
         if (f.enabled && f.sent?.state !== 'off') return s;
         const late = Math.max(0, Math.floor((demoNow() - quiz.doAt) / 60_000));
-        const v = focusNow(s, demoNow());
-        const last = f.samples[f.samples.length - 1];
         let next = withTodo(s, 'td2', (t) => ({ ...t, nudges: t.nudges + 1 }));
         next = withItem(next, 'shion', {
           role: 'assistant',
           text: `小测原定 ${hm(quiz.doAt)} 开始，已经过了 ${late} 分钟。15 分钟就能做完，现在开始吧？`,
           at: demoNow(),
           todoIds: ['td2'],
-          localNote: f.enabled && v.state === 'off' && last ? `${hm(v.since)} 起，前台是 ${last.app}「${last.title}」` : undefined,
         });
         return withToast(next, { title: '詩音：该做课前小测了', body: `原定 ${hm(quiz.doAt)}，大概 15 分钟`, botId: 'shion', href: '#chat-shion' });
       },

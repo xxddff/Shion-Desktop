@@ -432,7 +432,6 @@ export function seedState(): AppState {
         botId: 'mail',
         at: at(0, 8, 44),
         title: '把这封回复发给中村老师？',
-        detail: '「邮件」只会在你确认后发送。',
         preview: {
           label: '收件人 中村老师 · 主题 Re: 中期报告的提交格式',
           body: '中村老师：\n\n您好，感谢提醒。中期报告我会按要求整理成 PDF，在 11 月 15 日前上传到课程网站。\n\n如格式上还有其他要求，请告诉我。\n\n谢谢！',

@@ -2,7 +2,8 @@ import { ArrowRight, CalendarDays, CircleCheck, Hand, Monitor, Newspaper, Search
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { dayDiff } from '../data/clock';
 import type { AppState, Toast } from '../data/model';
-import { dismissToast, sendMessage, setActivityLog, setFocusEnabled, setSimulate } from '../data/store';
+import { dismissToast, frontWindow, sendMessage, setActivityLog, setFocusEnabled, setSimulate } from '../data/store';
+import { DEMO_WINDOWS } from '../data/focus';
 import { FocusRow } from './Focus';
 import { go } from '../route';
 import { AreaDot, Avatar, Mark } from '../ui/bits';
@@ -119,7 +120,6 @@ export function QuickAsk({ state, onClose }: { state: AppState; onClose: () => v
             </>
           )}
         </ul>
-        <p className="quick-foot">在 Mac 上任何地方按 ⌥Space 都能叫出这里</p>
       </div>
     </>
   );
@@ -144,6 +144,10 @@ export function ConnectionPopover({ state, theme, setTheme, onClose }: { state: 
               <div className="quiet small">
                 {c.kind === 'cloudflare' ? 'Cloudflare Tunnel · Access' : c.kind === 'tailscale' ? 'Tailscale' : 'SSH 隧道'} · {c.auth} · {c.latencyMs} ms
               </div>
+              <div className="quiet small">
+                看板同时最多 {state.dispatch.maxInProgress ?? '不限'} 件
+                {state.dispatch.perProfile === 1 ? '，每个助手一次一件' : state.dispatch.perProfile ? `，每个助手最多 ${state.dispatch.perProfile} 件` : ''}
+              </div>
             </div>
           </div>
           <div className="pop-row off">
@@ -155,24 +159,30 @@ export function ConnectionPopover({ state, theme, setTheme, onClose }: { state: 
           </div>
         </section>
         <section>
+          <h4>这台 Mac 发出去的</h4>
           <label className="pop-switch" htmlFor="activity-toggle">
             <span className="grow">
               记录应用使用情况
-              <span className="quiet small block">只记应用名和时长，用来写每日回顾</span>
+              <span className="pop-sends">
+                <span>发给「回顾」：应用名、使用时长</span>
+                <span>不发：窗口标题、窗口里的内容</span>
+              </span>
             </span>
             <input id="activity-toggle" type="checkbox" checked={c.activityLog} onChange={(e) => setActivityLog(e.target.checked)} />
           </label>
           <label className="pop-switch" htmlFor="focus-toggle">
             <span className="grow">
               专注检查
-              <span className="quiet small block">在本机判断你在做的是不是计划里的事，只把结论告诉詩音。要读窗口标题，需要辅助功能权限</span>
+              <span className="pop-sends">
+                <span>发给詩音：此刻的计划、偏离了几分钟、在做哪类事</span>
+                <span>不发：窗口标题、应用名、本机的窗口记录</span>
+                <span>在本机读窗口标题，需要辅助功能权限</span>
+              </span>
             </span>
             <input id="focus-toggle" type="checkbox" checked={state.focus.enabled} onChange={(e) => setFocusEnabled(e.target.checked)} />
           </label>
-          <label className="pop-switch" htmlFor="sim-toggle">
-            <span className="grow">示例数据自动播放</span>
-            <input id="sim-toggle" type="checkbox" checked={state.simulate} onChange={(e) => setSimulate(e.target.checked)} />
-          </label>
+        </section>
+        <section>
           <div className="pop-switch">
             <span className="grow">外观</span>
             <div className="seg sm" role="group" aria-label="外观">
@@ -183,6 +193,30 @@ export function ConnectionPopover({ state, theme, setTheme, onClose }: { state: 
               ))}
             </div>
           </div>
+        </section>
+        <section>
+          <h4>原型演示</h4>
+          <label className="pop-switch" htmlFor="sim-toggle">
+            <span className="grow">示例数据自动播放</span>
+            <input id="sim-toggle" type="checkbox" checked={state.simulate} onChange={(e) => setSimulate(e.target.checked)} />
+          </label>
+          <label className="pop-switch pop-stack" htmlFor="front-window">
+            <span>前台窗口（给专注检查）</span>
+            <select
+              id="front-window"
+              value=""
+              onChange={(e) => {
+                if (e.target.value !== '') frontWindow(Number(e.target.value));
+              }}
+            >
+              <option value="">换一个…</option>
+              {DEMO_WINDOWS.map((w, i) => (
+                <option key={w.app + w.title} value={i}>
+                  {w.title ? `${w.app} · ${w.title}` : w.app}
+                </option>
+              ))}
+            </select>
+          </label>
         </section>
       </div>
     </>

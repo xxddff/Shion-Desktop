@@ -1,4 +1,4 @@
-import { ArrowUp, ArrowUpRight, Check, CircleAlert, Laptop } from 'lucide-react';
+import { ArrowUp, ArrowUpRight, Check, CircleAlert } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { CardChip, CardRow, CardState, cardHref, workHref } from '../components/Cards';
 import { AskCard, TodoRow } from '../components/Items';
@@ -177,12 +177,6 @@ function Item({ it, bot, state, now, head }: { it: ChatItem; bot: Bot; state: Ap
           ))}
         </div>
       )}
-      {it.localNote && !it.streaming && (
-        <p className="m-local">
-          <Laptop size={12} />
-          <span>仅本机可见 · {it.localNote}</span>
-        </p>
-      )}
     </div>
   );
 }
@@ -244,7 +238,6 @@ function WorkLog({ workers, bot, state, now, focus }: { workers: Chat[]; bot: Bo
   return (
     <div className="convo" ref={ref}>
       <div className="convo-inner">
-        <p className="quiet small">看板把每件事交给{bot.name}时，都会单独开一段工作记录，和你们的对话分开。</p>
         {workers.map((w) => {
           const card = state.cards.find((c) => c.id === w.cardId)!;
           return (

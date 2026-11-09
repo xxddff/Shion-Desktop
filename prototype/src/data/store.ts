@@ -152,7 +152,7 @@ export function takeOver(botId: string) {
       asks: next.asks.filter((a) => !(a.kind === 'takeover' && a.botId === botId)),
       toasts: next.toasts.filter((t) => t.href !== `#desktop-${botId}`),
     };
-    return withItem(next, botId, { role: 'system', text: '你接管了云桌面，助手暂停操作', at: demoNow() });
+    return withItem(next, botId, { role: 'system', text: '你接管了云桌面', at: demoNow() });
   });
 }
 
@@ -274,6 +274,7 @@ export function setActivityLog(on: boolean) {
 /**
  * This Mac tells 詩音 the verdict through the shion plugin, which puts it in
  * her Bot Chat (Hermes `inject_message`): words only, never window titles.
+ * Shion does not show that injected line; Settings says what is sent.
  */
 export function withFocusReport(s: AppState, state: 'on' | 'off'): AppState {
   const f = s.focus;
@@ -283,8 +284,7 @@ export function withFocusReport(s: AppState, state: 'on' | 'off'): AppState {
     state === 'off' && v.state === 'off'
       ? `「${f.target.title}」原定 ${hm(f.target.from)}，已经 ${v.minutes} 分钟没在做；在做的是${KIND_LABEL[v.kind]}。`
       : `回到「${f.target.title}」上了。`;
-  const next = { ...s, focus: { ...f, sent: { at: demoNow(), text, state } } };
-  return withItem(next, 'shion', { role: 'system', text: `这台 Mac 告诉詩音：${text}`, at: demoNow() });
+  return { ...s, focus: { ...f, sent: { at: demoNow(), text, state } } };
 }
 
 /** Prototype only: pretend a window came to the front; the on-device model judges it against the plan. */

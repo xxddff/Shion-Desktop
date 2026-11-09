@@ -30,12 +30,7 @@ export function BoardView({ state, cardId }: { state: AppState; cardId?: string 
   const waiting = state.cards.filter((c) => c.status === 'blocked' || c.status === 'review').length;
   return (
     <>
-      <Toolbar
-        title="看板"
-        sub={`${running} 件在做${waiting ? ` · ${waiting} 件等你` : ''} · 同时最多 ${state.dispatch.maxInProgress ?? '不限'} 件${
-          state.dispatch.perProfile === 1 ? '，每个助手一次一件' : state.dispatch.perProfile ? `，每个助手最多 ${state.dispatch.perProfile} 件` : ''
-        }`}
-      />
+      <Toolbar title="看板" sub={`${running} 件在做${waiting ? ` · ${waiting} 件等你` : ''}`} />
       <div className="view split">
         <div className="split-main board-canvas">
           <div className="kb">
@@ -117,7 +112,6 @@ function CardInspector({ card, state, now }: { card: Card; state: AppState; now:
 
         <section className="insp-sec">
           <h4>留言</h4>
-          <p className="quiet small">助手每次开始做都会先读这里。</p>
           {card.comments.map((c, i) => {
             const b = state.bots.find((x) => x.id === c.author);
             return (

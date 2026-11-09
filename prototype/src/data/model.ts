@@ -55,8 +55,6 @@ export interface ChatItem {
   cardId?: string;
   /** Inline card referencing todos created by this turn. */
   todoIds?: string[];
-  /** Shown under the message on this Mac only: local detail the assistant never received. */
-  localNote?: string;
 }
 
 /**

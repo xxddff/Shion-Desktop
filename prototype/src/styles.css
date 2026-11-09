@@ -467,41 +467,9 @@ kbd {
   flex-shrink: 0;
   font-size: var(--t-xs);
 }
-.focus-note {
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
-  margin: 0;
-  font-size: var(--t-xs);
-  line-height: 1.45;
-  color: var(--text-3);
-}
-.focus-note svg {
-  flex-shrink: 0;
-  margin-top: 2px;
-}
 .focus-actions {
   display: flex;
   gap: 6px;
-}
-.focus-demo {
-  display: grid;
-  gap: 4px;
-  padding-top: 8px;
-  border-top: 1px dashed var(--line-2);
-  font-size: var(--t-xs);
-  color: var(--text-3);
-}
-.focus-demo select {
-  width: 100%;
-  min-width: 0;
-  padding: 4px 6px;
-  border: 1px solid var(--line-2);
-  border-radius: 6px;
-  background: var(--fill);
-  color: var(--text);
-  font: inherit;
-  font-size: var(--t-sm);
 }
 
 /* ---------------------------------------------------------------- sidebar */
@@ -1745,18 +1713,6 @@ a.row:hover {
   color: var(--text-3);
   padding-top: 6px;
 }
-/* detail only this Mac knows, under an assistant's message */
-.m-local {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin: 6px 0 0;
-  font-size: var(--t-sm);
-  color: var(--text-3);
-}
-.m-local svg {
-  flex-shrink: 0;
-}
 .sys {
   align-self: center;
   font-size: var(--t-xs);
@@ -2086,10 +2042,6 @@ a.row:hover {
 .viewer-titles p.quiet {
   color: var(--text-3);
 }
-.viewer-note {
-  font-size: var(--t-sm);
-  color: var(--text-3);
-}
 .screens {
   display: grid;
   gap: 2px;
@@ -2179,18 +2131,6 @@ a.row:hover {
 .screen-hit:focus-visible .hit-hint,
 .hit-hint.show {
   opacity: 1;
-}
-.held-tag {
-  position: absolute;
-  left: 12px;
-  top: 12px;
-  padding: 3px 10px;
-  border-radius: 10px;
-  background: var(--red);
-  color: #fff;
-  font-size: var(--t-xs);
-  font-weight: 600;
-  pointer-events: none;
 }
 .release-bar {
   position: absolute;
@@ -2891,12 +2831,6 @@ a.row:hover {
   color: var(--text-3);
   padding: 10px 12px 4px;
 }
-.quick-foot {
-  border-top: 1px solid var(--line);
-  padding: 9px 18px;
-  font-size: var(--t-xs);
-  color: var(--text-3);
-}
 .popover {
   position: absolute;
   left: 10px;
@@ -2937,6 +2871,29 @@ a.row:hover {
   align-items: center;
   gap: 10px;
   padding: 7px 0;
+}
+.pop-sends {
+  display: grid;
+  gap: 1px;
+  margin-top: 2px;
+  font-size: var(--t-xs);
+  line-height: 1.45;
+  color: var(--text-3);
+}
+.pop-switch.pop-stack {
+  display: grid;
+  gap: 4px;
+}
+.pop-stack select {
+  width: 100%;
+  min-width: 0;
+  padding: 4px 6px;
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  background: var(--fill);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--t-sm);
 }
 .toasts {
   position: absolute;
