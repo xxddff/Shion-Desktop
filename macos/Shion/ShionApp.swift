@@ -22,7 +22,7 @@ struct ShionApp: App {
         .menuBarExtraStyle(.window)
 
         Settings {
-            SettingsView()
+            SettingsTabs()
                 .environment(store)
                 .preferredColorScheme(LaunchOptions.current.colorScheme)
         }

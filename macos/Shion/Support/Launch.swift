@@ -4,8 +4,11 @@ import SwiftUI
 enum Route: Hashable {
     case today, confirm, todos, calendar, reports, board, desktop
     case chat(String)
+    /// An assistant's own settings page.
+    case botSettings(String)
 
-    /// Parses the launch argument form used by the screenshot test: `today`, `chat-shion`, ...
+    /// Parses the launch argument form used by the screenshot test: `today`, `chat-shion`,
+    /// `assistant-shion`, ...
     init?(token: String) {
         switch token {
         case "today": self = .today
@@ -16,6 +19,10 @@ enum Route: Hashable {
         case "board": self = .board
         case "desktop": self = .desktop
         default:
+            if token.hasPrefix("assistant-") {
+                self = .botSettings(String(token.dropFirst(10)))
+                return
+            }
             guard token.hasPrefix("chat-") else { return nil }
             self = .chat(String(token.dropFirst(5)))
         }
