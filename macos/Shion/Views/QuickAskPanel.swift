@@ -27,7 +27,7 @@ final class QuickAskWindow: NSPanel {
         isMovableByWindowBackground = true
         isReleasedWhenClosed = false
         animationBehavior = .utilityWindow
-        title = "跟詩音说"
+        title = "跟\(store.chiefName)说"
         identifier = NSUserInterfaceItemIdentifier("quick-ask")
         setAccessibilityIdentifier("quick-ask")
         let host = NSHostingView(rootView: QuickAskRoot(store: store, quick: quick) { [weak self] height in
@@ -169,7 +169,7 @@ struct QuickAskView: View {
             Mark(size: 26)
             KeyField(
                 text: draft,
-                placeholder: "跟\(store.bot(store.chiefId)?.name ?? "詩音")说…",
+                placeholder: "跟\(store.chiefName)说…",
                 size: 15,
                 identifier: "quick-field",
                 onSubmit: { quick.send() },

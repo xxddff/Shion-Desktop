@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// An assistant's own settings page (the sidebar's right-click menu, or the chat's toolbar): its
 /// name, description, model and SOUL, its MCP servers, skills and tools, and a few config values.
@@ -49,11 +50,14 @@ struct BotSettingsForm: View {
     @State private var addingServer = false
     @State private var browsingCatalog = false
     @State private var removingServer: String?
+    @State private var editingServer: McpServer?
+    @State private var choosingPicture = false
     @State private var skillFilter = ""
 
     var body: some View {
         Form {
             basics
+            lookSection
             soulSection
             serversSection
             skillsSection
@@ -102,6 +106,77 @@ struct BotSettingsForm: View {
         .sheet(isPresented: $browsingCatalog) {
             McpCatalogSheet(editor: editor)
         }
+        .sheet(item: $editingServer) { server in
+            EditMcpServerSheet(editor: editor, server: server)
+        }
+        .fileImporter(isPresented: $choosingPicture, allowedContentTypes: [.image]) { result in
+            if case .success(let url) = result {
+                editor.choosePicture(url)
+            }
+        }
+    }
+
+    // MARK: the avatar
+
+    private var lookSection: some View {
+        Section {
+            Picker("形状", selection: Binding(get: { editor.shape }, set: { editor.chooseShape($0) })) {
+                Text("默认").tag("")
+                ForEach(BotLook.shapes, id: \.key) { item in
+                    Text(item.name).tag(item.key)
+                }
+                if !editor.shape.isEmpty && !BotLook.shapes.contains(where: { $0.key == editor.shape }) {
+                    Text("Bot Mode 的").tag(editor.shape)
+                }
+            }
+            .accessibilityIdentifier("assistant-shape")
+            LabeledContent("颜色") {
+                HStack(spacing: 6) {
+                    ForEach(Array(BotLook.swatches.enumerated()), id: \.offset) { index, swatch in
+                        Button {
+                            editor.chooseColor(swatch)
+                        } label: {
+                            Circle()
+                                .fill(BotLook.color(swatch) ?? Color.secondary)
+                                .frame(width: 16, height: 16)
+                                .overlay(Circle().strokeBorder(Color.primary.opacity(editor.color == swatch ? 0.7 : 0), lineWidth: 2))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("颜色 \(index + 1)")
+                        .accessibilityValue(editor.color == swatch ? "已选" : "")
+                        .accessibilityAddTraits(editor.color == swatch ? .isSelected : [])
+                        .accessibilityIdentifier("assistant-color-\(index)")
+                    }
+                    Button("默认") { editor.chooseColor("") }
+                        .controlSize(.small)
+                        .disabled(editor.color.isEmpty)
+                        .accessibilityIdentifier("assistant-color-default")
+                }
+            }
+            LabeledContent("图片") {
+                HStack(spacing: 8) {
+                    if editor.hasPicture {
+                        Button("去掉") { editor.clearPicture() }
+                            .accessibilityIdentifier("assistant-picture-clear")
+                    }
+                    Button("选择图片…") { choosingPicture = true }
+                        .disabled(editor.demo)
+                        .accessibilityIdentifier("assistant-picture")
+                }
+            }
+            if editor.errors[.look] != nil || editor.busy.contains("look") || editor.busy.contains("picture") {
+                HStack(spacing: 8) {
+                    Problem(editor.errors[.look])
+                    Spacer()
+                    if editor.busy.contains("look") || editor.busy.contains("picture") {
+                        ProgressView().controlSize(.small)
+                    }
+                }
+            }
+        } header: {
+            Text("头像")
+        }
+        .disabled(editor.busy.contains("look") || editor.busy.contains("picture"))
     }
 
     // MARK: name, description, model
@@ -195,11 +270,26 @@ struct BotSettingsForm: View {
     private var serversSection: some View {
         Section {
             ForEach(editor.servers) { server in
-                McpServerRow(editor: editor, server: server) {
+                McpServerRow(editor: editor, server: server, edit: { editingServer = server }) {
                     removingServer = server.name
                 }
             }
-            if editor.servers.isEmpty && !editor.loading.contains(.mcp) {
+            // catalog entries installing in the background, until the server lists them
+            ForEach(editor.installs.keys.sorted(), id: \.self) { entry in
+                HStack(spacing: 8) {
+                    Text(entry).font(.t13)
+                    Spacer(minLength: 8)
+                    if case .failed(let reason)? = editor.installs[entry] {
+                        Text(reason).font(.t12).foregroundStyle(Palette.alert).lineLimit(2)
+                    } else {
+                        ProgressView().controlSize(.small)
+                        Text("在安装").font(.t12).foregroundStyle(.secondary)
+                    }
+                }
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("mcp-install-\(entry)")
+            }
+            if editor.servers.isEmpty && editor.installs.isEmpty && !editor.loading.contains(.mcp) {
                 Text("还没有 MCP 服务器").foregroundStyle(.secondary)
             }
             HStack(spacing: 8) {
@@ -240,22 +330,29 @@ struct BotSettingsForm: View {
                     .accessibilityIdentifier("skill-filter")
             }
             ForEach(shownSkills) { skill in
-                Toggle(isOn: Binding(get: { skill.enabled }, set: { editor.setSkill(skill.name, enabled: $0) })) {
-                    HStack(spacing: 4) {
-                        Text(skill.name)
-                        if skill.locked {
-                            Image(systemName: "lock.fill")
-                                .font(.t11)
-                                .foregroundStyle(.secondary)
-                                .accessibilityLabel("已锁定")
+                LabeledContent {
+                    HStack(spacing: 10) {
+                        // locked: the assistant cannot change it itself
+                        Toggle(isOn: Binding(get: { skill.locked }, set: { editor.setSkillLock(skill.name, locked: $0) })) {
+                            Label("锁定", systemImage: skill.locked ? "lock.fill" : "lock.open")
                         }
+                        .toggleStyle(.button)
+                        .labelStyle(.iconOnly)
+                        .help("锁定")
+                        .disabled(editor.busy.contains("lock-\(skill.name)"))
+                        .accessibilityIdentifier("skill-lock-\(skill.name)")
+                        Toggle(skill.name, isOn: Binding(get: { skill.enabled }, set: { editor.setSkill(skill.name, enabled: $0) }))
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .disabled(editor.busy.contains("skill-\(skill.name)"))
+                            .accessibilityIdentifier("skill-\(skill.name)")
                     }
+                } label: {
+                    Text(skill.name)
                     if !skill.description.isEmpty {
                         Text(skill.description)
                     }
                 }
-                .disabled(editor.busy.contains("skill-\(skill.name)"))
-                .accessibilityIdentifier("skill-\(skill.name)")
             }
             if editor.skills.isEmpty && editor.loading.contains(.skills) {
                 ProgressView().controlSize(.small)
@@ -444,6 +541,7 @@ struct ModelMenu: View {
 struct McpServerRow: View {
     let editor: BotEditor
     let server: McpServer
+    let edit: () -> Void
     let remove: () -> Void
 
     var body: some View {
@@ -480,6 +578,8 @@ struct McpServerRow: View {
                         .accessibilityIdentifier("mcp-signin-\(server.name)")
                 }
                 if !server.fromPlugin {
+                    Button("编辑…", action: edit)
+                        .accessibilityIdentifier("mcp-edit-\(server.name)")
                     Button("删除…", role: .destructive, action: remove)
                         .accessibilityIdentifier("mcp-remove-\(server.name)")
                 }
@@ -610,6 +710,105 @@ struct NewMcpServerSheet: View {
         Task {
             do {
                 try await editor.addServer(server)
+                dismiss()
+            } catch {
+                failure = error.localizedDescription
+            }
+            sending = false
+        }
+    }
+}
+
+/// 编辑 MCP 服务器: its URL and how it signs in, or its command line and env. What the server has
+/// already (a token, an env value) is not shown; a new one is typed into a secure field.
+struct EditMcpServerSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let editor: BotEditor
+    let server: McpServer
+    @State private var draft = McpEdit()
+    @State private var sending = false
+    @State private var failure: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Form {
+                Section {
+                    LabeledContent("名字", value: server.name)
+                    if server.transport == "http" {
+                        TextField("网址", text: $draft.url)
+                            .accessibilityIdentifier("mcp-edit-url")
+                        Picker("登录", selection: $draft.auth) {
+                            Text("不用").tag("none")
+                            Text("OAuth").tag("oauth")
+                            Text("令牌").tag("header")
+                        }
+                        .accessibilityIdentifier("mcp-edit-auth")
+                        if draft.auth == "header" {
+                            SecureField("令牌", text: $draft.token,
+                                        prompt: Text(server.signIn == "header" ? "不填就用原来的" : ""))
+                                .accessibilityIdentifier("mcp-edit-token")
+                        }
+                    } else {
+                        TextField("命令", text: $draft.command)
+                            .accessibilityIdentifier("mcp-edit-command")
+                        ForEach($draft.env) { $pair in
+                            HStack(spacing: 8) {
+                                if server.envNames.contains(pair.key) {
+                                    Text(pair.key).frame(maxWidth: .infinity, alignment: .leading)
+                                } else {
+                                    TextField("变量名", text: $pair.key)
+                                }
+                                SecureField("值", text: $pair.value,
+                                            prompt: Text(server.envNames.contains(pair.key) ? "不填就用原来的" : ""))
+                            }
+                        }
+                        Button("加一个环境变量") { draft.env.append(EnvPair()) }
+                    }
+                } header: {
+                    Text("编辑 MCP 服务器")
+                }
+            }
+            .formStyle(.grouped)
+            Problem(failure)
+                .padding(.horizontal, 20)
+            HStack {
+                if sending {
+                    ProgressView().controlSize(.small)
+                }
+                Spacer()
+                Button("取消", role: .cancel) { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("保存") { save() }
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!ready || sending)
+                    .accessibilityIdentifier("mcp-edit-save")
+            }
+            .padding(20)
+        }
+        .frame(width: 460)
+        .onAppear {
+            draft = McpEdit(server)
+        }
+    }
+
+    /// A URL or a command is there, and a token where one is now needed.
+    private var ready: Bool {
+        if server.transport == "http" {
+            let url = draft.url.trimmingCharacters(in: .whitespacesAndNewlines)
+            let needsToken = draft.auth == "header" && server.signIn != "header"
+            return !url.isEmpty && (!needsToken || !draft.token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+        return !BotEditor.words(draft.command).isEmpty
+    }
+
+    private func save() {
+        let edit = draft
+        sending = true
+        failure = nil
+        Task {
+            do {
+                try await editor.editServer(server, edit)
                 dismiss()
             } catch {
                 failure = error.localizedDescription
