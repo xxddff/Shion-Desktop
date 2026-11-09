@@ -80,7 +80,8 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 520)
+        // tall enough for the server and the board at once
+        .frame(width: 520, height: 640)
         .onAppear {
             draft = store.serverSettings
         }

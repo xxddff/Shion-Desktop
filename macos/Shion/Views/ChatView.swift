@@ -30,6 +30,7 @@ struct ChatView: View {
         }
         // starts at the newest message, and keeps the rows in view still when older ones arrive above
         .defaultScrollAnchor(.bottom)
+        .accessibilityIdentifier("transcript")
         .onScrollGeometryChange(for: CGFloat.self) { geometry in
             geometry.containerSize.height - geometry.contentInsets.top - geometry.contentInsets.bottom
         } action: { _, height in

@@ -83,10 +83,20 @@ final class SignInTests: XCTestCase {
         // come a page at a time as the top scrolls into view
         XCTAssertFalse(waitForText("第 1 条（你）", in: app, timeout: 1), "the whole transcript came at once")
         let window = app.windows.firstMatch
+        let transcript = element("transcript", in: app)
+        XCTAssertTrue(transcript.waitForExistence(timeout: 5), "no transcript")
         var direction: CGFloat = 1
         var reachedTop = false
-        for attempt in 0..<16 {
-            window.scroll(byDeltaX: 0, deltaY: direction * 1200)
+        for attempt in 0..<18 {
+            if attempt < 10 {
+                // wheel events go where the pointer is: put it on the transcript, not the composer
+                transcript.hover()
+                transcript.scroll(byDeltaX: 0, deltaY: direction * 1200)
+            } else {
+                // gestures that never land: the keyboard's way to the top
+                transcript.click()
+                app.typeKey(.home, modifierFlags: [])
+            }
             if waitForText("第 1 条（你）", in: app, timeout: 1.5) {
                 reachedTop = true
                 break
@@ -110,7 +120,6 @@ final class SignInTests: XCTestCase {
         app.typeKey(",", modifierFlags: .command)
         let again = app.windows.matching(NSPredicate(format: "identifier CONTAINS[c] 'settings'")).firstMatch
         XCTAssertTrue(again.waitForExistence(timeout: 5))
-        again.scroll(byDeltaX: 0, deltaY: -direction * 600)
         let total = element("board-limit-total", in: again)
         let shown = total.waitForExistence(timeout: 5)
         keep(again.screenshot(), "signin-8-board-limits")
