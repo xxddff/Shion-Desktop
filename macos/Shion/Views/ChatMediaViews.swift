@@ -312,6 +312,8 @@ struct FileCard: View {
     @Environment(\.chatBotId) private var botId
     let media: ChatMedia
     @State private var check: AppStore.FileCheck?
+    /// Its name on this Mac, when you sent it under another.
+    @State private var localName: String?
     @State private var busy = false
     @State private var problem: String?
     @State private var previewing: URL?
@@ -323,6 +325,7 @@ struct FileCard: View {
             }
         }
         .task(id: "\(media.id)|\(store.live)") {
+            localName = await store.localName(media, botId: botId)
             check = await store.checkFile(media, botId: botId)
         }
     }
@@ -332,7 +335,7 @@ struct FileCard: View {
         return false
     }
 
-    private var name: String { AppStore.displayName(media.name) }
+    private var name: String { localName ?? AppStore.displayName(media.name) }
 
     private var saved: Bool { store.media.saved[media.id] != nil }
 

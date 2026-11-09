@@ -542,6 +542,12 @@ extension AppStore {
         }
     }
 
+    /// The name a file had on this Mac when you sent it: Hermes renames a staged one in ASCII.
+    func localName(_ item: ChatMedia, botId: String) async -> String? {
+        guard let hash = await cachedHash(item, botId: botId) else { return nil }
+        return await media.disk.name(hash)
+    }
+
     /// The file in the Mac's cache, fetched first when it is not there yet; its hash.
     func localCopy(_ item: ChatMedia, botId: String) async throws -> String {
         if let hash = await cachedHash(item, botId: botId), await media.disk.file(hash) != nil {
