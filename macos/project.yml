@@ -21,6 +21,10 @@ packages:
   swift-markdown:
     url: https://github.com/swiftlang/swift-markdown
     minorVersion: 0.9.0
+  # the global shortcut for the ⌥Space window and its recorder in Settings (Model/QuickAsk.swift)
+  KeyboardShortcuts:
+    url: https://github.com/sindresorhus/KeyboardShortcuts
+    minorVersion: 3.1.0
 targets:
   Shion:
     type: application
@@ -32,6 +36,7 @@ targets:
     dependencies:
       - package: swift-markdown
         product: Markdown
+      - package: KeyboardShortcuts
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.shion.Shion
