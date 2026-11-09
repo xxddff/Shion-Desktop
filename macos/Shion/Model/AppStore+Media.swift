@@ -25,6 +25,12 @@ extension AppStore {
         return [serverSettings.signInServer, botId, session, path].joined(separator: "|")
     }
 
+    /// A picture's or file's key in the Mac's memory (decoded, being fetched, saved): its
+    /// server and assistant too, since two chats' relative paths can read the same.
+    func mediaKey(_ item: ChatMedia, botId: String) -> String {
+        item.path.map { sourceKey($0, botId: botId) } ?? item.id
+    }
+
     private func shotKey(_ botId: String, _ itemId: String) -> String {
         [serverSettings.signInServer, botId, itemId].joined(separator: "|")
     }
@@ -382,7 +388,8 @@ extension AppStore {
     /// sizes ask for a picture at once, its bytes are fetched once: a screenshot fetched ahead and
     /// its row on screen would otherwise both ask a server that hands it out only for a while.
     func loadPicture(_ item: ChatMedia, botId: String, maxPixel: Int, keep: Bool = false, web: Bool = false) async -> PictureLoad {
-        let key = "\(item.id)|\(maxPixel)"
+        let source = mediaKey(item, botId: botId)
+        let key = "\(source)|\(maxPixel)"
         if let picture = media.decodedPicture(key) {
             return .shown(picture)
         }
@@ -391,15 +398,15 @@ extension AppStore {
             return .shown(picture)
         }
         let fetch: Task<PictureBytes, Never>
-        if let running = media.fetches[item.id] {
+        if let running = media.fetches[source] {
             fetch = running
         } else {
             fetch = Task { await self.pictureBytes(item, botId: botId, keep: keep, web: web) }
-            media.fetches[item.id] = fetch
+            media.fetches[source] = fetch
         }
         let bytes = await fetch.value
-        if media.fetches[item.id] == fetch {
-            media.fetches[item.id] = nil
+        if media.fetches[source] == fetch {
+            media.fetches[source] = nil
         }
         let picture: Picture?
         switch bytes {
@@ -571,7 +578,8 @@ extension AppStore {
     /// runs keep it in their own folder and open nothing.
     @discardableResult
     func saveFile(_ item: ChatMedia, botId: String, open: Bool) async throws -> URL {
-        if let saved = media.saved[item.id], FileManager.default.fileExists(atPath: saved.path) {
+        let key = mediaKey(item, botId: botId)
+        if let saved = media.saved[key], FileManager.default.fileExists(atPath: saved.path) {
             if open && !LaunchOptions.current.snapshot {
                 _ = NSWorkspace.shared.open(saved)
             }
@@ -579,7 +587,7 @@ extension AppStore {
         }
         let hash = try await localCopy(item, botId: botId)
         let url = try await media.disk.export(hash, name: Self.displayName(item.name), to: Self.downloads)
-        media.markSaved(url, key: item.id)
+        media.markSaved(url, key: key)
         if open && !LaunchOptions.current.snapshot {
             _ = NSWorkspace.shared.open(url)
         }

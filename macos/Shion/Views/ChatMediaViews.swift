@@ -361,7 +361,7 @@ struct FileCard: View {
 
     private var name: String { localName ?? AppStore.displayName(media.name) }
 
-    private var saved: Bool { store.media.saved[media.id] != nil }
+    private var saved: Bool { store.media.saved[store.mediaKey(media, botId: botId)] != nil }
 
     private var card: some View {
         Button {
