@@ -70,7 +70,8 @@ struct ConnectionState: View {
             Text(text)
                 .font(.t12)
                 .foregroundStyle(.secondary)
-                .lineLimit(2)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 

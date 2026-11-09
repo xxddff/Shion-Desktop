@@ -6,6 +6,9 @@ nonisolated enum GatewayError: LocalizedError {
     case offline
     case timeout(String)
     case accessDenied
+    case tokenLoginOff([String])
+    case badToken
+    case upgradeRefused(Int)
     case http(Int)
     case closed(Int, String)
     case rpc(code: Int, message: String, reason: String?)
@@ -16,6 +19,17 @@ nonisolated enum GatewayError: LocalizedError {
         case .offline: return "没有连上服务器"
         case .timeout(let what): return "等 \(what) 超时了"
         case .accessDenied: return "Cloudflare Access 没有放行，检查 Client ID 和 Secret"
+        case .tokenLoginOff(let providers):
+            let now = providers.isEmpty ? "现在一个登录方式都没有" : "现在只有 \(providers.joined(separator: "、"))"
+            return "服务器没开会话令牌登录：/api/status 的 auth_providers 里没有 session-token（\(now)）。在运行 hermes gateway 的环境里设好 HERMES_DASHBOARD_SESSION_TOKEN，确认 dashboard.session_token_auth.enabled 不是 false，再重启 gateway。"
+        case .badToken:
+            return "会话令牌和服务器上的 HERMES_DASHBOARD_SESSION_TOKEN 对不上（/api/auth/me 返回 401）。服务器换过令牌的话，这里要填新的。"
+        case .upgradeRefused(let status):
+            switch status {
+            case 404: return "这个地址下面没有 /api/ws（HTTP 404）：要填 hermes gateway 的 Webapp 地址。"
+            case 401, 403: return "服务器拒绝了 WebSocket（HTTP \(status)）。令牌已经检查过的话，多半是 Host 和 webapp.public_url 对不上，或者这个地址没开聊天。"
+            default: return "服务器拒绝了 WebSocket（HTTP \(status)）。"
+            }
         case .http(let status): return "服务器返回 HTTP \(status)"
         case .closed(let code, let reason): return Gateway.describeClose(code, reason)
         case .rpc(_, let message, let reason): return reason ?? message
@@ -106,19 +120,37 @@ final class Gateway {
         }
     }
 
-    /// `GET /api/status` is public on Hermes; through Cloudflare it tells whether Access let us in.
+    /// Checks over plain HTTP what the WebSocket upgrade would only answer with a bare refusal:
+    /// whether Cloudflare Access lets us in (`GET /api/status` is public on Hermes), whether the
+    /// server takes the deployment session token at all (its `session-token` provider), and
+    /// whether this token is that one (`GET /api/auth/me` with it as a bearer). These are the
+    /// checks Hermes's own docs give for a token-gated deployment.
     private func preflight() async throws {
         guard let url = settings.httpURL("/api/status") else { throw GatewayError.notConfigured }
         var request = URLRequest(url: url)
         request.timeoutInterval = 15
         settings.applyAccessHeaders(to: &request)
-        let (_, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await URLSession.shared.data(for: request)
         if let host = response.url?.host, host.hasSuffix("cloudflareaccess.com") {
             throw GatewayError.accessDenied
         }
-        // only Access saying no is fatal here; anything else, the WebSocket itself will tell
         if let http = response as? HTTPURLResponse, http.statusCode == 401 || http.statusCode == 403 {
             throw GatewayError.accessDenied
+        }
+        // a server without the sign-in gate (loopback) checks the token on the socket itself
+        guard let status = try? JSONValue.parse(String(decoding: data, as: UTF8.self)),
+              status["auth_required"]?.bool == true
+        else { return }
+        let providers = (status["auth_providers"]?.array ?? []).compactMap { $0.string }
+        guard providers.contains("session-token") else { throw GatewayError.tokenLoginOff(providers) }
+        guard let meURL = settings.httpURL("/api/auth/me") else { return }
+        var me = URLRequest(url: meURL)
+        me.timeoutInterval = 15
+        settings.applyAccessHeaders(to: &me)
+        me.setValue("Bearer \(settings.token)", forHTTPHeaderField: "Authorization")
+        let (_, meResponse) = try await URLSession.shared.data(for: me)
+        if let http = meResponse as? HTTPURLResponse, http.statusCode == 401 {
+            throw GatewayError.badToken
         }
     }
 
@@ -239,9 +271,16 @@ final class Gateway {
         guard socket === self.socket else { return }
         let code = socket.closeCode.rawValue
         let reason = socket.closeReason.map { String(decoding: $0, as: UTF8.self) } ?? ""
-        let failure: Error = code == 0 || code == URLSessionWebSocketTask.CloseCode.invalid.rawValue
-            ? error
-            : GatewayError.closed(code, reason)
+        // a refused upgrade surfaces as "bad server response"; its HTTP status says more
+        let refused = (socket.response as? HTTPURLResponse).map(\.statusCode).flatMap { $0 == 101 ? nil : $0 }
+        let failure: Error
+        if let refused {
+            failure = GatewayError.upgradeRefused(refused)
+        } else if code == 0 || code == URLSessionWebSocketTask.CloseCode.invalid.rawValue {
+            failure = error
+        } else {
+            failure = GatewayError.closed(code, reason)
+        }
         teardown(failure)
         guard wanted else { return }
         phase = .failed(failure.localizedDescription)
