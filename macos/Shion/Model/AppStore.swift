@@ -186,12 +186,15 @@ extension AppStore {
         var liveBots: [Bot] = []
         for (index, row) in rows.enumerated() {
             guard let name = row["name"]?.string else { continue }
-            let display = row["display_name"]?.string ?? ""
+            // the name Bot Mode shows: its ui_meta title, then the profile's display name
+            let display = [row["ui_meta"]?["hermes-bots"]?["title"]?.string, row["display_name"]?.string]
+                .compactMap { $0 }
+                .first { !$0.isEmpty } ?? name
             let description = row["description"]?.string ?? ""
             let chief = name == chiefName
             liveBots.append(Bot(
                 id: name,
-                name: display.isEmpty ? name : display,
+                name: display,
                 title: chief ? "总秘书" : (description.isEmpty ? name : description),
                 chief: chief,
                 hue: chief ? Palette.accent : Palette.hues[index % Palette.hues.count],

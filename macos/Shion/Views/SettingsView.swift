@@ -9,12 +9,12 @@ struct SettingsView: View {
         @Bindable var store = store
         Form {
             Section {
-                TextField("地址", text: $draft.address, prompt: Text("https://hermes.example.dev"))
+                TextField("地址", text: $draft.address, prompt: Text(verbatim: "https://hermes.example.dev"))
                 SecureField("会话令牌", text: $draft.token)
                 TextField("Access Client ID", text: $draft.accessClientId)
                 SecureField("Access Client Secret", text: $draft.accessClientSecret)
                 HStack(spacing: 8) {
-                    ConnectionState(phase: store.gateway.phase, live: store.live, count: store.bots.count)
+                    ConnectionState(phase: store.gateway.phase, live: store.live, count: store.bots.count, canonical: store.gateway.sessionAuthority)
                     Spacer()
                     if store.gateway.phase != .offline {
                         Button("断开") { store.disconnect() }
@@ -62,6 +62,7 @@ struct ConnectionState: View {
     let phase: Gateway.Phase
     let live: Bool
     let count: Int
+    var canonical = true
 
     var body: some View {
         HStack(spacing: 6) {
@@ -84,6 +85,7 @@ struct ConnectionState: View {
 
     private var text: String {
         switch phase {
+        case .online where !canonical: return "已连接，但服务器说的是旧协议（hermes serve），对话会用不了；要连 hermes gateway 的 /api/ws"
         case .online: return live ? "已连接 · \(count) 个助手" : "已连接"
         case .connecting: return "连接中…"
         case .failed(let reason): return reason
