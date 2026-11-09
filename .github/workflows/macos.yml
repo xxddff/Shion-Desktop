@@ -90,4 +90,5 @@ jobs:
 
       - name: Show errors
         if: failure()
-        run: grep -nE "error:|: error|Failing tests|failed" build/xcodebuild.log | head -120 || true
+        run: |
+          grep -nE 'error:|Failing tests|failed' build/xcodebuild.log | head -120 || true
