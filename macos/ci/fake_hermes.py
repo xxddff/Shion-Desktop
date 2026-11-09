@@ -508,6 +508,11 @@ class Handler(BaseHTTPRequestHandler):
                       "| 教科书第 6 章，重点是建堆那一节 | 把 push 和 pop 写完，先测空堆 | 最右这列的格子（CI） |\n"
                       "| 机器学习基础 | 线性回归和梯度下降，学习率太大会发散 | 课前小测，今天 12:50 截止 | 讲义第 3 章 "
                       "| 复习矩阵求导 | 小测可以带一张手写笔记 |\n\n"
+                      "作业4 先把这一行跑通：\n\n"
+                      "```python\n"
+                      "heap = BinaryHeap(key=lambda task: (task.due, -task.priority))  "
+                      "# 先比截止时间，同一时间再比优先级，都一样时按加进来的先后（CI）\n"
+                      "```\n\n"
                       "先写**实验报告**，周三前交。")
 
     def homework(self, session_id, text):

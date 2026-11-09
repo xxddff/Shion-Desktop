@@ -203,27 +203,50 @@ final class BoardTests: XCTestCase {
         XCTAssertTrue(element("markdown-table", in: app).exists, "no table in the reply")
         XCTAssertTrue(folded, "the turn's tool calls did not fold into one line once the reply was in")
 
+        // the rest of the reply's checks all report, one failing or not
+        continueAfterFailure = true
+
         // the second table is wider than the reply even with its cells wrapped: it scrolls sideways
         // in its own box until its last column shows, and the words before it stay where they are
         let wide = element("markdown-table-scroll", in: app)
-        let edge = exactText("最右这列的格子（CI）", in: app)
-        let words = findText("各门课这周的情况", in: app)
-        guard wide.waitForExistence(timeout: 5), let edge, let words else {
+        if wide.waitForExistence(timeout: 5), let edge = exactText("最右这列的格子（CI）", in: app),
+           let words = findText("各门课这周的情况", in: app) {
+            let past = edge.frame.maxX > wide.frame.maxX + 1
+            let wordsX = words.frame.minX
+            let revealed = scrollSideways(wide, revealing: edge)
+            keep(window.screenshot(), "board-13a-wide-table-scrolled")
+            XCTAssertTrue(past, "the wide table's last column fits already: \(edge.frame) in \(wide.frame)")
+            XCTAssertTrue(revealed, "scrolling the wide table did not bring its last column into view: \(edge.frame) in \(wide.frame)")
+            XCTAssertEqual(words.frame.minX, wordsX, accuracy: 1, "the words before the wide table moved with it")
+        } else {
             keep(window.screenshot(), "board-13a-no-wide-table")
-            return XCTFail("the wide table does not scroll on its own, or its last column or the words before it are missing")
+            XCTFail("the wide table does not scroll on its own, or its last column or the words before it are missing")
         }
-        let past = edge.frame.maxX > wide.frame.maxX + 1
-        let wordsX = words.frame.minX
-        let shown = scrollSideways(wide, revealing: edge)
-        keep(window.screenshot(), "board-13a-wide-table-scrolled")
-        XCTAssertTrue(past, "the wide table's last column fits already: \(edge.frame) in \(wide.frame)")
-        XCTAssertTrue(shown, "scrolling the wide table did not bring its last column into view: \(edge.frame) in \(wide.frame)")
-        XCTAssertEqual(words.frame.minX, wordsX, accuracy: 1, "the words before the wide table moved with it")
+
+        // a code line longer than the reply scrolls sideways in its block, the same way
+        let code = element("markdown-code", in: app)
+        let either = NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", "BinaryHeap", "BinaryHeap")
+        let source = code.staticTexts.matching(either).firstMatch.exists
+            ? code.staticTexts.matching(either).firstMatch : code.textViews.matching(either).firstMatch
+        if code.waitForExistence(timeout: 5), source.exists, let words = findText("先把这一行跑通", in: app) {
+            let past = source.frame.maxX > code.frame.maxX + 1
+            let wordsX = words.frame.minX
+            let revealed = scrollSideways(code, revealing: source)
+            keep(window.screenshot(), "board-13b-code-scrolled")
+            XCTAssertTrue(past, "the long code line fits already: \(source.frame) in \(code.frame)")
+            XCTAssertTrue(revealed, "scrolling the code block did not bring the line's end into view: \(source.frame) in \(code.frame)")
+            XCTAssertEqual(words.frame.minX, wordsX, accuracy: 1, "the words before the code block moved with it")
+        } else {
+            keep(window.screenshot(), "board-13b-no-code")
+            XCTFail("no code block with the long line, or the words before it are missing")
+        }
 
         // a click opens the folded calls below the line, which stays under the pointer while what
         // is below it moves down; a second click closes them, and the line stays again
         let run = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "用了 3 个工具")).firstMatch
-        XCTAssertTrue(run.waitForExistence(timeout: 3), "no button for the folded tool calls")
+        guard run.waitForExistence(timeout: 3) else {
+            return XCTFail("no button for the folded tool calls")
+        }
         let line = run.frame.minY
         run.click()
         let opened = waitForText("read_file · syllabus（CI）", in: app, timeout: 5)
