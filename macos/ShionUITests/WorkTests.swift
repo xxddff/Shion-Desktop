@@ -33,6 +33,7 @@ final class WorkTests: XCTestCase {
         app.typeKey(",", modifierFlags: .command)
         let settings = app.windows.matching(NSPredicate(format: "identifier CONTAINS[c] 'settings'")).firstMatch
         XCTAssertTrue(settings.waitForExistence(timeout: 5), "no Settings window")
+        serverTab(settings)
         type(server, into: settings.textFields["server-address"])
         type("ci-client", into: settings.textFields["access-id"])
         type("ci-secret", into: settings.secureTextFields["access-secret"])
@@ -133,8 +134,10 @@ final class WorkTests: XCTestCase {
         app.typeKey(",", modifierFlags: .command)
         let prefs = app.windows.matching(NSPredicate(format: "identifier CONTAINS[c] 'settings'")).firstMatch
         XCTAssertTrue(prefs.waitForExistence(timeout: 5), "no Settings window")
+        serverTab(prefs)
         let toggle = element("board-notify-done", in: prefs)
         XCTAssertTrue(toggle.waitForExistence(timeout: 5), "no setting for done cards")
+        scrollTo(toggle, in: prefs)
         let off = turnOff(toggle)
         keep(prefs.screenshot(), "work-7-settings")
         XCTAssertNotEqual(off, false, "the setting did not turn off: \(String(describing: toggle.value))")
@@ -242,6 +245,33 @@ final class WorkTests: XCTestCase {
         guard isOn() != nil else { return nil }
         control.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.5)).click()
         return waitUntil(timeout: 2) { isOn() == false }
+    }
+
+    /// Settings opens on the tab it was last left on (BotsTests leaves 助手): 服务器.
+    @MainActor
+    private func serverTab(_ settings: XCUIElement) {
+        guard !settings.textFields["server-address"].waitForExistence(timeout: 1) else { return }
+        let tabs = [settings.toolbarButtons["服务器"], settings.toolbars.buttons["服务器"], settings.buttons["服务器"],
+                    settings.radioButtons["服务器"]]
+        if let tab = tabs.first(where: { $0.exists }) {
+            tab.click()
+        } else {
+            settings.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "服务器")).firstMatch.click()
+        }
+        XCTAssertTrue(settings.textFields["server-address"].waitForExistence(timeout: 5), "no 服务器 tab in Settings")
+    }
+
+    /// Scrolls Settings until `target` can be clicked: which sign of a wheel delta scrolls down is
+    /// the runner's business, so one way a few times, then the other.
+    @MainActor
+    private func scrollTo(_ target: XCUIElement, in settings: XCUIElement) {
+        let form = settings.scrollViews.firstMatch
+        for delta in [-400.0, -400, -400, 400, 400, 400, 400, 400, 400] {
+            if target.exists && target.isHittable { return }
+            form.hover()
+            form.scroll(byDeltaX: 0, deltaY: delta)
+            Thread.sleep(forTimeInterval: 0.4)
+        }
     }
 
     @MainActor
