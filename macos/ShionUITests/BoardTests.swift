@@ -134,11 +134,23 @@ final class BoardTests: XCTestCase {
         XCTAssertTrue(finished, "no turn after the board's notice")
         XCTAssertTrue(shownDone, "the card in the chat does not show it is done")
         XCTAssertFalse(waitForText("Kanban t_", in: app, timeout: 1), "the board's notice shows as text")
-        // read again from the transcript, which keeps the call but not the card's id
-        element("nav-todos", in: app).click()
-        Thread.sleep(forTimeInterval: 1)
+        // read again from the transcript, which keeps the call but not the card's id: a chat stays
+        // loaded while connected, so disconnect and connect, and the chat starts over from the server
+        app.typeKey(",", modifierFlags: .command)
+        let prefs = app.windows.matching(NSPredicate(format: "identifier CONTAINS[c] 'settings'")).firstMatch
+        XCTAssertTrue(prefs.waitForExistence(timeout: 5), "no Settings window")
+        let link = element("connection-state", in: prefs)
+        func phase(_ prefix: String) -> XCTNSPredicateExpectation {
+            XCTNSPredicateExpectation(predicate: NSPredicate(format: "label BEGINSWITH %@ OR value BEGINSWITH %@", prefix, prefix),
+                                      object: link)
+        }
+        prefs.buttons["断开"].click()
+        XCTAssertEqual(XCTWaiter().wait(for: [phase("未连接")], timeout: 10), .completed, "did not disconnect")
+        prefs.buttons["连接"].click()
+        XCTAssertEqual(XCTWaiter().wait(for: [phase("已连接")], timeout: 30), .completed, "did not connect again")
+        app.typeKey("w", modifierFlags: .command)
         element("bot-shion", in: app).click()
-        let reread = waitUntil(timeout: 10) { self.chatCards("整理第8回笔记（CI）", saying: "完成", in: app) >= 2 }
+        let reread = waitUntil(timeout: 20) { self.chatCards("整理第8回笔记（CI）", saying: "完成", in: app) >= 2 }
         keep(window.screenshot(), "board-10-chat-reread")
         XCTAssertTrue(reread, "after reading the chat again, the call and the notice are not both the card")
         XCTAssertFalse(waitForText("Kanban t_", in: app, timeout: 1), "the board's notice shows as text after reading again")
