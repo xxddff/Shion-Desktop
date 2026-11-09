@@ -3,7 +3,8 @@ import Carbon.HIToolbox
 import XCTest
 
 /// The ⌥Space window end to end, against ci/fake_hermes.py (its answers to the window are in
-/// ci/fake_quick.py): a sentence typed before signing in waits and goes out once connected; the
+/// ci/fake_quick.py): a sentence typed before signing in waits, counted as written two hours
+/// earlier, and goes out once connected with the time it was written; the
 /// global shortcut over another app; 詩音's reply streaming into the window; an approval and a
 /// question to answer in words, both handled in the window; the whole chat; and the window
 /// starting afresh. Then the shortcut held by another app, as Settings → 快捷键 shows it. A
@@ -24,14 +25,15 @@ final class QuickAskTests: XCTestCase {
         XCTAssertTrue(window.waitForExistence(timeout: 20))
         let field = app.textFields["quick-field"]
 
-        // 0. before signing in: the sentence stays in the window, marked as waiting
+        // 0. before signing in: the sentence stays in the window, marked as waiting, with when it
+        // was written (two hours ago, by -ShionQuickWrittenAgo)
         open(app, field)
         field.click()
         field.typeText(early)
         app.typeKey(.return, modifierFlags: [])
         let waiting = element("quick-waiting", in: app)
         XCTAssertTrue(waiting.waitForExistence(timeout: 5), "a sentence sent with no server did not show as waiting")
-        XCTAssertTrue(waitForText("等连上服务器后发出", in: app, timeout: 2), "the waiting sentence does not say it waits")
+        XCTAssertTrue(waitForText("写的 · 等连上服务器后发出", in: app, timeout: 2), "the waiting sentence does not say when it was written and that it waits")
         Thread.sleep(forTimeInterval: 0.5)
         keep(XCUIScreen.main.screenshot(), "quick-0-waiting")
         app.typeKey(.escape, modifierFlags: [])
@@ -63,13 +65,15 @@ final class QuickAskTests: XCTestCase {
         app.typeKey("w", modifierFlags: .command)
         XCTAssertTrue(element("bot-shion", in: app).waitForExistence(timeout: 10), "no assistants from the server")
 
-        // 1. connected, it went out by itself: the window shows 詩音's answer, nothing waits
+        // 1. connected, it went out by itself, after the time it was written (「（17:05 写的）…」): the
+        // stand-in echoes what it got (「收到：（…」), and nothing waits any more
         open(app, field)
         let answer = element("quick-answer", in: app)
-        let sentEarly = waitForText("收到：" + early, in: answer, timeout: 20)
+        let sentEarly = waitForText("收到：（", in: answer, timeout: 20)
         Thread.sleep(forTimeInterval: 0.5)
         keep(XCUIScreen.main.screenshot(), "quick-1-sent-on-connect")
         XCTAssertTrue(sentEarly, "the waiting sentence was not answered once connected")
+        XCTAssertTrue(waitForText("写的）" + early, in: answer, timeout: 1), "the late sentence went out without the time it was written")
         XCTAssertFalse(waiting.exists, "the sentence still shows as waiting")
         app.typeKey(.escape, modifierFlags: [])
         XCTAssertEqual(XCTWaiter().wait(for: [gone(field)], timeout: 5), .completed, "Esc did not put the window away")
@@ -214,13 +218,15 @@ final class QuickAskTests: XCTestCase {
         app.terminate()
     }
 
-    /// Screenshot data, and the global shortcut registered as in normal use.
+    /// Screenshot data, the global shortcut registered as in normal use, and a sentence that has
+    /// to wait counted as written two hours before it was.
     @MainActor
     private func launch() -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = [
             "-ShionSnapshot", "YES",
             "-ShionHotKey", "YES",
+            "-ShionQuickWrittenAgo", "7200",
             "-ShionRoute", "today",
             "-ShionAppearance", "light",
             "-ApplePersistenceIgnoreState", "YES",

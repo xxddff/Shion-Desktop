@@ -32,7 +32,7 @@ struct ShortcutSettings: View {
             } header: {
                 Text("在任何 App 里")
             } footer: {
-                Text(globalNote)
+                Text(Self.globalNote)
                     .font(.t12)
                     .foregroundStyle(.secondary)
             }
@@ -43,7 +43,7 @@ struct ShortcutSettings: View {
             } header: {
                 Text("在主窗口里")
             } footer: {
-                Text(windowNote)
+                Text(Self.windowNote)
                     .font(.t12)
                     .foregroundStyle(.secondary)
             }
@@ -68,12 +68,7 @@ struct ShortcutSettings: View {
         }
     }
 
-    private var globalNote: String {
-        let chief = store.chiefName
-        return "按下这个快捷键，屏幕上方会出现一个小窗：跟\(chief)说一句话，回复也在小窗里一点点显示出来；这一轮里要你批准的、问你的，也在小窗里回答，要打字回答的问题直接在输入框里写。这句话进的是\(chief)的 Bot Chat，和在主窗口里说的一样；点输入框右边的按钮（⌘O）打开完整对话，按 Esc 或再按一次快捷键收起。小窗浮在别的 App 上面，不会把 Shion 切到前台。没连上服务器时说的话会留在小窗里，标着「等连上服务器后发出」，连上后自动发出，退出 Shion 也不会丢。\n\n默认是 ⌥空格，避开了聚焦搜索（⌘空格）和切换输入法（⌃空格、⌃⌥空格）。点一下再按新的组合就能改，和系统或菜单里的快捷键撞上时会提示。别的 App（比如 Raycast、Alfred）独占了同一个组合时，这里会显示「被别的 App 占用了」：换一个组合，或者在那个 App 里去掉它，再点「再试一次」。有两种情况这里看不出来：那个 App 只是普通地注册了同一个组合，按键会归 Shion，它的这个快捷键就不灵了；它抢在系统之前截走按键，Shion 这边就按了没反应。遇到这两种，也换一个组合。"
-    }
+    private static let globalNote = "按下这个快捷键，屏幕上方会出现一个小窗：跟总秘书说一句话，回复也在小窗里一点点显示出来；这一轮里要你批准的、问你的，也在小窗里回答，要打字回答的问题直接在输入框里写。这句话进的是总秘书的 Bot Chat，和在主窗口里说的一样；点输入框右边的按钮（⌘O）打开完整对话，按 Esc 或再按一次快捷键收起。小窗浮在别的 App 上面，不会把 Shion 切到前台。没连上服务器时说的话会留在小窗里，标着什么时候写的、「等连上服务器后发出」，连上后自动发出，退出 Shion 也不会丢；写下超过 5 分钟才发出的，前面会带上写下的时间，免得「5 分钟后提醒我」被照字面晚做。\n\n默认是 ⌥空格，避开了聚焦搜索（⌘空格）和切换输入法（⌃空格、⌃⌥空格）。点一下再按新的组合就能改，和系统或菜单里的快捷键撞上时会提示。别的 App（比如 Raycast、Alfred）独占了同一个组合时，这里会显示「被别的 App 占用了」：换一个组合，或者在那个 App 里去掉它，再点「再试一次」。有两种情况这里看不出来：那个 App 只是普通地注册了同一个组合，按键会归 Shion，它的这个快捷键就不灵了；它抢在系统之前截走按键，Shion 这边就按了没反应。遇到这两种，也换一个组合。"
 
-    private var windowNote: String {
-        "⌘K 搜页面、助手和待办的标题，↑↓ 选，回车打开；什么都没搜到时，回车把这句话交给\(store.chiefName)。这些都列在菜单栏的「前往」里。"
-    }
+    private static let windowNote = "⌘K 搜页面、助手和待办的标题，↑↓ 选，回车打开；什么都没搜到时，回车把这句话交给总秘书。这些都列在菜单栏的「前往」里。"
 }

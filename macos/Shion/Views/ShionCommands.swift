@@ -24,7 +24,10 @@ struct ShionCommands: Commands {
                 jump.shown.toggle()
             }
             .keyboardShortcut("k", modifiers: .command)
-            QuickAskMenuItem(store: store, quick: quick)
+            Button("跟\(store.chiefName)说…") {
+                quick.show()
+            }
+            .keyboardShortcut(quick.shortcut?.toSwiftUI)
         }
     }
 
@@ -39,20 +42,6 @@ struct ShionCommands: Commands {
     /// main window behind them.
     private static var quickHasKeyboard: Bool {
         NSApp.keyWindow is QuickAskWindow
-    }
-}
-
-/// 跟总秘书说…, with 总秘书's name and the global shortcut as they are now: a view of its own, so the
-/// menu follows them when they change.
-private struct QuickAskMenuItem: View {
-    let store: AppStore
-    let quick: QuickAsk
-
-    var body: some View {
-        Button("跟\(store.chiefName)说…") {
-            quick.show()
-        }
-        .keyboardShortcut(quick.shortcut?.toSwiftUI)
     }
 }
 

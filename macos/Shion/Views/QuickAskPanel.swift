@@ -215,7 +215,7 @@ struct QuickAskView: View {
         return ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 ForEach(quick.waiting) { sentence in
-                    WaitingSentence(text: sentence.text)
+                    WaitingSentence(text: sentence.text, written: QuickAskWaiting.written(sentence.at, now: Date()))
                 }
                 ForEach(lines) { line in
                     switch line {
@@ -262,9 +262,11 @@ struct QuickAskView: View {
     }
 }
 
-/// A sentence sent while no server was connected: it goes out by itself once one is.
+/// A sentence sent while no server was connected, with when it was written: it goes out by
+/// itself once one is.
 struct WaitingSentence: View {
     let text: String
+    let written: String
 
     var body: some View {
         VStack(alignment: .trailing, spacing: 4) {
@@ -277,7 +279,7 @@ struct WaitingSentence: View {
                     .padding(.vertical, 8)
                     .background(Palette.accent.opacity(0.55), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
-            Label("等连上服务器后发出", systemImage: "clock")
+            Label("\(written) 写的 · 等连上服务器后发出", systemImage: "clock")
                 .font(.t12)
                 .foregroundStyle(.secondary)
         }

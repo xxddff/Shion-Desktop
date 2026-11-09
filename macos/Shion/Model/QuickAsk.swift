@@ -33,7 +33,7 @@ final class QuickAsk {
     /// The sentence this window sent last: what follows it in the chat is the answer.
     private(set) var asked: Asked?
     /// Sentences sent while no server was connected, oldest first: they go out, together, as soon
-    /// as one is, and are kept across launches until then.
+    /// as one is, and are kept across launches until then (QuickAskWaiting.swift).
     private(set) var waiting: [QuickAskWaiting] = []
 
     struct Asked: Equatable {
@@ -124,6 +124,12 @@ final class QuickAsk {
         }
     }
 
+    /// Test runs can have a sentence that has to wait count as written this long before it was,
+    /// to see it go out late (`-ShionQuickWrittenAgo 7200`); never outside them.
+    private static var writtenAgo: TimeInterval {
+        LaunchOptions.current.snapshot ? max(UserDefaults.standard.double(forKey: "ShionQuickWrittenAgo"), 0) : 0
+    }
+
     /// Screenshot runs leave the key alone; a test that presses it asks for it.
     private static var registersHotKey: Bool {
         !LaunchOptions.current.snapshot || UserDefaults.standard.bool(forKey: "ShionHotKey")
@@ -210,7 +216,9 @@ final class QuickAsk {
             return
         }
         // behind anything still waiting, and out with it when a server is connected
-        waiting.append(QuickAskWaiting(id: UUID().uuidString, text: text, at: Date()))
+        let waits = !Self.connected(store)
+        let at = Date().addingTimeInterval(waits ? -Self.writtenAgo : 0)
+        waiting.append(QuickAskWaiting(id: UUID().uuidString, text: text, at: at))
         saveWaiting()
         sendWaiting()
     }
@@ -263,10 +271,11 @@ final class QuickAsk {
 
     /// Into 总秘书's Bot Chat as one message, a line each: a second message during the answer to
     /// the first would cut that answer short (Hermes's `display.busy_input_mode` is `interrupt`
-    /// unless the server says otherwise). The window shows the exchange from it. Should the chat
-    /// not open, they wait again; the reason shows under the field.
+    /// unless the server says otherwise). Sentences written more than five minutes ago say when
+    /// they were. The window shows the exchange from it. Should the chat not open, they wait
+    /// again; the reason shows under the field.
     private func deliver(_ sentences: [QuickAskWaiting], to store: AppStore) {
-        let text = sentences.map(\.text).joined(separator: "\n")
+        let text = QuickAskWaiting.message(sentences, sentAt: Date())
         guard !text.isEmpty else { return }
         let chief = store.chiefId
         asked = Asked(itemId: "", text: text, at: Date())
@@ -332,11 +341,4 @@ final class QuickAsk {
             UserDefaults.standard.set(data, forKey: Self.waitingKey)
         }
     }
-}
-
-/// A sentence for 总秘书 from the window that has not gone out yet.
-nonisolated struct QuickAskWaiting: Codable, Equatable, Identifiable, Sendable {
-    let id: String
-    let text: String
-    let at: Date
 }
