@@ -87,6 +87,7 @@ final class SignInTests: XCTestCase {
         XCTAssertTrue(transcript.waitForExistence(timeout: 5), "no transcript")
         var direction: CGFloat = 1
         var reachedTop = false
+        var sawSecondPage = false
         for attempt in 0..<18 {
             if attempt < 10 {
                 // wheel events go where the pointer is: put it on the transcript, not the composer
@@ -100,6 +101,11 @@ final class SignInTests: XCTestCase {
             if waitForText("第 1 条（你）", in: app, timeout: 1.5) {
                 reachedTop = true
                 break
+            }
+            // the moment the second page lands: the rows that were at the top should still be there
+            if !sawSecondPage && waitForText("第 81 条", in: app, timeout: 0.2) {
+                sawSecondPage = true
+                keep(window.screenshot(), "signin-6a-second-page")
             }
             // which sign scrolls up is the runner's business: turn round if a second page never came
             if attempt == 3 && !waitForText("第 81 条", in: app, timeout: 0.5) {

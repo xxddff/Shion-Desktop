@@ -7,51 +7,19 @@ struct ChatView: View {
     @State private var draft = ""
     /// The visible height, which the transcript fills even when it is short.
     @State private var viewport: CGFloat = 0
-    /// The top of the transcript is in or near view: time for the next older page.
-    @State private var nearTop = false
+    /// The transcript is too short to scroll, so its top is always in view.
+    @State private var short = false
 
     var body: some View {
         let bot = store.bot(botId)
         let items = store.chats[botId] ?? []
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 14) {
-                if store.olderPages[botId] != nil || store.olderErrors[botId] != nil {
-                    OlderMessages(botId: botId)
+        ScrollViewReader { reader in
+            transcript(items, bot: bot)
+                // older rows arrived above: the rows that were at the top stay where they were
+                .onChange(of: items.first?.id) { previous, _ in
+                    guard let previous, items.contains(where: { $0.id == previous }) else { return }
+                    reader.scrollTo(previous, anchor: .top)
                 }
-                ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                    ChatRow(item: item, bot: bot, showHead: showsHead(items, index))
-                }
-            }
-            .padding(.horizontal, 40)
-            .padding(.vertical, 24)
-            .frame(maxWidth: 760)
-            // a short chat sits at the bottom of a full-height page, not on a short one
-            .frame(maxWidth: .infinity, minHeight: viewport, alignment: .bottom)
-        }
-        // starts at the newest message, and keeps the rows in view still when older ones arrive above
-        .defaultScrollAnchor(.bottom)
-        .accessibilityIdentifier("transcript")
-        .onScrollGeometryChange(for: CGFloat.self) { geometry in
-            geometry.containerSize.height - geometry.contentInsets.top - geometry.contentInsets.bottom
-        } action: { _, height in
-            viewport = max(0, height)
-        }
-        .onScrollGeometryChange(for: Bool.self) { geometry in
-            geometry.contentOffset.y + geometry.contentInsets.top < 400
-        } action: { _, isNear in
-            nearTop = isNear
-            if isNear {
-                Task { await store.loadOlder(botId) }
-            }
-        }
-        // a page that leaves the top still in view asks for the next one, once the rows are laid out
-        .onChange(of: store.olderPages[botId]) {
-            Task {
-                try? await Task.sleep(for: .milliseconds(150))
-                if nearTop {
-                    await store.loadOlder(botId)
-                }
-            }
         }
         .overlay {
             if let error = store.chatErrors[botId] {
@@ -77,6 +45,56 @@ struct ChatView: View {
         }
         .navigationTitle(bot?.name ?? "")
         .navigationSubtitle(bot?.title ?? "")
+    }
+
+    /// The rows, newest at the bottom. Older pages load as the top comes into view.
+    private func transcript(_ items: [ChatItem], bot: Bot?) -> some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 14) {
+                if store.olderPages[botId] != nil || store.olderErrors[botId] != nil {
+                    OlderMessages(botId: botId)
+                }
+                ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                    ChatRow(item: item, bot: bot, showHead: showsHead(items, index))
+                }
+            }
+            .padding(.horizontal, 40)
+            .padding(.vertical, 24)
+            .frame(maxWidth: 760)
+            // a short chat sits at the bottom of a full-height page, not on a short one
+            .frame(maxWidth: .infinity, minHeight: viewport, alignment: .bottom)
+        }
+        // starts at the newest message, and follows new ones
+        .defaultScrollAnchor(.bottom)
+        .accessibilityIdentifier("transcript")
+        // measured from the first layout on (a scroll geometry change only reports changes)
+        .onGeometryChange(for: CGFloat.self) { proxy in
+            proxy.size.height - proxy.safeAreaInsets.top - proxy.safeAreaInsets.bottom
+        } action: { height in
+            viewport = max(0, height)
+        }
+        // the next older page when the top comes into view
+        .onScrollGeometryChange(for: Bool.self) { geometry in
+            geometry.contentOffset.y + geometry.contentInsets.top < 400
+        } action: { _, nearTop in
+            if nearTop {
+                Task { await store.loadOlder(botId) }
+            }
+        }
+        .onScrollGeometryChange(for: Bool.self) { geometry in
+            geometry.contentSize.height < geometry.containerSize.height + 400
+        } action: { _, isShort in
+            short = isShort
+        }
+        // a page too short to scroll leaves the top in view: the next one, once the rows are laid out
+        .onChange(of: store.olderPages[botId]) {
+            Task {
+                try? await Task.sleep(for: .milliseconds(150))
+                if short {
+                    await store.loadOlder(botId)
+                }
+            }
+        }
     }
 
     /// The assistant's name shows once per run of its messages, again after ten quiet minutes.
