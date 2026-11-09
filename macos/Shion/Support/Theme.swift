@@ -53,7 +53,7 @@ struct Avatar: View {
     }
 }
 
-/// 总秘书's mark, her avatar: wherever it appears, you are talking to her.
+/// 总秘书's mark, its avatar: wherever it appears, you are talking to 总秘书.
 struct Mark: View {
     @Environment(AppStore.self) private var store
     var size: CGFloat = 18
@@ -117,7 +117,7 @@ struct Box<Content: View>: View {
     }
 }
 
-/// 「跟总秘书说」 (by her name) in the toolbar of every page but Today and her own chat (⌘K).
+/// 「跟总秘书说」 (by name) in the toolbar of every page but Today and 总秘书's own chat (⌘K).
 struct AskButton: View {
     @Environment(AppStore.self) private var store
 
