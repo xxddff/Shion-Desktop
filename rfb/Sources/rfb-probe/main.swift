@@ -25,8 +25,8 @@ usage: rfb-probe <url> [options]
   --no-extended-desktop-size   only advertise the plain DesktopSize pseudo-encoding
   --no-pipeline                wait for each server step of the handshake before answering
   --encodings LIST             e.g. zrle,copyrect,raw (pseudo-encodings are always added)
-  --transport auto|urlsession|plain
-                               auto: the small built-in client for ws:// on Linux, URLSession otherwise
+  --transport auto|network|urlsession|plain
+                               auto: Network.framework on Apple platforms, the small built-in ws:// client on Linux
   --paste TEXT                 after the first picture, put TEXT on the remote clipboard (needs the lease)
   --type TEXT                  after the first picture, type TEXT at the remote cursor: clipboard + Ctrl+V (needs the lease)
   --cursor-after SECONDS       after that long, ask for the pointer shape (Cursor pseudo-encoding), as at takeover
@@ -145,15 +145,21 @@ func makeTransport(_ url: String, _ args: Arguments) throws -> any RFBTransport 
         return try SocketTransport(unixPath: String(url.dropFirst(5)))
     }
     guard let u = URL(string: url), u.scheme == "ws" || u.scheme == "wss" else { fail("bad URL \(redacted(url))") }
-    #if os(Linux)
-    let preferPlain = u.scheme == "ws"
+    #if canImport(Network)
+    let automatic = "network"
     #else
-    let preferPlain = false
+    let automatic = u.scheme == "ws" ? "plain" : "urlsession"
     #endif
-    let kind = args.transport == "auto" ? (preferPlain ? "plain" : "urlsession") : args.transport
+    let kind = args.transport == "auto" ? automatic : args.transport
     switch kind {
     case "plain":
         return try PlainWebSocketTransport(url: u, headers: args.headers)
+    case "network":
+        #if canImport(Network)
+        return NWWebSocketTransport(url: u, headers: args.headers)
+        #else
+        fail("Network.framework is not available here")
+        #endif
     case "urlsession":
         var request = URLRequest(url: u)
         for (name, value) in args.headers { request.setValue(value, forHTTPHeaderField: name) }

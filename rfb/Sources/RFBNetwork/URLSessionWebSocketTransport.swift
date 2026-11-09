@@ -17,6 +17,9 @@ import RFB
 /// On Linux, swift-corelibs-foundation implements WebSockets through libcurl, and the libcurl of
 /// most distributions (Ubuntu 24.04 included) is built without them; use `PlainWebSocketTransport`
 /// there.
+///
+/// On macOS, a close started by the server (Hermes' 4000 "control taken") showed up only as
+/// "socket is not connected", without its code (CI, 2026-11). `NWWebSocketTransport` reports it.
 public final class URLSessionWebSocketTransport: NSObject, RFBTransport, URLSessionWebSocketDelegate, @unchecked Sendable {
     private let lock = NSLock()
     private var session: URLSession!
@@ -24,6 +27,8 @@ public final class URLSessionWebSocketTransport: NSObject, RFBTransport, URLSess
     private var closeInfo: RFBConnectionClosed?
     private var closeWaiters: [Int: CheckedContinuation<Void, Never>] = [:]
     private var nextWaiter = 0
+    /// The task finished (didCompleteWithError); nothing more will arrive.
+    private var completed = false
 
     /// The request's URL is logged nowhere; it carries the single-use ticket.
     public init(request: URLRequest, configuration: URLSessionConfiguration = .ephemeral) {
@@ -75,8 +80,12 @@ public final class URLSessionWebSocketTransport: NSObject, RFBTransport, URLSess
         if code != URLSessionWebSocketTask.CloseCode.invalid.rawValue {
             return RFBConnectionClosed(code: code, reason: task.closeReason.map { String(decoding: $0, as: UTF8.self) } ?? "")
         }
-        await waitForClose(timeoutNanoseconds: 500_000_000)
+        await waitForClose(timeoutNanoseconds: 1_000_000_000)
         if let info = currentClose() { return info }
+        let late = task.closeCode.rawValue
+        if late != URLSessionWebSocketTask.CloseCode.invalid.rawValue {
+            return RFBConnectionClosed(code: late, reason: task.closeReason.map { String(decoding: $0, as: UTF8.self) } ?? "")
+        }
         if let status = upgradeStatus, status != 101 {
             return RFBError.connectionRefused("WebSocket upgrade answered HTTP \(status)")
         }
@@ -90,7 +99,7 @@ public final class URLSessionWebSocketTransport: NSObject, RFBTransport, URLSess
     private func waitForClose(timeoutNanoseconds: UInt64) async {
         await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
             let id = lock.withLock { () -> Int? in
-                if closeInfo != nil { return nil }
+                if closeInfo != nil || completed { return nil }
                 nextWaiter += 1
                 closeWaiters[nextWaiter] = c
                 return nextWaiter
@@ -106,6 +115,23 @@ public final class URLSessionWebSocketTransport: NSObject, RFBTransport, URLSess
 
     public func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask,
                            didOpenWithProtocol protocol: String?) {}
+
+    /// The task is over. If a close frame came in, its code may only be readable now.
+    public func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        var info: RFBConnectionClosed?
+        if let ws = task as? URLSessionWebSocketTask,
+           ws.closeCode.rawValue != URLSessionWebSocketTask.CloseCode.invalid.rawValue {
+            info = RFBConnectionClosed(code: ws.closeCode.rawValue,
+                                       reason: ws.closeReason.map { String(decoding: $0, as: UTF8.self) } ?? "")
+        }
+        let waiters = lock.withLock { () -> [CheckedContinuation<Void, Never>] in
+            completed = true
+            if closeInfo == nil, let info { closeInfo = info }
+            defer { closeWaiters = [:] }
+            return Array(closeWaiters.values)
+        }
+        waiters.forEach { $0.resume() }
+    }
 
     public func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask,
                            didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {

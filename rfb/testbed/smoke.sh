@@ -14,7 +14,12 @@ export RFB_TESTBED_REQUIRE_HEADER=CF-Access-Client-Id NO_PROXY=127.0.0.1
 WORK="$RFB_TESTBED_RUN/work"; mkdir -p "$WORK"
 "$HERE/start.sh" >"$WORK/testbed.log" 2>&1 &
 TB=$!
-trap 'kill $TB 2>/dev/null; wait $TB 2>/dev/null || true; rm -rf "$RFB_TESTBED_RUN"' EXIT
+cleanup() {
+  pkill -f -- "--user-data-dir=$WORK/chrome" 2>/dev/null || true   # a browser from step 5
+  kill $TB 2>/dev/null; wait $TB 2>/dev/null || true
+  sleep 0.5; rm -rf "$RFB_TESTBED_RUN" 2>/dev/null || true
+}
+trap cleanup EXIT
 (cd "$PKG" && swift build --product rfb-probe >/dev/null)
 up=0
 for _ in $(seq 1 100); do
@@ -77,7 +82,8 @@ if [[ -n "$CHROME" ]]; then
     GOT=$(X xdotool search --name '^T:' getwindowname 2>/dev/null | head -1 || true)
     [[ -n "$GOT" ]] && break; sleep 0.2
   done
-  kill $CH 2>/dev/null || true
+  pkill -f -- "--user-data-dir=$WORK/chrome" 2>/dev/null || true
+  wait $CH 2>/dev/null || true
   [[ "$GOT" == "T:${TEXT//$'\n'/⏎}" ]] || fail "typed text differs: $(printf %q "$GOT")"
 else
   echo "== 5. skipped: no Chrome or Chromium (set RFB_TESTBED_CHROME)"

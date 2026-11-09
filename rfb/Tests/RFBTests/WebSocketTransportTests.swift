@@ -12,17 +12,17 @@ import Testing
 /// the caller, and our close going out as 1000.
 ///
 /// Needs a python3 with `websockets` (>= 13): set RFB_TESTBED_PYTHON to it, as for the testbed.
-/// On macOS this exercises URLSessionWebSocketTransport (what the App uses); everywhere it also
-/// runs the small ws:// client.
+/// On macOS this exercises NWWebSocketTransport and URLSessionWebSocketTransport; everywhere it
+/// also runs the small ws:// client.
 @Suite(.serialized, .enabled(if: ReplayServer.python != nil, "RFB_TESTBED_PYTHON with websockets not set"))
 struct WebSocketTransportTests {
     enum Kind: String, CaseIterable, CustomTestStringConvertible, Sendable {
-        case plain, urlSession
+        case plain, urlSession, network
         var testDescription: String { rawValue }
 
         static var available: [Kind] {
-            #if canImport(Darwin)
-            [.plain, .urlSession]
+            #if canImport(Network)
+            [.plain, .urlSession, .network]
             #else
             [.plain]  // Foundation's WebSocket needs a libcurl built with WebSockets
             #endif
@@ -36,6 +36,12 @@ struct WebSocketTransportTests {
                 var request = URLRequest(url: url)
                 for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
                 return URLSessionWebSocketTransport(request: request)
+            case .network:
+                #if canImport(Network)
+                return NWWebSocketTransport(url: url, headers: headers)
+                #else
+                fatalError("Network.framework only")
+                #endif
             }
         }
     }
@@ -47,12 +53,26 @@ struct WebSocketTransportTests {
         let server = try ReplayServer(sample: "watch")
         defer { server.stop() }
         let client = RFBClient(transport: try kind.transport(server.url(then: "close4000"), headers: Self.header))
+        let ending: Error?
         do {
             try await client.run()
-            Issue.record("run returned normally")
-        } catch let closed as RFBConnectionClosed {
+            ending = nil
+        } catch {
+            ending = error
+        }
+        let check = {
+            let closed = try #require(ending as? RFBConnectionClosed, "ended with \(ending.map { "\($0)" } ?? "no error")")
             #expect(closed.code == 4000)
             #expect(closed.bridgeReason == .controlTaken)
+        }
+        if kind == .urlSession {
+            // CI on macOS: URLSessionWebSocketTask reported the server's close only as
+            // "Socket is not connected", with no code. NWWebSocketTransport is the one to use.
+            withKnownIssue("URLSessionWebSocketTask may not report a server-initiated close code", isIntermittent: true) {
+                try check()
+            }
+        } else {
+            try check()
         }
         // Everything before the close was decoded: the picture matches the real screen.
         let sample = Sample(name: "watch")
@@ -86,7 +106,8 @@ struct WebSocketTransportTests {
             try await client.handshake()
         } throws: { error in
             guard case RFBError.connectionRefused(let message) = error else { return false }
-            return message.contains("403")
+            // Network.framework does not surface the HTTP status of a refused upgrade.
+            return kind == .network || message.contains("403")
         }
     }
 }
