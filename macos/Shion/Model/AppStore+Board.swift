@@ -4,7 +4,8 @@ import AppKit
 /// assistant's 工作记录, and the card notifications. The server's board while connected, the demo
 /// day otherwise.
 extension AppStore {
-    /// The cards that wait on your answer (BoardWork.ask).
+    /// The cards that wait on your answer (BoardWork.ask); not those of an assistant hidden in
+    /// Settings, which Shion does not follow.
     var cardAsks: [BoardAsk] {
         guard board.active else {
             let blocks = DemoData(now: demoClock).blocks
@@ -13,7 +14,12 @@ extension AppStore {
                 return BoardAsk(board: nil, cardId: card.id, title: card.title, assignee: card.assignee, ask: ask)
             }
         }
-        return board.waitingOnYou
+        return board.waitingOnYou.filter { !followsNot($0.assignee) }
+    }
+
+    /// An assistant hidden in Settings: its cards stay on the board, and nothing else of it comes in.
+    private func followsNot(_ assignee: String?) -> Bool {
+        assignee.map { roster.isHidden($0) } ?? false
     }
 
     /// What 等你确认 holds: approvals and questions, and the cards that wait on your answer.
@@ -85,8 +91,10 @@ extension AppStore {
     }
 
     /// Whether a card's moment becomes a notification: not while its board is on the screen, nor
-    /// a card waiting on you while 等你确认 is; a done card only when Settings say so.
+    /// a card waiting on you while 等你确认 is; a done card only when Settings say so; never one of
+    /// an assistant hidden in Settings.
     func shouldNotify(_ moment: CardMoment) -> Bool {
+        if followsNot(moment.assignee) { return false }
         if moment.kind == .done && !board.notifyDone { return false }
         guard NSApp.isActive else { return true }
         if route == .board && (moment.board == nil || moment.board == board.slug) { return false }
