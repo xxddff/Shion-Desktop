@@ -41,8 +41,12 @@ refresh_tokens = set()
 sessions = {}  # profile -> session id
 
 
+print_lock = threading.Lock()
+
+
 def log(*parts):
-    print(time.strftime("%H:%M:%S"), *parts, flush=True)
+    with print_lock:
+        print(time.strftime("%H:%M:%S"), *parts, flush=True)
 
 
 def s256(verifier):

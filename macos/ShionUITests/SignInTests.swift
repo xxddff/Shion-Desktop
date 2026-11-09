@@ -39,42 +39,43 @@ final class SignInTests: XCTestCase {
         Thread.sleep(forTimeInterval: 1.5)
         keep(XCUIScreen.main.screenshot(), "signin-2-sheet")
 
-        let account = settings.staticTexts["account-name"]
+        let account = element("account-name", in: settings)
         guard account.waitForExistence(timeout: 45) else {
             keep(XCUIScreen.main.screenshot(), "signin-3-stuck")
             return XCTFail("Not signed in")
         }
         XCTAssertTrue(says(account, "ci-user"), "signed in as \(account.label) / \(String(describing: account.value))")
 
-        let state = settings.staticTexts["connection-state"]
+        // selectable text is not a plain static text to accessibility, so look it up by id alone
+        let state = element("connection-state", in: settings)
         let online = NSPredicate(format: "label BEGINSWITH %@ OR value BEGINSWITH %@", "已连接", "已连接")
         let connected = XCTNSPredicateExpectation(predicate: online, object: state)
         let outcome = XCTWaiter().wait(for: [connected], timeout: 25)
         keep(settings.screenshot(), "signin-3-connected")
+        print("connection state: \(state.label) / \(String(describing: state.value))")
         guard outcome == .completed else {
             return XCTFail("Not connected: \(state.label) / \(String(describing: state.value))")
         }
 
         // the assistants now come from the stand-in: 詩音 and 课程（CI）
         app.typeKey("w", modifierFlags: .command)
-        let chief = app.descendants(matching: .any).matching(identifier: "bot-shion").firstMatch
+        let chief = element("bot-shion", in: app)
         guard chief.waitForExistence(timeout: 10) else {
             keep(XCUIScreen.main.screenshot(), "signin-4-no-assistants")
             return XCTFail("No assistants from the server")
         }
-        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "bot-study").firstMatch.exists)
+        XCTAssertTrue(element("bot-study", in: app).exists)
         chief.click()
-        let greeting = text(in: app, containing: "CI 替身服务器连上了")
-        XCTAssertTrue(greeting.waitForExistence(timeout: 15), "the Bot Chat did not open")
+        let opened = waitForText("CI 替身服务器连上了", in: app, timeout: 15)
         keep(app.windows.firstMatch.screenshot(), "signin-4-chat")
+        XCTAssertTrue(opened, "the Bot Chat did not open")
 
-        let composer = app.descendants(matching: .any).matching(identifier: "composer").firstMatch
+        let composer = element("composer", in: app)
         XCTAssertTrue(composer.waitForExistence(timeout: 5))
         composer.click()
         composer.typeText("hello")
-        app.buttons["send"].firstMatch.click()
-        let reply = text(in: app, containing: "收到：hello")
-        let replied = reply.waitForExistence(timeout: 15)
+        element("send", in: app).click()
+        let replied = waitForText("收到：hello", in: app, timeout: 15)
         keep(app.windows.firstMatch.screenshot(), "signin-5-reply")
         XCTAssertTrue(replied, "no reply streamed back")
         app.terminate()
@@ -89,13 +90,32 @@ final class SignInTests: XCTestCase {
     }
 
     @MainActor
+    private func element(_ identifier: String, in root: XCUIElement) -> XCUIElement {
+        root.descendants(matching: .any).matching(identifier: identifier).firstMatch
+    }
+
+    @MainActor
     private func says(_ element: XCUIElement, _ text: String) -> Bool {
         element.label == text || (element.value as? String) == text
     }
 
+    /// Text anywhere in the app, plain or selectable (selectable text is not a static text to
+    /// accessibility). `value` is only read on text elements: a toggle's is a number, which a
+    /// CONTAINS predicate would throw on.
     @MainActor
-    private func text(in app: XCUIApplication, containing text: String) -> XCUIElement {
-        app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", text, text)).firstMatch
+    private func waitForText(_ text: String, in app: XCUIApplication, timeout: TimeInterval) -> Bool {
+        let either = NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", text, text)
+        let queries = [
+            app.staticTexts.matching(either),
+            app.textViews.matching(either),
+            app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", text)),
+        ]
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            if queries.contains(where: { $0.firstMatch.exists }) { return true }
+            Thread.sleep(forTimeInterval: 0.5)
+        } while Date() < deadline
+        return false
     }
 
     private func keep(_ screenshot: XCUIScreenshot, _ name: String) {
