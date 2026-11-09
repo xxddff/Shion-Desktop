@@ -890,16 +890,18 @@ extension AppStore {
         }
     }
 
-    /// Unless 等你确认 or the assistant's chat is in front of you.
+    /// Unless 等你确认 or the assistant's chat is in front of you, or the ⌥Space window shows it.
     private func notifyAsk(_ ask: Ask) {
-        guard !(NSApp.isActive && (route == .confirm || route == .chat(ask.botId))) else { return }
+        guard !(NSApp.isActive && (route == .confirm || route == .chat(ask.botId))),
+              !QuickAsk.shared.showsAnswer(from: ask.botId) else { return }
         Notifier.shared.ask(ask, from: bot(ask.botId)?.name ?? ask.botId)
     }
 
-    /// Unless the assistant's chat is in front of you.
+    /// Unless the assistant's chat is in front of you, or the ⌥Space window shows the reply.
     private func notifyReply(_ botId: String, _ text: String) {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !(NSApp.isActive && route == .chat(botId)) else { return }
+        guard !text.isEmpty, !(NSApp.isActive && route == .chat(botId)),
+              !QuickAsk.shared.showsAnswer(from: botId) else { return }
         Notifier.shared.reply(text, from: bot(botId)?.name ?? botId, botId: botId)
     }
 

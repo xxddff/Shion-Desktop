@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// The Settings window: the server, the assistants on it, and what this Mac knows itself.
+/// The Settings window: the server, the assistants on it, the keys (ShortcutSettings.swift), and
+/// what this Mac knows itself (LocalSettings.swift).
 struct SettingsTabs: View {
     var body: some View {
         TabView {
@@ -9,6 +10,9 @@ struct SettingsTabs: View {
             }
             Tab("助手", systemImage: "person.2") {
                 AssistantSettings()
+            }
+            Tab("快捷键", systemImage: "keyboard") {
+                ShortcutSettings()
             }
             Tab("这台 Mac", systemImage: "laptopcomputer") {
                 LocalSettingsView()

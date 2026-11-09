@@ -33,10 +33,13 @@ final class LocalDataTests: XCTestCase {
         XCTAssertTrue(calendar, "this Mac's calendar is not on 今天")
         XCTAssertFalse(waitForText("CI：不该出现的日程", in: app, timeout: 1), "an unticked calendar's event shows")
 
-        // sign in as SignInTests does
+        // sign in as SignInTests does; Settings opens on the tab it was last left on
         app.typeKey(",", modifierFlags: .command)
         let settings = app.windows.matching(NSPredicate(format: "identifier CONTAINS[c] 'settings'")).firstMatch
         XCTAssertTrue(settings.waitForExistence(timeout: 5), "no Settings window")
+        if !settings.textFields["server-address"].waitForExistence(timeout: 2) {
+            select("服务器", in: settings)
+        }
         type(server, into: settings.textFields["server-address"])
         type("ci-client", into: settings.textFields["access-id"])
         type("ci-secret", into: settings.secureTextFields["access-secret"])
@@ -118,6 +121,7 @@ final class LocalDataTests: XCTestCase {
             XCTFail("no 专注 calendar in Settings")
         }
         select("服务器", in: local)
+        XCTAssertTrue(local.textFields["server-address"].waitForExistence(timeout: 5), "Settings not back on 服务器")
         app.typeKey("w", modifierFlags: .command)
         element("nav-today", in: app).click()
         let gone = !waitForText("CI：实验报告 第3章", in: app, timeout: 2)
@@ -130,7 +134,8 @@ final class LocalDataTests: XCTestCase {
         app.terminate()
     }
 
-    /// Settings, on its 这台 Mac tab (the window opens on the tab used last); nil without it.
+    /// Settings, on its 这台 Mac tab (the window opens on the tab used last); nil without it,
+    /// with Settings put back on 服务器.
     @MainActor
     private func openLocalSettings(_ app: XCUIApplication, waitingFor identifier: String) -> XCUIElement? {
         app.typeKey(",", modifierFlags: .command)
@@ -140,7 +145,9 @@ final class LocalDataTests: XCTestCase {
         if !mine.waitForExistence(timeout: 1) {
             select("这台 Mac", in: settings)
         }
-        return mine.waitForExistence(timeout: 10) ? settings : nil
+        if mine.waitForExistence(timeout: 10) { return settings }
+        select("服务器", in: settings)
+        return nil
     }
 
     /// A Settings tab, by its name. Back on 服务器 before a test lets go, so a test after it finds the

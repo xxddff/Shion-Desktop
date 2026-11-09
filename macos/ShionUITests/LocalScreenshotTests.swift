@@ -43,8 +43,10 @@ final class LocalScreenshotTests: XCTestCase {
                         XCTFail("No \(identifier) in Settings (\(appearance))")
                     }
                 }
+                // Settings opens on the tab it was left on, next launch too: ScreenshotTests, which
+                // runs next, takes 服务器 as it opens
                 select("服务器", in: settings)
-                Thread.sleep(forTimeInterval: 0.5)
+                XCTAssertTrue(settings.textFields["server-address"].waitForExistence(timeout: 5), "Settings not back on 服务器")
             } else {
                 keep(XCUIScreen.main.screenshot(), "settings-local-\(appearance)-missing")
                 XCTFail("No 这台 Mac tab in Settings (\(appearance))")
@@ -67,14 +69,15 @@ final class LocalScreenshotTests: XCTestCase {
                 XCTFail("No calendar access button in Settings")
             }
             select("服务器", in: settings)
-            Thread.sleep(forTimeInterval: 0.5)
+            XCTAssertTrue(settings.textFields["server-address"].waitForExistence(timeout: 5), "Settings not back on 服务器")
         } else {
             XCTFail("No 这台 Mac tab in Settings")
         }
         app.terminate()
     }
 
-    /// Settings, on its 这台 Mac tab (the window opens on the tab used last); nil without it.
+    /// Settings, on its 这台 Mac tab (the window opens on the tab used last); nil without it,
+    /// with Settings put back on 服务器.
     @MainActor
     private func openLocalSettings(_ app: XCUIApplication, waitingFor identifier: String) -> XCUIElement? {
         app.typeKey(",", modifierFlags: .command)
@@ -84,7 +87,9 @@ final class LocalScreenshotTests: XCTestCase {
         if !mine.waitForExistence(timeout: 1) {
             select("这台 Mac", in: settings)
         }
-        return mine.waitForExistence(timeout: 10) ? settings : nil
+        if mine.waitForExistence(timeout: 10) { return settings }
+        select("服务器", in: settings)
+        return nil
     }
 
     /// A Settings tab, by its name. Back on 服务器 before a test lets go, so a test after it finds the

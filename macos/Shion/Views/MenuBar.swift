@@ -1,3 +1,4 @@
+import KeyboardShortcuts
 import SwiftUI
 
 /// The status item: 詩音's mark in outline (a template image, like other menu bar icons) and the
@@ -100,20 +101,22 @@ struct MenuBarPanel: View {
                 .buttonStyle(.plain)
             }
 
+            // the same window as the global shortcut (QuickAsk.swift), whose keys it shows
             Button {
-                store.route = .chat(store.chiefId)
-                NSApp.activate()
+                QuickAsk.shared.show()
             } label: {
                 HStack(spacing: 8) {
                     Mark(size: 18)
                     Text("跟詩音说…").foregroundStyle(.secondary)
                     Spacer()
-                    Text("⌥Space")
-                        .font(.t11)
-                        .foregroundStyle(.tertiary)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 1)
-                        .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(Palette.line))
+                    if let shortcut = QuickAsk.shared.shortcut {
+                        Text(shortcut.description)
+                            .font(.t11)
+                            .foregroundStyle(.tertiary)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(Palette.line))
+                    }
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)
