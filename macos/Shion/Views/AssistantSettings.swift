@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The Settings window: the server, and the assistants on it.
+/// The Settings window: the server, the assistants on it, and the keys (ShortcutSettings.swift).
 struct SettingsTabs: View {
     var body: some View {
         TabView {
@@ -9,6 +9,9 @@ struct SettingsTabs: View {
             }
             Tab("助手", systemImage: "person.2") {
                 AssistantSettings()
+            }
+            Tab("快捷键", systemImage: "keyboard") {
+                ShortcutSettings()
             }
         }
     }
