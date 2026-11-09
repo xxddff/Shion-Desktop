@@ -135,12 +135,12 @@ final class WorkTests: XCTestCase {
         let prefs = app.windows.matching(NSPredicate(format: "identifier CONTAINS[c] 'settings'")).firstMatch
         XCTAssertTrue(prefs.waitForExistence(timeout: 5), "no Settings window")
         serverTab(prefs)
-        let toggle = element("board-notify-done", in: prefs)
-        XCTAssertTrue(toggle.waitForExistence(timeout: 5), "no setting for done cards")
-        scrollTo(toggle, in: prefs)
+        XCTAssertTrue(element("board-notify-done", in: prefs).waitForExistence(timeout: 5), "no setting for done cards")
+        let toggle = switchOf("board-notify-done", in: prefs)
+        reveal(toggle, in: prefs)
         let off = turnOff(toggle)
         keep(prefs.screenshot(), "work-7-settings")
-        XCTAssertNotEqual(off, false, "the setting did not turn off: \(String(describing: toggle.value))")
+        XCTAssertNotEqual(off, false, "the setting did not turn off: \(toggle.elementType.rawValue) \(String(describing: toggle.value))")
         app.typeKey("w", modifierFlags: .command)
         make("离开看板后做完的卡（CI 通知）", in: app)
         element("nav-today", in: app).click()
@@ -154,6 +154,7 @@ final class WorkTests: XCTestCase {
         element("nav-confirm", in: app).click()
         let open = element("card-ask-open-t_bank", in: app)
         XCTAssertTrue(open.waitForExistence(timeout: 10), "no 打开卡片 on the other board's card")
+        reveal(open, in: window)
         open.click()
         let opened = waitForText("银行要你在手机上点一下确认", in: app, timeout: 10) && waitForText("看板 side", in: app, timeout: 5)
         let switched = waitForText("整理副业发票（CI）", in: app, timeout: 5)
@@ -210,14 +211,14 @@ final class WorkTests: XCTestCase {
     }
 
     /// Whether a card titled `title` shows in one of the board page's columns: a text with its
-    /// title inside the column's frame, as BoardTests checks a drag (a column's own children do
-    /// not list its cards).
+    /// title inside the column's frame, as BoardTests checks a drag. A text's words are its value
+    /// on macOS, its label mostly empty.
     @MainActor
     private func inColumn(_ title: String, _ column: String, in app: XCUIApplication) -> Bool {
         let box = element("board-column-\(column)", in: app)
         guard box.exists else { return false }
         let area = box.frame
-        let texts = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", title))
+        let texts = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", title, title))
         for index in 0..<texts.count {
             let text = texts.element(boundBy: index)
             if text.exists && area.contains(CGPoint(x: text.frame.midX, y: text.frame.midY)) {
@@ -227,24 +228,39 @@ final class WorkTests: XCTestCase {
         return false
     }
 
-    /// Turns a switch off: a click on it, or on its knob at the trailing end when the click went
-    /// to its label. The identifier may be on the switch or on its row. Nil when its state cannot
-    /// be read; the notifications that follow tell then.
+    /// A toggle's switch. Its identifier goes to its label's texts as well (a row's goes to each of
+    /// its parts), so the switch is looked for first, as BotsTests does.
+    @MainActor
+    private func switchOf(_ identifier: String, in root: XCUIElement) -> XCUIElement {
+        let control = root.switches.matching(identifier: identifier).firstMatch
+        if control.exists { return control }
+        let box = root.checkBoxes.matching(identifier: identifier).firstMatch
+        return box.exists ? box : element(identifier, in: root)
+    }
+
+    /// A switch's state: its value is a number (or its text) on macOS. Nil when it is no switch:
+    /// a text's value is its words.
+    @MainActor
+    private func isOn(_ toggle: XCUIElement) -> Bool? {
+        guard toggle.exists else { return nil }
+        if let number = toggle.value as? NSNumber { return number.boolValue }
+        switch (toggle.value as? String)?.lowercased() {
+        case "1", "on": return true
+        case "0", "off": return false
+        default: return nil
+        }
+    }
+
+    /// Turns a switch off: true when it reads off then, nil when its state cannot be read (the
+    /// notifications that follow tell then).
     @MainActor
     private func turnOff(_ toggle: XCUIElement) -> Bool? {
-        let control = [toggle.switches.firstMatch, toggle.checkBoxes.firstMatch].first { $0.exists } ?? toggle
-        func isOn() -> Bool? {
-            if let number = control.value as? NSNumber { return number.boolValue }
-            if let text = control.value as? String { return text == "1" || text.lowercased() == "on" }
-            return nil
+        print("the switch for done cards: \(toggle.elementType.rawValue), value \(String(describing: toggle.value))")
+        if isOn(toggle) != false {
+            toggle.click()
         }
-        print("the switch for done cards: \(control.elementType.rawValue), value \(String(describing: control.value))")
-        guard isOn() != false else { return true }
-        control.click()
-        if waitUntil(timeout: 2, { isOn() == false }) { return true }
-        guard isOn() != nil else { return nil }
-        control.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.5)).click()
-        return waitUntil(timeout: 2) { isOn() == false }
+        if waitUntil(timeout: 5, { self.isOn(toggle) == false }) { return true }
+        return isOn(toggle) == nil ? nil : false
     }
 
     /// Settings opens on the tab it was last left on (BotsTests leaves 助手): 服务器.
@@ -261,15 +277,16 @@ final class WorkTests: XCTestCase {
         XCTAssertTrue(settings.textFields["server-address"].waitForExistence(timeout: 5), "no 服务器 tab in Settings")
     }
 
-    /// Scrolls Settings until `target` can be clicked: which sign of a wheel delta scrolls down is
-    /// the runner's business, so one way a few times, then the other.
+    /// Scrolls a window's page until `target` can be clicked, the wheel turning at the page's right
+    /// margin, where no row takes it. Which sign of a delta scrolls down is the runner's business,
+    /// so one way a few times, then the other.
     @MainActor
-    private func scrollTo(_ target: XCUIElement, in settings: XCUIElement) {
-        let form = settings.scrollViews.firstMatch
-        for delta in [-400.0, -400, -400, 400, 400, 400, 400, 400, 400] {
+    private func reveal(_ target: XCUIElement, in window: XCUIElement) {
+        let margin = window.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.6))
+        for delta: CGFloat in [-300, -300, -300, 300, 300, 300, 300, 300, 300] {
             if target.exists && target.isHittable { return }
-            form.hover()
-            form.scroll(byDeltaX: 0, deltaY: delta)
+            margin.hover()
+            margin.scroll(byDeltaX: 0, deltaY: delta)
             Thread.sleep(forTimeInterval: 0.4)
         }
     }
