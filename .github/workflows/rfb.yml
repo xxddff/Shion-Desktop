@@ -1,0 +1,94 @@
+name: RFB client
+
+# The RFB (VNC) client package in rfb/. Linux runs on every change to it: build, tests (recorded
+# Xvnc samples, Hermes' own RFB filter), then a live smoke test against a real Xvnc behind the
+# testbed bridge. The macOS build check uses the limited macOS minutes, so it only runs on a manual
+# run with "macos" ticked, or when the commit message contains [macos].
+on:
+  push:
+    paths:
+      - 'rfb/**'
+      - '.github/workflows/rfb.yml'
+  workflow_dispatch:
+    inputs:
+      macos:
+        description: 'Also build and test on macOS (limited minutes)'
+        type: boolean
+        default: false
+
+concurrency:
+  group: rfb-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SWIFT_VERSION: '6.4.2'
+
+jobs:
+  linux:
+    name: Linux build, test, smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: rfb
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Cache the Swift toolchain
+        id: swift-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/swift
+          key: swift-${{ env.SWIFT_VERSION }}-ubuntu24.04-x86_64
+
+      - name: Install Swift ${{ env.SWIFT_VERSION }}
+        if: steps.swift-cache.outputs.cache-hit != 'true'
+        working-directory: .
+        run: |
+          mkdir -p ~/swift
+          v=$SWIFT_VERSION
+          curl -fsSL "https://download.swift.org/swift-$v-release/ubuntu2404/swift-$v-RELEASE/swift-$v-RELEASE-ubuntu24.04.tar.gz" \
+            | tar xz -C ~/swift --strip-components 1
+
+      - name: Toolchain
+        run: |
+          echo "$HOME/swift/usr/bin" >> "$GITHUB_PATH"
+          "$HOME/swift/usr/bin/swift" --version
+
+      - name: Build
+        run: swift build --build-tests
+
+      - name: Test
+        run: swift test
+
+      - name: Testbed packages (Xvnc, X clients, bridge)
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq tigervnc-standalone-server x11-apps x11-utils x11-xserver-utils \
+            xterm xdotool xclip fonts-dejavu-core
+          python3 -m pip install --user --break-system-packages -q 'websockets>=13'
+          Xvnc -version 2>&1 | head -1
+
+      - name: Smoke test against a live Xvnc
+        run: testbed/smoke.sh
+
+  macos:
+    name: macOS build and test
+    if: (github.event_name == 'workflow_dispatch' && inputs.macos) || contains(github.event.head_commit.message, '[macos]')
+    runs-on: xcode-27
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: rfb
+    steps:
+      - uses: actions/checkout@v7
+      - name: Toolchain
+        run: |
+          sw_vers
+          swift --version
+      - name: Build
+        run: swift build --build-tests
+      - name: Test
+        run: swift test
