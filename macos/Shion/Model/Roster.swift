@@ -137,6 +137,9 @@ final class Roster {
         }
         prefs.hidden.removeAll { $0 == name }
         prefs.seen?.removeAll { $0 == name }
+        // gone from the list now, before it is read again: the clean-up's retry takes a name
+        // still listed for one made again
+        profiles.removeAll { $0.name == name }
         write()
     }
 

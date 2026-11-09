@@ -19,7 +19,7 @@ extension AppStore {
         return rosterBots()
     }
 
-    /// 总秘书's assistant: her name and avatar go wherever you talk to her.
+    /// The assistant that is 总秘书: its name and avatar go wherever you talk to 总秘书.
     var chief: Bot? { bot(chiefId) }
     var chiefName: String { chief?.name ?? "总秘书" }
 
@@ -71,7 +71,7 @@ extension AppStore {
         }
     }
 
-    /// Settings: 总秘书. The shion plugin is called in her profile, so today, todos and reports
+    /// Settings: 总秘书. The shion plugin is called in that profile, so today, todos and reports
     /// load again from there, or go back to the demo where the plugin is not installed. One that
     /// was hidden is shown again, and its Bot Chat attached.
     func chooseChief(_ name: String) {
@@ -284,7 +284,10 @@ extension AppStore {
                 try? await Task.sleep(for: .seconds(wait))
                 wait = min(wait * 2, 120)
             }
-            self?.roster.settler = nil
+            // a loop stopped for another server leaves the new one's in place
+            if !Task.isCancelled {
+                self?.roster.settler = nil
+            }
         }
     }
 

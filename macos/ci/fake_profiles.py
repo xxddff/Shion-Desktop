@@ -18,7 +18,7 @@ Shaped like the routes Shion's assistant pages use, with their refusals:
            (tui_gateway/methods_tools.py), cli.exec (only `hermes profile purge-identity` is played)
 
 Fixtures for the second round: archive-ci is hidden by Bot Mode (ui_meta hidden: true); 通勤 has an
-avatar picture; deleting mail-ci leaves its identity unsettled (settlement_pending) until the third
+avatar picture; deleting mail-ci leaves its identity unsettled (settlement_pending) until the fourth
 purge-identity; the catalog's slow-ci installs in the background; the second read of 通勤's SOUL finds
 it changed by another client.
 
@@ -349,8 +349,8 @@ def mcp_set_api_key(params):
 
 def cli_exec(params):
     """cli.exec: `hermes <argv>` on the server. Only the retry of a delete's identity purge is played;
-    an unsettled name goes through on the third try (Shion's second retry, some fifteen seconds after
-    the delete), as when the gateway answers late, so BotsTests sees the name held back first."""
+    an unsettled name goes through on the fourth try (Shion's third retry, some thirty-five seconds
+    after the delete), as when the gateway answers late, so BotsTests sees the name held back first."""
     argv = params.get("argv")
     if not isinstance(argv, list) or not all(isinstance(x, str) for x in argv):
         return 4003, "argv must be list[str]"
@@ -364,7 +364,7 @@ def cli_exec(params):
                           "that has already completed."}
     if name in unsettled:
         unsettled[name] += 1
-        if unsettled[name] < 3:
+        if unsettled[name] < 4:
             _log(f"    cli.exec purge-identity {name}: not yet (try {unsettled[name]})")
             return {"blocked": False, "code": 1,
                     "output": f"Error: session identity was not purged. Restart or stop the gateway, then run:\n"

@@ -884,15 +884,17 @@ final class BotEditor {
             guard let status = try? await api.get("/api/actions/" + KanbanClient.encode(action) + "/status",
                                                   [("lines", "20")]) else { continue }
             guard status["running"]?.bool != true else { continue }
-            if let code = status["exit_code"]?.int, code != 0 {
+            let code = status["exit_code"]?.int ?? 0
+            await loadServers()
+            await loadCatalog()
+            // the row goes once the server's own is listed
+            if code != 0 {
                 let last = status["lines"]?.array.compactMap { $0.string }
                     .last { !$0.trimmingCharacters(in: .whitespaces).isEmpty } ?? ""
                 installs[entry] = .failed(last.isEmpty ? "没装上（退出码 \(code)）" : String(last.prefix(160)))
             } else {
                 installs[entry] = nil
             }
-            await loadServers()
-            await loadCatalog()
             return
         }
         installs[entry] = .failed("十分钟了还没装完")

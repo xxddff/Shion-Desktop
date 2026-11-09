@@ -65,7 +65,7 @@ final class BotsTests: XCTestCase {
         keep(window.screenshot(), "bots-3-today-study")
         XCTAssertTrue(studyLeads, "课程 does not lead the sidebar")
         XCTAssertTrue(demoAgain, "今天 still shows 詩音's paragraph from the plugin")
-        // the field on 今天 and 「跟…说」 go to 总秘书 by her name
+        // the field on 今天 and 「跟…说」 name 总秘书
         XCTAssertTrue(asking("课程（CI）", in: app).waitForExistence(timeout: 5), "今天's field does not ask for 课程")
         element("nav-todos", in: app).click()
         XCTAssertTrue(waitForText("跟课程（CI）说", in: app, timeout: 5), "the toolbar's 「跟…说」 does not name 课程")
@@ -200,7 +200,7 @@ final class BotsTests: XCTestCase {
         XCTAssertTrue(gone, "the deleted assistant is still in the sidebar")
 
         // the stand-in left mail-ci's identity unsettled: Settings says so, the name is held back
-        // until Shion's retry of `hermes profile purge-identity` goes through (the third try)
+        // until Shion's retry of `hermes profile purge-identity` goes through (the fourth try)
         settings = openAssistantSettings(app)
         let cleaning = element("cleaning-mail-ci", in: settings)
         XCTAssertTrue(cleaning.waitForExistence(timeout: 10), "Settings does not say mail-ci is still being cleaned up")
@@ -214,7 +214,7 @@ final class BotsTests: XCTestCase {
         XCTAssertTrue(held, "a new mail-ci is not held back while the server cleans up")
         let create = element("new-assistant-create", in: app)
         XCTAssertFalse(create.isEnabled, "新建 is open for a name still being cleaned up")
-        let released = waitUntil(timeout: 45) { create.exists && create.isEnabled }
+        let released = waitUntil(timeout: 75) { create.exists && create.isEnabled }
         keep(settings.screenshot(), "bots-16-released")
         XCTAssertTrue(released, "the name was not let go once the server cleaned up")
         XCTAssertFalse(element("cleaning-mail-ci", in: settings).exists, "Settings still lists mail-ci as being cleaned up")
