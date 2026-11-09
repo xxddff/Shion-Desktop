@@ -49,14 +49,14 @@ struct Sidebar: View {
     var body: some View {
         List(selection: $selection) {
             Section {
-                Label("今天", systemImage: "sun.max").tag(Route.today)
+                Label("今天", systemImage: "sun.max").accessibilityIdentifier("nav-today").tag(Route.today)
                 Label("等你确认", systemImage: "hand.raised")
                     .accessibilityIdentifier("nav-confirm")
                     .badge(confirmBadge)
                     .tag(Route.confirm)
-                Label("待办", systemImage: "checklist").badge(store.todayTodos.count).tag(Route.todos)
+                Label("待办", systemImage: "checklist").badge(store.todayTodos.count).accessibilityIdentifier("nav-todos").tag(Route.todos)
                 Label("日程", systemImage: "calendar").tag(Route.calendar)
-                Label("日报", systemImage: "doc.text").tag(Route.reports)
+                Label("日报", systemImage: "doc.text").accessibilityIdentifier("nav-reports").tag(Route.reports)
             }
             Section("工作区") {
                 Label("看板", systemImage: "rectangle.split.3x1").tag(Route.board)

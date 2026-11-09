@@ -7,7 +7,9 @@ import SwiftUI
 /// `shion` plugin exists).
 @Observable
 final class AppStore {
-    let now: Date
+    /// The demo's pinned moment; with the server's own data, `now` is the real time.
+    let demoClock: Date
+    var now: Date { pluginData ? Date() : demoClock }
     var route: Route? = LaunchOptions.current.route
     var bots: [Bot]
     var todos: [Todo]
@@ -42,7 +44,15 @@ final class AppStore {
     /// The server's board limits, read after connecting.
     private(set) var boardLimits: BoardLimits?
     /// What `runtime.describe` says the server can do (`session-transcript-v1`, …).
-    @ObservationIgnored private var serverCapabilities: Set<String> = []
+    @ObservationIgnored var serverCapabilities: Set<String> = []
+    /// Today, todos and reports come from the server's `shion` plugin (AppStore+Plugin.swift).
+    var pluginData = false
+    /// 詩音's paragraph at the top of 今天, from the plugin.
+    var todaySummary: String?
+    @ObservationIgnored var pluginRevision = 0
+    @ObservationIgnored var pluginRefresh: Task<Void, Never>?
+    @ObservationIgnored var demoTodos: [Todo] = []
+    @ObservationIgnored var demoReports: [Report] = []
     /// bot id → how many of its rows came before the attach that is waiting for its first page
     @ObservationIgnored private var attachMarks: [String: Int] = [:]
     /// Bot ids whose rows are loaded: chats opened on this connection. The other Bot Chats are
@@ -59,7 +69,7 @@ final class AppStore {
 
     init(now: Date) {
         let demo = DemoData(now: now)
-        self.now = now
+        self.demoClock = now
         bots = demo.bots
         todos = demo.todos
         events = demo.events
@@ -116,12 +126,14 @@ final class AppStore {
     }
 
     func toggle(_ id: String) {
+        if pluginData { return pluginToggle(id) }
         guard let index = todos.firstIndex(where: { $0.id == id }) else { return }
         todos[index].done.toggle()
         todos[index].proposed = false
     }
 
     func confirm(_ id: String) {
+        if pluginData { return pluginConfirm(id) }
         guard let index = todos.firstIndex(where: { $0.id == id }) else { return }
         todos[index].proposed = false
     }
@@ -129,6 +141,7 @@ final class AppStore {
     func addTodo(_ title: String) {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        if pluginData { return pluginAdd(trimmed) }
         todos.append(Todo(id: UUID().uuidString, title: trimmed, area: .life, source: "你自己加的", doAt: now))
     }
 
@@ -194,6 +207,7 @@ extension AppStore {
         guard gateway.phase == .online else { return }
         await describeRuntime()
         await loadProfiles()
+        await loadPluginData()
         await loadBoardLimits()
         await attachAll()
     }
@@ -361,6 +375,7 @@ extension AppStore {
 
     private func leaveLive() {
         boardLimits = nil
+        stopPluginData()
         guard live else { return }
         live = false
         bots = demoBots
@@ -530,6 +545,8 @@ extension AppStore {
                     try? await loadLatestPage(botId)
                 }
             }
+            // the plugin's pushes are not replayed: catch up on what changed while away
+            await syncPluginData()
         }
     }
 
@@ -539,6 +556,8 @@ extension AppStore {
         switch row["role"]?.string {
         case "user":
             guard row["display_kind"]?.string != "hidden" else { return nil }
+            // the plugin's focus-check line that woke 詩音: for her, not for the transcript
+            guard !text(of: row).hasPrefix("［专注检查］") else { return nil }
             return ChatItem(id: id, role: .user, at: at, text: text(of: row))
         case "assistant":
             let body = text(of: row)
@@ -564,6 +583,9 @@ extension AppStore {
     // MARK: events
 
     private func apply(_ type: String, sessionId: String?, payload: JSONValue) {
+        if type == "plugin.shion.changed" {
+            return pluginChanged(payload)
+        }
         guard let sessionId, let botId = sessionBots[sessionId] else { return }
         // a chat not opened yet has no rows to add to: its first page brings them
         let shown = loadedChats.contains(botId)

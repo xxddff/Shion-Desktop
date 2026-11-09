@@ -30,6 +30,7 @@ where the flow stopped. Stdlib only.
 import argparse
 import base64
 import re
+import os
 import hashlib
 import json
 import secrets
@@ -39,6 +40,9 @@ import threading
 import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import fake_shion  # noqa: E402  the shion plugin's RPCs
 
 ACCESS_ID, ACCESS_SECRET = "ci-client", "ci-secret"
 USER, PASSWORD = "ci-user", "ci-pass"
@@ -487,6 +491,8 @@ class Handler(BaseHTTPRequestHandler):
         method, params, rid = request.get("method", ""), request.get("params") or {}, request.get("id")
         if method != "gateway.ping":
             log(f"  rpc {method} {json.dumps(params, ensure_ascii=False)[:160]}")
+        if method.startswith("plugin.shion."):
+            return fake_shion.handle(self, log, method, params, rid)
         result = None
         if method == "client.capabilities":
             result = {"server_requests": True}
@@ -504,8 +510,8 @@ class Handler(BaseHTTPRequestHandler):
             if params:
                 return self.refuse(rid, sorted(params))
             result = {"instance_id": "ci", "profile_id": "/ci/.hermes", "authority_epoch": 1,
-                      "capabilities": ["durable-admission-v1", "event-replay-v1", "session-client-v1",
-                                       "session-transcript-v1"],
+                      "capabilities": ["durable-admission-v1", "event-replay-v1", "plugin-rpc-v1",
+                                       "session-client-v1", "session-transcript-v1"],
                       "session_create": {"sources": sorted(SURFACES),
                                          "parameters": sorted(CREATE_KEYS - {"hidden", "profile"})}}
         elif method == "session.list":

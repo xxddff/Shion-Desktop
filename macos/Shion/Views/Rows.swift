@@ -33,6 +33,7 @@ struct TodoRow: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(todo.done ? "标为未完成" : "标为完成")
+            .accessibilityIdentifier("todo-toggle-\(todo.id)")
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(todo.title)

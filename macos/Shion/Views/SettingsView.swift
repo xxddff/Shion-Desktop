@@ -99,7 +99,7 @@ struct SettingsView: View {
         case .sessionToken:
             "会话令牌是服务器上的 HERMES_DASHBOARD_SESSION_TOKEN。"
         }
-        return login + "Access 两项填 Cloudflare Access 的 service token，没有就留空。这些都存在钥匙串里，只发给这个地址。连上后，助手列表和各助手的对话来自服务器；今天、待办、日程、日报、看板和云桌面暂时还是示例数据。"
+        return login + "Access 两项填 Cloudflare Access 的 service token，没有就留空。这些都存在钥匙串里，只发给这个地址。连上后，助手和对话来自服务器；服务器装了 shion 插件时，今天、待办和日报也是。日程、看板和云桌面暂时还是示例数据。"
     }
 }
 

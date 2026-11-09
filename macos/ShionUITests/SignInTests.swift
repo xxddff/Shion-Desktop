@@ -80,6 +80,25 @@ final class SignInTests: XCTestCase {
             keep(app.windows.firstMatch.screenshot(), "signin-4b-approved")
         }
 
+        // 今天, 待办 and 日报 come from the shion plugin on the stand-in
+        element("nav-today", in: app).click()
+        let summary = waitForText("（CI）早上好", in: app, timeout: 10)
+        keep(app.windows.firstMatch.screenshot(), "signin-4c-today")
+        XCTAssertTrue(summary, "詩音's paragraph from the plugin is not on 今天")
+
+        element("nav-todos", in: app).click()
+        XCTAssertTrue(waitForText("CI：交实验报告", in: app, timeout: 10), "the plugin's todos are not listed")
+        element("todo-toggle-td_ci_report", in: app).click()
+        // 课程 adds one through the plugin a few seconds after Shion syncs; the push brings it in
+        let pushed = waitForText("CI：复习第 7 回", in: app, timeout: 15)
+        keep(app.windows.firstMatch.screenshot(), "signin-4d-todos")
+        XCTAssertTrue(pushed, "the todo an assistant added did not arrive")
+
+        element("nav-reports", in: app).click()
+        let report = waitForText("CI 日报：昨天睡得早", in: app, timeout: 10)
+        keep(app.windows.firstMatch.screenshot(), "signin-4e-reports")
+        XCTAssertTrue(report, "the plugin's report is not on 日报")
+
         chief.click()
         let opened = waitForText("CI 替身服务器连上了", in: app, timeout: 15)
         keep(app.windows.firstMatch.screenshot(), "signin-4-chat")

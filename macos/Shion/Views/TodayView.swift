@@ -27,7 +27,8 @@ struct TodayView: View {
         VStack(alignment: .leading, spacing: 14) {
             Text("\(Fmt.monthDay(store.now)) \(Fmt.weekday(store.now))")
                 .font(.t30)
-            Text(brief)
+            // 詩音's own paragraph when the plugin has one for today, else the line made from the data
+            Text(store.todaySummary ?? brief)
                 .font(.system(size: 15))
                 .foregroundStyle(.secondary)
                 .lineSpacing(3)
