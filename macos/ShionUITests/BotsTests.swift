@@ -130,7 +130,7 @@ final class BotsTests: XCTestCase {
         editor.typeText("你是邮件助手（CI 改过）。")
         let saveSoul = reveal("assistant-soul-save", in: app)
         saveSoul.click()
-        let replace = app.buttons["替换"].firstMatch
+        let replace = dialogButton("替换", in: app)
         XCTAssertTrue(replace.waitForExistence(timeout: 5), "replacing the SOUL did not ask first")
         keep(window.screenshot(), "bots-9-soul-asks")
         press(replace)
@@ -178,7 +178,7 @@ final class BotsTests: XCTestCase {
 
         // and deleted, after asking
         reveal("assistant-delete", in: app).click()
-        let confirm = app.buttons["删除"].firstMatch
+        let confirm = dialogButton("删除", in: app)
         XCTAssertTrue(confirm.waitForExistence(timeout: 5), "deleting did not ask first")
         keep(window.screenshot(), "bots-13-delete-asks")
         press(confirm)
@@ -263,8 +263,14 @@ final class BotsTests: XCTestCase {
         return target
     }
 
-    /// A dialog's button, clicked at its place on the screen rather than after XCTest's own check
-    /// that it can be hit, which a dialog over the window does not need.
+    /// A dialog's button, from the windows: the Touch Bar has the dialog's buttons too, under the
+    /// same names, and XCTest cannot click those (`app.buttons[…]` found the Touch Bar's first).
+    @MainActor
+    private func dialogButton(_ title: String, in app: XCUIApplication) -> XCUIElement {
+        app.windows.buttons[title].firstMatch
+    }
+
+    /// A dialog's button, clicked at its place on the screen.
     @MainActor
     private func press(_ button: XCUIElement) {
         XCTAssertTrue(button.exists, "the dialog closed before its button was clicked")
