@@ -71,16 +71,26 @@ if [[ -n "$CHROME" ]]; then
   X "$CHROME" --no-sandbox --disable-gpu --no-first-run --user-data-dir="$WORK/chrome" \
     --window-position=0,0 --window-size=1000,700 --app="file://$HERE/input.html" >"$WORK/chrome.log" 2>&1 &
   CH=$!
-  for _ in $(seq 1 100); do X xdotool search --name '^empty$' >/dev/null 2>&1 && break; sleep 0.2; done
-  X xdotool mousemove 300 200 click 1   # focus the text box (no window manager here)
-  curl -fs "$API/lease/acquire?viewer_id=typist" >/dev/null
+  # Chrome can take a while to start on a CI runner; then give the page a moment to settle.
+  for _ in $(seq 1 150); do X xdotool search --name '^empty$' >/dev/null 2>&1 && break; sleep 0.2; done
+  sleep 2
   TEXT=$'你好，云桌面\nクラウド 👋 ok'
-  "$PROBE" "$("$HERE/observe.sh" typist)" -H 'CF-Access-Client-Id: @env:CF_ID' --out "$WORK/p5" --seconds 3 --type "$TEXT" 2>"$WORK/p5.log" \
-    || fail "typing probe failed"
   GOT=""
-  for _ in $(seq 1 25); do
-    GOT=$(X xdotool search --name '^T:' getwindowname 2>/dev/null | head -1 || true)
-    [[ -n "$GOT" ]] && break; sleep 0.2
+  # Focus is the flaky part (no window manager here): set it explicitly, click into the text box,
+  # and try again only if nothing at all arrived (a partial paste would be a real failure).
+  for attempt in 1 2 3; do
+    WID=$(X xdotool search --name '^empty$' 2>/dev/null | head -1 || true)
+    [[ -n "$WID" ]] && X xdotool windowfocus --sync "$WID" 2>/dev/null || true
+    X xdotool mousemove 300 200 click 1
+    curl -fs "$API/lease/acquire?viewer_id=typist" >/dev/null
+    "$PROBE" "$("$HERE/observe.sh" typist)" -H 'CF-Access-Client-Id: @env:CF_ID' --out "$WORK/p5" --seconds 3 --type "$TEXT" 2>"$WORK/p5.log" \
+      || fail "typing probe failed"
+    for _ in $(seq 1 25); do
+      GOT=$(X xdotool search --name '^T:' getwindowname 2>/dev/null | head -1 || true)
+      [[ -n "$GOT" ]] && break; sleep 0.2
+    done
+    [[ -n "$GOT" ]] && break
+    echo "   attempt $attempt: nothing reached the text box; trying again"
   done
   pkill -f -- "--user-data-dir=$WORK/chrome" 2>/dev/null || true
   wait $CH 2>/dev/null || true

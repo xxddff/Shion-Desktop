@@ -4,12 +4,14 @@ import Network
 import RFB
 
 /// RFB over a Network.framework WebSocket (`NWConnection` + `NWProtocolWebSocket`), with extra
-/// request headers for Cloudflare Access. What the App uses.
+/// request headers for Cloudflare Access. An alternative to `URLSessionWebSocketTransport`, which
+/// the App uses.
 ///
-/// A receive is always pending (into a bounded queue), so the server's close frame is read the
-/// moment it arrives, even while the client is busy sending; this is how Hermes' 4000 (another
-/// viewer took control) reaches the caller as a close code instead of a failed send. Errors are
-/// Network.framework's (no URL in them) or `RFBConnectionClosed`.
+/// Caveat, from macOS CI (2026-11-09): a close started by the server (Hermes' 4000, another viewer
+/// took control) never came through as a close frame. The connection went straight to
+/// failed(ENOTCONN), even with a receive always pending, so the caller sees a close without a
+/// code. Our own close does get the server's answer. A refused upgrade gives no HTTP status, only
+/// waiting(ECONNABORTED). Errors are Network.framework's (no URL in them) or `RFBConnectionClosed`.
 ///
 /// ```swift
 /// let transport = try NWWebSocketTransport(url: displayURL, headers: [

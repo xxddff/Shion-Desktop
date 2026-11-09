@@ -3,7 +3,7 @@ import RFB
 
 /// A small RFC 6455 client for `ws://` (no TLS), with extra request headers. It exists because
 /// Foundation's WebSocket does not work on Linux with the distribution libcurl; on Apple
-/// platforms, and for `wss://`, use `NWWebSocketTransport` (what the App uses).
+/// platforms, and for `wss://`, use `URLSessionWebSocketTransport` (what the App uses).
 ///
 /// Binary frames only (a text frame is a protocol error on the RFB socket), answers pings,
 /// reports the peer's close code. Messages are sent unfragmented.

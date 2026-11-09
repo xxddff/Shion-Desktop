@@ -74,14 +74,16 @@ struct WebSocketTransportTests {
         #expect(await client.statistics.updates == 7)
 
         let closed = ending as? RFBConnectionClosed
-        if kind == .urlSession {
-            // macOS CI (2026-11-09): URLSessionWebSocketTask reported the server's close only as
-            // "Socket is not connected", and closeCode stayed 0 even when the task completed.
-            // The stderr line above shows what it did this time.
-            withKnownIssue("URLSessionWebSocketTask does not report a server-initiated close code", isIntermittent: true) {
+        if kind == .network {
+            // macOS CI (2026-11-09, bad287b): with a receive always pending, Network.framework
+            // still went ready -> failed(ENOTCONN) and the pending receive got that error; the
+            // server's close frame never came through. (Our own close does get the server's
+            // answer.) The stderr line above shows what it did this time.
+            withKnownIssue("Network.framework does not deliver a server-initiated close frame", isIntermittent: true) {
                 #expect(closed?.code == 4000)
             }
         } else {
+            // URLSession (with a receive always pending) and the plain client both report it.
             #expect(closed?.code == 4000, "ended with \(ending.map { "\($0)" } ?? "no error")")
             #expect(closed?.bridgeReason == .controlTaken)
         }

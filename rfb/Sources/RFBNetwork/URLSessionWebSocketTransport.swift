@@ -4,9 +4,13 @@ import FoundationNetworking
 #endif
 import RFB
 
-/// RFB over `URLSessionWebSocketTask`. A fallback: the App uses `NWWebSocketTransport`, because
-/// on macOS a close started by the server (Hermes' 4000 "control taken") showed up here only as
-/// "socket is not connected", without its code (CI, 2026-11).
+/// RFB over `URLSessionWebSocketTask`, with the Cloudflare Access headers on the upgrade request.
+/// What the App uses.
+///
+/// A receive is always pending (into a bounded queue). That is what makes the server's close
+/// code come through: on macOS, a close started by the server (Hermes' 4000 "control taken")
+/// with no receive pending showed up only as "socket is not connected" and `closeCode` stayed 0;
+/// with one pending, `didCloseWith` reports 4000 (CI, 2026-11-09).
 ///
 /// ```swift
 /// var request = URLRequest(url: displayURL)   // wss://host/api/display/ws?display_ticket=…

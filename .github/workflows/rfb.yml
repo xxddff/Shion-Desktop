@@ -107,8 +107,8 @@ jobs:
         run: |
           sw_vers
           swift --version
-      # The WebSocket transport tests run NWWebSocketTransport (what the App uses) and
-      # URLSessionWebSocketTransport against testbed/replay_server.py.
+      # The WebSocket transport tests run URLSessionWebSocketTransport (what the App uses) and
+      # NWWebSocketTransport against testbed/replay_server.py.
       - name: Python for the replay server
         working-directory: .
         run: |
