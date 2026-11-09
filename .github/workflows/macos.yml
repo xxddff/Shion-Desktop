@@ -1,0 +1,93 @@
+name: macOS app
+
+# Builds the app on macOS 27 / Xcode 27 and takes a screenshot of every page, light and dark.
+# macOS runner minutes are limited: this only runs when the app or this file changes.
+on:
+  push:
+    branches: [claude/macos-app]
+    paths:
+      - 'macos/**'
+      - '.github/workflows/macos.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  screenshots:
+    name: Build and screenshot
+    runs-on: xcode-27
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: macos
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          system_profiler SPDisplaysDataType | grep -E "Resolution|Retina|UI Looks" || true
+
+      - name: Generate the Xcode project
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
+        run: |
+          if ! command -v xcodegen >/dev/null; then
+            brew install xcodegen
+          fi
+          xcodegen --version
+          xcodegen generate
+
+      - name: Allow UI automation without a password
+        run: sudo automationmodetool enable-automationmode-without-authentication || true
+
+      - name: Build and run the screenshot test
+        run: |
+          mkdir -p build
+          set -o pipefail
+          xcodebuild test \
+            -project Shion.xcodeproj \
+            -scheme Shion \
+            -destination 'platform=macOS' \
+            -derivedDataPath build/DerivedData \
+            -resultBundlePath build/Shots.xcresult \
+            -quiet 2>&1 | tee build/xcodebuild.log
+
+      - name: Export screenshots
+        if: always()
+        run: |
+          mkdir -p build/shots
+          if [ -d build/Shots.xcresult ]; then
+            xcrun xcresulttool export attachments --path build/Shots.xcresult --output-path build/shots || echo "attachment export failed"
+          fi
+          python3 - <<'PY'
+          import json, os, re
+          folder = 'build/shots'
+          manifest = os.path.join(folder, 'manifest.json')
+          if os.path.exists(manifest):
+              for test in json.load(open(manifest)):
+                  for item in test.get('attachments', []):
+                      source = os.path.join(folder, item.get('exportedFileName', ''))
+                      name = item.get('suggestedHumanReadableName') or os.path.basename(source)
+                      name = re.sub(r'_\d+_[0-9A-Fa-f-]{36}', '', name)
+                      if os.path.isfile(source):
+                          os.replace(source, os.path.join(folder, name))
+          print('\n'.join(sorted(os.listdir(folder))))
+          PY
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shots
+          path: macos/build/shots
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Show errors
+        if: failure()
+        run: grep -nE "error:|: error|Failing tests|failed" build/xcodebuild.log | head -120 || true

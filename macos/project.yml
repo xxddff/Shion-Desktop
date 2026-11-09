@@ -1,0 +1,62 @@
+# Generates Shion.xcodeproj: `xcodegen` in this folder (brew install xcodegen).
+name: Shion
+options:
+  bundleIdPrefix: dev.shion
+  deploymentTarget:
+    macOS: "27.0"
+  createIntermediateGroups: true
+  developmentLanguage: zh-Hans
+settings:
+  base:
+    MACOSX_DEPLOYMENT_TARGET: "27.0"
+    SWIFT_VERSION: "6.0"
+    # Ad-hoc signing ("Sign to Run Locally"): enough to run and UI-test on this Mac or a CI runner.
+    CODE_SIGN_IDENTITY: "-"
+    CODE_SIGN_STYLE: Manual
+    DEVELOPMENT_TEAM: ""
+    ENABLE_HARDENED_RUNTIME: NO
+    DEAD_CODE_STRIPPING: YES
+targets:
+  Shion:
+    type: application
+    platform: macOS
+    sources:
+      - path: Shion
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.shion.Shion
+        PRODUCT_NAME: Shion
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Shion
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.productivity
+        INFOPLIST_KEY_NSPrincipalClass: NSApplication
+        INFOPLIST_KEY_NSHumanReadableCopyright: ""
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
+        SWIFT_APPROACHABLE_CONCURRENCY: YES
+        SWIFT_EMIT_LOC_STRINGS: NO
+        MARKETING_VERSION: "0.1"
+        CURRENT_PROJECT_VERSION: "1"
+  ShionUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - path: ShionUITests
+    dependencies:
+      - target: Shion
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.shion.ShionUITests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: Shion
+        SWIFT_VERSION: "5.0"
+schemes:
+  Shion:
+    build:
+      targets:
+        Shion: all
+        ShionUITests: [test]
+    test:
+      gatherCoverageData: false
+      targets:
+        - ShionUITests
