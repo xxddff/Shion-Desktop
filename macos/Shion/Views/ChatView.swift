@@ -18,10 +18,11 @@ struct ChatView: View {
         let items = store.chats[botId] ?? []
         ScrollViewReader { reader in
             transcript(items, bot: bot)
-                // a chat opens on its newest message, with its rows there from the start or coming
-                // after the page is up, without waiting for a scroll to lay them out
-                .onChange(of: items.isEmpty, initial: true) { _, empty in
-                    if !empty {
+                // a chat starts at its newest message: when it opens with its rows already there,
+                // and each time its newest page comes in after the page is up (opening it, a
+                // reconnect), without waiting for a scroll to lay the rows out
+                .onChange(of: store.newestLoads[botId], initial: true) {
+                    if !items.isEmpty {
                         reader.scrollTo(Self.end, anchor: .bottom)
                     }
                 }

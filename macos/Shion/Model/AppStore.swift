@@ -39,6 +39,9 @@ final class AppStore {
     /// bot ids whose older page is on its way, and why one did not come
     private(set) var loadingOlder: Set<String> = []
     private(set) var olderErrors: [String: String] = [:]
+    /// bot id → how many times its newest rows have come in place of what its chat held (on
+    /// opening it, after a reconnect); each time, the chat starts again at its newest message
+    private(set) var newestLoads: [String: Int] = [:]
     /// The server's board limits, read after connecting.
     private(set) var boardLimits: BoardLimits?
     /// What `runtime.describe` says the server can do (`session-transcript-v1`, …).
@@ -451,6 +454,7 @@ extension AppStore {
             let rows = snapshot["display_messages"]?.array ?? snapshot["messages"]?.array ?? []
             chats[botId] = rows.compactMap(chatItem(from:))
             olderPages[botId] = nil
+            newestLoads[botId, default: 0] += 1
         }
         setRunning(botId, snapshot["running"]?.bool ?? false)
         for prompt in snapshot["prompts"]?.array ?? [] {
@@ -478,6 +482,7 @@ extension AppStore {
         chats[botId] = rows + streamed
         olderPages[botId] = page["next_cursor"]?.string
         olderErrors[botId] = nil
+        newestLoads[botId, default: 0] += 1
     }
 
     /// The next older page, above what is shown. Called as the transcript's top comes into view.
@@ -495,8 +500,12 @@ extension AppStore {
             guard sessions[botId] == sessionId, olderPages[botId] == cursor else { return }
             let rows = transcriptItems(page)
             // `reset`: the server started over from the newest page (a rotated lineage)
-            chats[botId] = page["reset"]?.bool == true ? rows : rows + (chats[botId] ?? [])
+            let reset = page["reset"]?.bool == true
+            chats[botId] = reset ? rows : rows + (chats[botId] ?? [])
             olderPages[botId] = page["next_cursor"]?.string
+            if reset {
+                newestLoads[botId, default: 0] += 1
+            }
         } catch {
             olderErrors[botId] = error.localizedDescription
         }
