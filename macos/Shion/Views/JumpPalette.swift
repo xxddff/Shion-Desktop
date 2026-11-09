@@ -63,7 +63,8 @@ struct JumpPalette: View {
     @State private var listHeight: CGFloat = 0
 
     private static let width: CGFloat = 560
-    private static let listMax: CGFloat = 380
+    /// Tall enough for the seven pages and six assistants without scrolling.
+    private static let listMax: CGFloat = 480
 
     var body: some View {
         let hits = self.hits

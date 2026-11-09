@@ -6,6 +6,8 @@ import SwiftUI
 /// Its height follows what it holds, with the top edge kept where it is.
 final class QuickAskWindow: NSPanel {
     static let width: CGFloat = 620
+    /// The glass's corners (`.rect(cornerRadius:)` is continuous, like the clip below).
+    static let cornerRadius: CGFloat = 24
 
     convenience init(store: AppStore, quick: QuickAsk) {
         self.init(
@@ -33,7 +35,17 @@ final class QuickAskWindow: NSPanel {
         })
         // the window is sized by fit(_:), not by the hosting view's own constraints
         host.sizingOptions = []
-        contentView = host
+        // clear outside the glass: the glass's own shadow reaches into the corners, and anything
+        // drawn there makes the system outline and shadow the whole rectangle
+        let clip = NSView()
+        clip.wantsLayer = true
+        clip.layer?.cornerRadius = QuickAskWindow.cornerRadius
+        clip.layer?.cornerCurve = .continuous
+        clip.layer?.masksToBounds = true
+        contentView = clip
+        host.frame = clip.bounds
+        host.autoresizingMask = [.width, .height]
+        clip.addSubview(host)
     }
 
     override var canBecomeKey: Bool { true }
@@ -77,8 +89,11 @@ final class QuickAskWindow: NSPanel {
         next.origin.y = frame.maxY - height
         next.size.height = height
         setFrame(next, display: true)
-        // the shadow follows the glass's shape, which just changed
+        // the shadow follows the glass's shape, which just changed: again once it has been drawn
         invalidateShadow()
+        Task { [weak self] in
+            self?.invalidateShadow()
+        }
     }
 }
 
@@ -139,7 +154,7 @@ struct QuickAskView: View {
             }
         }
         .frame(width: QuickAskWindow.width)
-        .glassEffect(.regular, in: .rect(cornerRadius: 24))
+        .glassEffect(.regular, in: .rect(cornerRadius: QuickAskWindow.cornerRadius))
         .fixedSize(horizontal: false, vertical: true)
         .onGeometryChange(for: CGFloat.self) { proxy in
             proxy.size.height

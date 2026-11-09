@@ -193,19 +193,28 @@ final class ScreenshotTests: XCTestCase {
                 app.terminate()
                 continue
             }
-            // a tab is a toolbar button, a radio button or a plain one, depending on the system
-            let tabs = [settings.toolbarButtons["快捷键"], settings.toolbars.buttons["快捷键"], settings.buttons["快捷键"],
-                        settings.radioButtons["快捷键"]]
-            if let tab = tabs.first(where: { $0.exists }) {
-                tab.click()
-            } else {
-                settings.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "快捷键")).firstMatch.click()
-            }
+            selectTab("快捷键", in: settings)
             let recorder = settings.descendants(matching: .any)["quick-shortcut"]
             XCTAssertTrue(recorder.waitForExistence(timeout: 5), "no shortcut recorder on the 快捷键 tab")
             Thread.sleep(forTimeInterval: 0.8)
             keep(settings.screenshot(), name: "settings-shortcut-\(appearance)")
+            // Settings opens on the tab it was left on, next launch too: leave it on 服务器, where
+            // the sign-in tests that run next fill in the server
+            selectTab("服务器", in: settings)
+            XCTAssertTrue(settings.textFields["server-address"].waitForExistence(timeout: 5), "Settings not back on 服务器")
             app.terminate()
+        }
+    }
+
+    /// A Settings tab: a toolbar button, a radio button or a plain one, depending on the system.
+    @MainActor
+    private func selectTab(_ name: String, in settings: XCUIElement) {
+        let tabs = [settings.toolbarButtons[name], settings.toolbars.buttons[name], settings.buttons[name],
+                    settings.radioButtons[name]]
+        if let tab = tabs.first(where: { $0.exists }) {
+            tab.click()
+        } else {
+            settings.descendants(matching: .any).matching(NSPredicate(format: "label == %@", name)).firstMatch.click()
         }
     }
 
