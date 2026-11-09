@@ -212,7 +212,7 @@ struct BoardCard: View {
             Text(item.line)
                 .font(.t12)
                 .foregroundStyle(item.group == .waiting ? Palette.warm : Color.secondary)
-                .lineLimit(3)
+                .lineLimit(5)
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 6) {
                 Avatar(bot: bot, size: 16)
