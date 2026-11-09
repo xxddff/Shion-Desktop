@@ -84,6 +84,113 @@ final class ScreenshotTests: XCTestCase {
         app.terminate()
     }
 
+    /// The ⌥Space window with a sentence and 詩音's answer in it (demo), then empty from the 前往
+    /// menu, with what it says when no server is connected; ⌘K over the main window, a search,
+    /// ↓ and Return; ⌘1…⌘7. Whole screen for the window, which floats over the others.
+    @MainActor
+    func testQuickAskAndJump() throws {
+        continueAfterFailure = true
+        for appearance in ["light", "dark"] {
+            let demo = launch(route: "today", appearance: appearance, extra: ["-ShionQuickDemo", "YES"])
+            _ = demo.windows.firstMatch.waitForExistence(timeout: 20)
+            if demo.textFields["quick-field"].waitForExistence(timeout: 10) {
+                Thread.sleep(forTimeInterval: 1)
+                keep(XCUIScreen.main.screenshot(), name: "quick-\(appearance)")
+            } else {
+                keep(XCUIScreen.main.screenshot(), name: "quick-\(appearance)-missing")
+                XCTFail("No ⌥Space window (\(appearance))")
+            }
+            demo.terminate()
+
+            let app = launch(route: "today", appearance: appearance)
+            let window = app.windows.firstMatch
+            _ = window.waitForExistence(timeout: 20)
+            Thread.sleep(forTimeInterval: 1)
+
+            // ⌘K: the pages and the assistants; 「课」 finds 课程 and two todos; ↓ and Return open
+            // the first todo in 待办
+            app.typeKey("k", modifierFlags: .command)
+            let field = app.textFields["jump-field"]
+            if field.waitForExistence(timeout: 5) {
+                Thread.sleep(forTimeInterval: 0.5)
+                keep(window.screenshot(), name: "jump-\(appearance)")
+                field.typeText("课")
+                Thread.sleep(forTimeInterval: 0.5)
+                keep(window.screenshot(), name: "jump-search-\(appearance)")
+                XCTAssertTrue(app.descendants(matching: .any)["jump-bot-study"].exists, "「课」 did not find 课程")
+                XCTAssertTrue(app.descendants(matching: .any)["jump-todo-td2"].exists, "「课」 did not find the todo 机器学习 课前小测")
+                app.typeKey(.downArrow, modifierFlags: [])
+                app.typeKey(.return, modifierFlags: [])
+                XCTAssertTrue(waitForTitle(window, "待办"), "↓ Return did not open the todo in 待办: \(window.title)")
+                Thread.sleep(forTimeInterval: 0.8)
+                keep(window.screenshot(), name: "jump-todo-\(appearance)")
+                XCTAssertFalse(field.exists, "the palette stayed up")
+            } else {
+                keep(window.screenshot(), name: "jump-\(appearance)-missing")
+                XCTFail("No ⌘K palette (\(appearance))")
+            }
+
+            // ⌘1…⌘7 are the pages in sidebar order
+            for (key, title) in [("2", "等你确认"), ("6", "看板"), ("1", "今天")] {
+                app.typeKey(key, modifierFlags: .command)
+                XCTAssertTrue(waitForTitle(window, title), "⌘\(key) did not open \(title): \(window.title)")
+            }
+
+            // the ⌥Space window from the menu, empty; with no server, a sentence stays with the
+            // connection's state under it; Esc puts it away
+            app.menuBars.menuBarItems["前往"].click()
+            app.menuItems["跟詩音说…"].click()
+            let quick = app.textFields["quick-field"]
+            if quick.waitForExistence(timeout: 5) {
+                Thread.sleep(forTimeInterval: 0.8)
+                keep(XCUIScreen.main.screenshot(), name: "quick-empty-\(appearance)")
+                quick.typeText("明天几点出门？")
+                app.typeKey(.return, modifierFlags: [])
+                let state = app.descendants(matching: .any)["quick-status"]
+                XCTAssertTrue(state.waitForExistence(timeout: 5), "no state under a sentence sent without a server")
+                Thread.sleep(forTimeInterval: 0.5)
+                keep(XCUIScreen.main.screenshot(), name: "quick-offline-\(appearance)")
+                app.typeKey(.escape, modifierFlags: [])
+                let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: quick)
+                XCTAssertEqual(XCTWaiter().wait(for: [gone], timeout: 5), .completed, "Esc did not put the window away")
+            } else {
+                keep(XCUIScreen.main.screenshot(), name: "quick-empty-\(appearance)-missing")
+                XCTFail("前往 → 跟詩音说… did not bring up the window (\(appearance))")
+            }
+            app.terminate()
+        }
+    }
+
+    /// The Settings section with the global shortcut's recorder, scrolled into view.
+    @MainActor
+    func testShortcutSettings() throws {
+        continueAfterFailure = true
+        let app = launch(route: "today", appearance: "light")
+        _ = app.windows.firstMatch.waitForExistence(timeout: 20)
+        app.typeKey(",", modifierFlags: .command)
+        let settings = app.windows.matching(NSPredicate(format: "identifier CONTAINS[c] 'settings'")).firstMatch
+        guard settings.waitForExistence(timeout: 5) else {
+            keep(XCUIScreen.main.screenshot(), name: "settings-shortcut-screen")
+            return XCTFail("No Settings window")
+        }
+        let recorder = app.descendants(matching: .any)["quick-shortcut"]
+        // which sign of a wheel delta scrolls down is the runner's: try one, then the other
+        for delta: CGFloat in [-2000, 4000] where !(recorder.exists && recorder.isHittable) {
+            settings.hover()
+            settings.scroll(byDeltaX: 0, deltaY: delta)
+            Thread.sleep(forTimeInterval: 0.8)
+        }
+        keep(settings.screenshot(), name: "settings-shortcut-light")
+        XCTAssertTrue(recorder.exists, "no shortcut recorder in Settings")
+        app.terminate()
+    }
+
+    @MainActor
+    private func waitForTitle(_ window: XCUIElement, _ title: String, timeout: TimeInterval = 5) -> Bool {
+        let titled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "title CONTAINS %@", title), object: window)
+        return XCTWaiter().wait(for: [titled], timeout: timeout) == .completed
+    }
+
     @MainActor
     private func launch(route: String, appearance: String, extra: [String] = []) -> XCUIApplication {
         let app = XCUIApplication()
