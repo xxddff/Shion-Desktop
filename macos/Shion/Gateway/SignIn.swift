@@ -167,7 +167,7 @@ final class BrowserSignIn: NSObject, ASWebAuthenticationPresentationContextProvi
             URLQueryItem(name: "state", value: state),
         ]
         guard let url = components?.url else { throw GatewayError.notConfigured }
-        let code = try await waitForCode(url, headers: settings.accessHeaders)
+        let code = try await waitForCode(url)
         return try await SignInAPI.redeem(code: code, verifier: verifier, settings: settings)
     }
 
@@ -176,7 +176,7 @@ final class BrowserSignIn: NSObject, ASWebAuthenticationPresentationContextProvi
         finish(.failure(CancellationError()))
     }
 
-    private func waitForCode(_ url: URL, headers: [String: String]) async throws -> String {
+    private func waitForCode(_ url: URL) async throws -> String {
         try await withCheckedThrowingContinuation { continuation in
             waiting = continuation
             let session = ASWebAuthenticationSession(url: url, callback: .customScheme(Self.callbackScheme)) { @Sendable [weak self] _, error in
@@ -189,11 +189,11 @@ final class BrowserSignIn: NSObject, ASWebAuthenticationPresentationContextProvi
             // nothing to keep: the gateway sets no cookies on this path, and an ephemeral sheet
             // does not first ask whether Shion may use the site to sign in
             session.prefersEphemeralWebBrowserSession = true
-            // Cloudflare Access checks the service token on the first request and answers with
-            // its own cookie, which carries the rest of the login page through
-            if !headers.isEmpty {
-                session.additionalHeaderFields = headers
-            }
+            // No service token in the browser. Under Cloudflare's strict service token
+            // authentication (an organization setting, on for every new one) a request that
+            // carries it is judged by it alone and gets no cookie back, so the login page's own
+            // submit, which cannot carry it, would be stopped. Without it the browser signs in to
+            // Access like any browser, and Access's cookie carries the login page through.
             self.session = session
             // the gateway keeps a pending sign-in for ten minutes
             deadline = Task { [weak self] in

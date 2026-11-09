@@ -72,7 +72,7 @@ struct SettingsView: View {
     private var footer: String {
         let login = switch draft.login {
         case .browser:
-            "浏览器登录：在服务器的登录页输入用户名和密码，Shion 只拿到登录凭证，碰不到密码；凭证快到期时自动续上。"
+            "浏览器登录：登录窗口里先出现 Cloudflare Access 的话，照它的要求登录，再输入 Hermes 的用户名和密码。Shion 只拿到登录凭证，碰不到密码；凭证快到期时自动续上。"
         case .sessionToken:
             "会话令牌是服务器上的 HERMES_DASHBOARD_SESSION_TOKEN。"
         }

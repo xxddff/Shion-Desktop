@@ -100,8 +100,7 @@ struct ServerSettings: Equatable {
         }
     }
 
-    /// The same headers for the sign-in sheet's first request; Access answers it with its own
-    /// cookie, which carries the rest of the login page through.
+    /// Shion's own requests only: the sign-in window goes through Access as a browser does.
     var accessHeaders: [String: String] {
         var headers: [String: String] = [:]
         if !accessClientId.isEmpty {

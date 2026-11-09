@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 """A stand-in for what Shion talks to, for the browser sign-in test on CI (SignInTests).
 
-Plays Cloudflare Access in front: a request needs the service token headers, or the
-CF_Authorization cookie Access hands back for them. Behind it, the parts of a Hermes gateway's
-Webapp that Shion uses, shaped like hermes_cli/dashboard_auth and the Canonical Gateway Protocol:
+Plays Cloudflare Access in front, with strict service token authentication (an organization
+setting, on for every new organization): a request with the service token headers is judged by
+them alone, gets no cookie back, and a bad token is a 403, never a login redirect. A request
+without them is a browser: Access's CF_Authorization cookie lets it through; without one it is
+sent to the Access login page on another origin (localhost here, <team>.cloudflareaccess.com for
+real), which signs itself in and sends the browser back through /cdn-cgi/access/authorized.
+Behind it, the parts of a Hermes gateway's Webapp that Shion uses, shaped like
+hermes_cli/dashboard_auth and the Canonical Gateway Protocol:
 
   GET  /api/status             public; says a password provider and native_pkce are on
   GET  /auth/native/authorize  checks PKCE S256 and the loopback redirect, then 302 to /login
@@ -33,7 +38,8 @@ ACCESS_ID, ACCESS_SECRET = "ci-client", "ci-secret"
 USER, PASSWORD = "ci-user", "ci-pass"
 
 lock = threading.Lock()
-access_cookies = set()
+access_logins = {}  # one-time token from the Access login page -> where the browser was going
+access_cookies = set()  # CF_Authorization values of browsers signed in to Access
 pending = {}  # broker -> {challenge, redirect_uri, state}
 codes = {}  # code -> challenge
 access_tokens = {}  # token -> expiry
@@ -67,6 +73,11 @@ def valid_access(token):
     with lock:
         return access_tokens.get(token, 0) > time.time()
 
+
+ACCESS_PAGE = """<!doctype html><meta charset="utf-8"><title>Cloudflare Access (CI)</title>
+<body style="font:15px -apple-system,system-ui;margin:3rem">
+<h3>Cloudflare Access（CI 替身）</h3><p>假装你已经输好了邮箱验证码，正在回到原来的页面…</p>
+<script>setTimeout(function () { window.location.replace(%s); }, 600);</script>"""
 
 LOGIN_PAGE = """<!doctype html><meta charset="utf-8"><title>Hermes (CI)</title>
 <body style="font:15px -apple-system,system-ui;margin:3rem">
@@ -122,29 +133,63 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
         log(f"  -> {status}")
 
+    def origin(self, host):
+        return f"http://{host}:{self.server.server_address[1]}"
+
     def access(self):
-        """Cloudflare Access: the service token headers, or the cookie it gave for them."""
+        """Cloudflare Access with strict service token authentication (see the top of this file)."""
         self.extra_headers = []
-        has_headers = (self.headers.get("CF-Access-Client-Id") == ACCESS_ID
-                       and self.headers.get("CF-Access-Client-Secret") == ACCESS_SECRET)
+        client_id = self.headers.get("CF-Access-Client-Id")
+        secret = self.headers.get("CF-Access-Client-Secret")
         cookie = self.cookies().get("CF_Authorization", "")
         with lock:
             has_cookie = cookie in access_cookies
         url = urllib.parse.urlsplit(self.path)
-        log(f"{self.command} {url.path} access={'headers' if has_headers else 'cookie' if has_cookie else 'NONE'}"
+        via = ("headers" if client_id == ACCESS_ID and secret == ACCESS_SECRET else "BAD-TOKEN") \
+            if (client_id or secret) else ("cookie" if has_cookie else "NONE")
+        log(f"{self.command} {url.path} access={via}"
             f" bearer={'yes' if self.headers.get('Authorization') else 'no'}"
             f" query={sorted(urllib.parse.parse_qs(url.query))}")
-        if has_headers:
-            value = secrets.token_urlsafe(18)
-            with lock:
-                access_cookies.add(value)
-            self.extra_headers = [("Set-Cookie", f"CF_Authorization={value}; Path=/; HttpOnly; SameSite=Lax")]
+        if via == "headers":
             return True
+        if via == "BAD-TOKEN":
+            self.answer(403, "<h1>Forbidden</h1><p>Cloudflare Access (CI stand-in): bad service token.</p>",
+                        "text/html")
+            return False
         if has_cookie:
             return True
-        self.answer(403, "<h1>Forbidden</h1><p>Cloudflare Access (CI stand-in): no service token, no cookie.</p>",
-                    "text/html")
+        # a browser that has not signed in to Access: off to the login page, on another origin
+        login = self.origin("localhost") + "/cdn-cgi/access/login?" + urllib.parse.urlencode(
+            {"redirect_url": self.origin("127.0.0.1") + self.path})
+        self.answer(302, b"", "text/plain", [("Location", login)])
         return False
+
+    def access_login(self, query):
+        """The Access login page (another origin): signs itself in, then back via /authorized."""
+        self.extra_headers = []
+        target = query.get("redirect_url", "")
+        log(f"GET [Access login on localhost] for {urllib.parse.urlsplit(target).path}")
+        if not target.startswith(self.origin("127.0.0.1") + "/"):
+            return self.answer(400, "<p>bad redirect_url</p>", "text/html")
+        token = secrets.token_urlsafe(18)
+        with lock:
+            access_logins[token] = target
+        back = self.origin("127.0.0.1") + "/cdn-cgi/access/authorized?" + urllib.parse.urlencode({"token": token})
+        self.answer(200, ACCESS_PAGE % json.dumps(back), "text/html")
+
+    def access_authorized(self, query):
+        """Access's callback on the application's origin: sets CF_Authorization, back to the page."""
+        self.extra_headers = []
+        with lock:
+            target = access_logins.pop(query.get("token", ""), None)
+        log(f"GET /cdn-cgi/access/authorized {'ok' if target else 'UNKNOWN TOKEN'}")
+        if target is None:
+            return self.answer(403, "<p>Access login expired</p>", "text/html")
+        value = secrets.token_urlsafe(18)
+        with lock:
+            access_cookies.add(value)
+        self.answer(302, b"", "text/plain", [
+            ("Set-Cookie", f"CF_Authorization={value}; Path=/; HttpOnly; SameSite=Lax"), ("Location", target)])
 
     def body(self):
         length = int(self.headers.get("Content-Length") or 0)
@@ -156,10 +201,14 @@ class Handler(BaseHTTPRequestHandler):
     # ---- routes -------------------------------------------------------------------------
 
     def do_GET(self):
-        if not self.access():
-            return
         url = urllib.parse.urlsplit(self.path)
         query = dict(urllib.parse.parse_qsl(url.query))
+        if self.headers.get("Host", "").split(":")[0] == "localhost":
+            return self.access_login(query)
+        if url.path == "/cdn-cgi/access/authorized":
+            return self.access_authorized(query)
+        if not self.access():
+            return
         if url.path == "/api/status":
             return self.answer(200, {"auth_required": True, "auth_providers": ["basic"],
                                      "auth_flows": ["cookie", "native_pkce"]})
