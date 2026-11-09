@@ -109,8 +109,8 @@ private struct QuickAskRoot: View {
     }
 }
 
-/// The field, then 总秘书's answer as it comes in: the same rows as her chat (folded tool calls,
-/// cards, Markdown), and what she asks you on the way, answered here. Sentences waiting for a
+/// The field, then 总秘书's answer as it comes in: the same rows as the chat (folded tool calls,
+/// cards, Markdown), and what 总秘书 asks you on the way, answered here. Sentences waiting for a
 /// server come first. Glass, since it floats over everything.
 struct QuickAskView: View {
     @Environment(AppStore.self) private var store
@@ -164,7 +164,7 @@ struct QuickAskView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
-    /// The field; while 总秘书 waits on words from you, Return answers her.
+    /// The field; while 总秘书 waits on words from you, Return answers.
     private func bar(_ draft: Binding<String>, answering: Bool) -> some View {
         HStack(spacing: 12) {
             Mark(size: 26)

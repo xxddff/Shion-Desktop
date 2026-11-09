@@ -4,7 +4,7 @@ import Observation
 
 /// The global shortcut (⌥Space unless changed in Settings) and the small window it brings up over
 /// whatever app is in front (QuickAskPanel.swift): one sentence to 总秘书, the reply streaming in
-/// under it. The sentence goes into her Bot Chat like any other, so the whole conversation is a
+/// under it. The sentence goes into 总秘书's Bot Chat like any other, so the whole conversation is a
 /// click away; sent while no server is connected, it waits and goes out once one is.
 ///
 /// The shortcut is a preference, not a secret, so it lives in the defaults; screenshot and test
@@ -173,7 +173,7 @@ final class QuickAsk {
         // a panel that does not activate Shion: the app in front stays in front
         window.makeKeyAndOrderFront(nil)
         window.focusField()
-        // 总秘书's Bot Chat is attached by the time the sentence is typed; what still waits (her
+        // 总秘书's Bot Chat is attached by the time the sentence is typed; what still waits (the
         // chat would not open last time) goes now
         if Self.connected(store) {
             Task {
@@ -193,7 +193,7 @@ final class QuickAsk {
         }
     }
 
-    /// The window is up and shows what 总秘书 says to it: her reply and her asks need no
+    /// The window is up and shows what 总秘书 says to it: the reply and the asks need no
     /// notification then.
     func showsAnswer(from botId: String) -> Bool {
         shown && asked != nil && botId == store?.chiefId
@@ -261,10 +261,10 @@ final class QuickAsk {
         store.live && store.gateway.phase == .online
     }
 
-    /// Into 总秘书's Bot Chat as one message, a line each: a second message while she answers the
-    /// first would cut her answer short (Hermes's `display.busy_input_mode` is `interrupt` unless
-    /// the server says otherwise). The window shows the exchange from it. Should her chat not
-    /// open, they wait again; the reason shows under the field.
+    /// Into 总秘书's Bot Chat as one message, a line each: a second message during the answer to
+    /// the first would cut that answer short (Hermes's `display.busy_input_mode` is `interrupt`
+    /// unless the server says otherwise). The window shows the exchange from it. Should the chat
+    /// not open, they wait again; the reason shows under the field.
     private func deliver(_ sentences: [QuickAskWaiting], to store: AppStore) {
         let text = sentences.map(\.text).joined(separator: "\n")
         guard !text.isEmpty else { return }

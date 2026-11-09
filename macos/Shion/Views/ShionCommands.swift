@@ -42,7 +42,7 @@ struct ShionCommands: Commands {
     }
 }
 
-/// 跟总秘书说…, with her name and the global shortcut as they are now: a view of its own, so the
+/// 跟总秘书说…, with 总秘书's name and the global shortcut as they are now: a view of its own, so the
 /// menu follows them when they change.
 private struct QuickAskMenuItem: View {
     let store: AppStore
