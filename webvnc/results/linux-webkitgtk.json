@@ -27,7 +27,7 @@
     "name": "webkitgtk: relay, holder — clipboard + Ctrl+V reaches the remote",
     "ok": true,
     "detail": {
-      "firstFrameMs": 72,
+      "firstFrameMs": 85,
       "typed": {
         "ok": true,
         "bytes": 25
@@ -40,41 +40,45 @@
     "name": "webkitgtk: HostChannel, holder — no socket in the page",
     "ok": true,
     "detail": {
-      "firstFrameMs": 104,
+      "firstFrameMs": 110,
       "typed": {
         "ok": true,
         "bytes": 5
       },
       "channel": {
-        "batches": 16,
-        "bytes_down": 49854,
-        "bytes_up": 419,
+        "batches": 17,
+        "bytes_down": 49990,
+        "bytes_up": 439,
         "close": 1000
       }
     }
   },
   {
-    "name": "webkitgtk: decode a recorded Chrome scroll (161 updates, 20.4 MB) through the relay",
+    "name": "webkitgtk: decode a recorded Chrome scroll (87 updates, 17.8 MB) through the relay",
     "ok": true,
     "detail": {
-      "updates": 161,
-      "seconds": 4.24,
-      "cpu": 12.41,
-      "bytesIn": 20386701
+      "updates": 87,
+      "seconds": 3.33,
+      "cpu": 9.3,
+      "webProcessCPU": 6.78,
+      "hostCPU": 2.43,
+      "bytesIn": 17751893
     }
   },
   {
-    "name": "webkitgtk: decode a recorded Chrome scroll (161 updates, 20.4 MB) through the channel",
+    "name": "webkitgtk: decode a recorded Chrome scroll (87 updates, 17.8 MB) through the channel",
     "ok": true,
     "detail": {
-      "updates": 161,
-      "seconds": 4.28,
-      "cpu": 12.59,
-      "bytesIn": 20386701,
+      "updates": 87,
+      "seconds": 3.15,
+      "cpu": 8.6,
+      "webProcessCPU": 6.14,
+      "hostCPU": 2.44,
+      "bytesIn": 17751893,
       "channel": {
-        "batches": 4,
-        "bytes_down": 20386701,
-        "bytes_up": 3390,
+        "batches": 2,
+        "bytes_down": 17751893,
+        "bytes_up": 1910,
         "close": 1000
       }
     }

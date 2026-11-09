@@ -5,6 +5,11 @@ import Network
 /// (Network.framework, the same setup as rfb/'s NWWebSocketTransport). Used by the relay
 /// (option A) and the in-app channel (option C); the page never sees this connection, its URL
 /// (with the ticket) or the headers. Events arrive on `queue`, in order.
+///
+/// Known issue (macOS 27, CI): a close the server starts (Hermes' 4000) never comes through, and the
+/// last message before it is lost; the connection goes to ENOTCONN instead. rfb/ saw the same and
+/// moved the App to its URLSessionWebSocketTransport; the App would use that here too (README,
+/// finding 11).
 final class Upstream: @unchecked Sendable {
     enum Event {
         case open

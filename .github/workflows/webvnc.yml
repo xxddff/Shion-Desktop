@@ -3,7 +3,7 @@ name: Web viewer (noVNC)
 # The exploration in webvnc/: noVNC 1.7.0 (as Hermes' official desktop app uses it) in a web view.
 # Linux runs on every change to webvnc/: the page in headless Chrome against a real Xvnc behind
 # Hermes' own RFB filter (rfb/testbed), through the loopback relay and through the in-app channel;
-# it also records a scroll session for the macOS job. The macOS job uses the
+# it also records a scroll session for the macOS job and times decoding it in Chrome. The macOS job uses the
 # limited macOS minutes: only on a manual run with "macos" ticked, or when the commit message
 # contains [macos]. It builds the shell (WKWebView + relay + channel) and runs its self-test against
 # recorded sessions (no Xvnc on macOS).
@@ -76,6 +76,9 @@ jobs:
       - name: Record a scroll session (for the macOS job)
         if: success() || failure()
         run: node linux/record-sample.mjs scroll samples
+
+      - name: Decode that recording in Chrome (the macOS job times the same one)
+        run: node linux/decode.mjs samples/novnc-scroll.messages.z --engines chrome --out out/decode-chrome.json
 
       # WebKitGTK (linux/webkit.mjs) is not run here: on the runner its web-process sandbox
       # (bubblewrap) cannot set up its network namespace, and the web process never starts. It

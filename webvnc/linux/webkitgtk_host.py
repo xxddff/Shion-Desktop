@@ -10,7 +10,7 @@ One run, one JSON line on stdout:
     webkitgtk_host.py --channel                       through this process (option C); upstream from
                                                       WEBVNC_UPSTREAM, Access headers from WEBVNC_HEADER_1..9
       [--hold] [--seconds N] [--type TEXT] [--keys TEXT] [--insecure-scheme]
-      [--until-updates N]                             measure: time until N updates are decoded
+      [--until-updates N]                             measure: from connect until N updates are decoded
 
 ``--keys`` types with real key events (xdotool on this process's own X display) after clicking the
 picture; ``--type`` uses the page's clipboard + Ctrl+V path. Needs python3-gi, gir1.2-webkit-6.0 and,
@@ -66,28 +66,35 @@ messages: list[dict] = []
 started = time.monotonic()
 
 
-def tree_cpu() -> float:
-    """CPU seconds of this process and its descendants (WebKit's web and network processes)."""
-    parents = {}
+def tree_cpu() -> dict:
+    """CPU seconds of this process and its descendants: all of them, the web process alone (what
+    the macOS shell counts as WebContent), and this (UI) process alone."""
+    procs = {}
     for entry in os.listdir("/proc"):
         if entry.isdigit():
             try:
                 with open(f"/proc/{entry}/stat") as f:
-                    fields = f.read().rsplit(")", 1)[1].split()
-                parents[int(entry)] = (int(fields[1]), (int(fields[11]) + int(fields[12])) / os.sysconf("SC_CLK_TCK"))
+                    head, rest = f.read().rsplit(")", 1)
+                fields = rest.split()
+                procs[int(entry)] = (int(fields[1]), (int(fields[11]) + int(fields[12])) / os.sysconf("SC_CLK_TCK"),
+                                     head.split("(", 1)[1])
             except OSError:
                 pass
-    mine, total = {os.getpid()}, 0.0
+    mine = {os.getpid()}
     changed = True
     while changed:
         changed = False
-        for pid, (ppid, _) in parents.items():
+        for pid, (ppid, _, _) in procs.items():
             if ppid in mine and pid not in mine:
                 mine.add(pid)
                 changed = True
+    out = {"total": 0.0, "web": 0.0, "host": procs.get(os.getpid(), (0, 0.0, ""))[1]}
     for pid in mine:
-        total += parents.get(pid, (0, 0.0))[1]
-    return total
+        _, cpu, comm = procs.get(pid, (0, 0.0, ""))
+        out["total"] += cpu
+        if comm.startswith("WebKitWebProces"):   # comm is cut at 15 characters
+            out["web"] += cpu
+    return out
 
 
 def emit_and_quit(code=0):
@@ -261,15 +268,16 @@ def on_activate(app: Gtk.Application) -> None:
                 options["transport"] = "channel"
             else:
                 options.update(transport="relay", url=args.relay, protocols=[args.protocol])
+            if args.until_updates:
+                # timed from connect, as the macOS shell and decode.mjs do
+                state["t0"], state["cpu0"], state["last"], state["since"] = time.monotonic(), tree_cpu(), -1, time.monotonic()
+                GLib.timeout_add(50, poll_updates)
             # the channel opens only once the page has made its HostChannel (connect() returned)
             call(f"return window.shionVNC.connect({json.dumps(options)})",
                  lambda _: channel.start() if channel else None)
         elif kind == "firstFrame":
             result["firstFrameMs"] = m["ms"]
-            if args.until_updates:
-                state["t0"], state["cpu0"], state["last"], state["since"] = time.monotonic(), tree_cpu(), -1, time.monotonic()
-                GLib.timeout_add(50, poll_updates)
-            else:
+            if not args.until_updates:
                 GLib.timeout_add(int(args.seconds * 1000), finish)
             if args.type_text:
                 GLib.timeout_add(500, lambda: (call(f"return window.shionVNC.typeText({json.dumps(args.type_text)})",
@@ -300,8 +308,12 @@ def on_activate(app: Gtk.Application) -> None:
             if n != state["last"]:
                 state["last"], state["since"] = n, now
             if n >= args.until_updates or now - state["since"] > 3:
+                cpu = tree_cpu()
                 result["decode"] = {"updates": n, "seconds": round(now - state["t0"], 2),
-                                    "cpu": round(tree_cpu() - state["cpu0"], 2), "bytesIn": (report or {}).get("bytesIn")}
+                                    "cpu": round(cpu["total"] - state["cpu0"]["total"], 2),
+                                    "webProcessCPU": round(cpu["web"] - state["cpu0"]["web"], 2),
+                                    "hostCPU": round(cpu["host"] - state["cpu0"]["host"], 2),
+                                    "bytesIn": (report or {}).get("bytesIn")}
                 finish()
             else:
                 GLib.timeout_add(50, poll_updates)
