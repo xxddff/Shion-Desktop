@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from . import timeutil
 from .errors import ShionError
 from .store import SCHEMA_VERSION, USER_SOURCE
 
@@ -40,7 +41,8 @@ def methods(plugin: "ShionPlugin") -> dict:
         _take(params, set())
         settings = store.settings()
         return {"plugin_version": PLUGIN_VERSION, "schema_version": SCHEMA_VERSION, "profile": plugin.profile(),
-                "timezone": settings["timezone"], "today": store.today(), "revision": store.revision()}
+                "timezone": settings["timezone"], "today": store.today(), "revision": store.revision(),
+                "tz_database": timeutil.tz_database()}
 
     def sync_state(params):
         _take(params, set())

@@ -20,20 +20,31 @@ hermes-plugin/
 
 ## 安装到服务器
 
-**1. 放进每个 profile 的插件目录。** Hermes 的用户插件按 profile 找：`<profile 目录>/plugins/<名字>/plugin.yaml`（`hermes_cli/plugins_discovery.py`）。默认 profile 是 `~/.hermes`，其他的在 `~/.hermes/profiles/<名字>`。詩音和五个助手都要装：
+> Hermes 跑在容器里时（用户的服务器就是），下面的 `hermes …` 命令都在容器里执行，比如 `docker exec -it <容器名> hermes -p shion plugins list`；插件目录和数据目录要在挂载的卷里，容器重建后才还在。
+
+**安装和启用都是按 profile 的。** 这是 Hermes 本身的设计，不是这个插件特有的：
+
+- 插件目录是 `<profile 目录>/plugins/`（`hermes_cli/plugins_cmd.py` 的 `_plugins_dir`、`plugins_discovery.py`），默认 profile 是 `~/.hermes`，其他的在 `~/.hermes/profiles/<名字>`；
+- 每个 profile 有自己的插件管理器（`hermes_cli/plugins.py` 的 `get_plugin_manager`，按 profile 目录缓存），`plugins.enabled` 写在各自的 `config.yaml` 里；
+- 官方 Desktop 的「插件」页有 profile 选择器，插件的 Agent 部分跟着它走：装、开关都是对选中的那个 profile（`apps/desktop/src/app/capabilities/plugins/plugins-tab.tsx`）。网页 dashboard 的安装（`/api/dashboard/agent-plugins/install`）只装进 dashboard 自己那个 profile；
+- 没有「装一次、所有 profile 共用」的办法。pip 的 entry point 插件虽然在共用的 venv 里，但 Hermes 的文档说受 PM 管理的安装不要这样装（PM 换一代环境时它会消失）；
+- 例外：用 `hermes profile create --clone` 之类从一个 profile 复制出新 profile 时，`plugins/` 和 `plugins.enabled` 会跟着复制过去（`hermes_cli/profiles.py` 的 `_clone_plugins`）。
+
+所以詩音和五个助手的 profile 都要装、都要启用。助手要用插件的工具，詩音的 profile 还要处理 Shion 的 RPC。
+
+**1. 每个 profile 装一次（顺便启用）。** 仓库是私有的也能装：Hermes 先匿名 clone，被拒后依次试 `GITHUB_TOKEN` / `GH_TOKEN`（profile 的 `.env` 里的）、`gh auth token`、git 配好的凭证助手，凭证只放在这次 clone 的请求头里，不写进 URL 也不留在 `.git/config`（`hermes_cli/git_credentials.py`）。所以先在服务器上 `gh auth login`，或者给每个 profile 的 `.env` 写一个只读这个仓库的 fine-grained token，然后：
 
 ```bash
-# 在服务器上，仓库已经 clone 到 ~/Shion-Desktop
 for p in shion study commute mail news journal; do
-  mkdir -p ~/.hermes/profiles/$p/plugins
-  rm -rf ~/.hermes/profiles/$p/plugins/shion
-  cp -r ~/Shion-Desktop/hermes-plugin/shion ~/.hermes/profiles/$p/plugins/shion
+  hermes -p $p plugins install xxddff/Shion-Desktop/hermes-plugin/shion --enable
 done
 ```
 
-Shion 连接所在的那个 profile（通常是默认 profile `~/.hermes`）不用装，只要 Mac 端按下面「调用方式」给每次调用带上 `profile`。目录名必须是 `shion`。也可以用 `hermes -p <profile> plugins install <git 地址>#hermes-plugin/shion`，仓库是私有的话要服务器能 clone。
+`owner/repo/子目录` 是 Hermes 认的写法，装出来的目录名取子目录的最后一段，正好是 `shion`。不用 git 的话，也可以把 `hermes-plugin/shion` 整个复制到每个 profile 的 `plugins/shion/`，再做第 2 步。
 
-**2. 每个 profile 都启用。** 插件默认不加载，要进 `plugins.enabled`：
+Shion 连接所在的那个 profile（通常是默认 profile `~/.hermes`）不用装，只要 Mac 端按下面「调用方式」给每次调用带上 `profile`。
+
+**2. 每个 profile 都启用。** 第 1 步带了 `--enable` 就已经启用了。手动复制的，或者装的时候没启用的：
 
 ```bash
 for p in shion study commute mail news journal; do hermes -p $p plugins enable shion; done
@@ -69,7 +80,7 @@ hermes -p shion plugins doctor shion  # 用 Hermes 自己的发现和注册流�
 
 再从 Shion（或任何 `/api/ws` 客户端）调 `plugin.shion.info`，带 `profile: "shion"`，应该返回版本和今天的日期。
 
-**更新**：重复第 1 步（覆盖目录），再重启 gateway。数据不在插件目录里，覆盖不会丢。
+**更新**：`for p in shion study commute mail news journal; do hermes -p $p plugins update shion; done`（手动复制的就重新复制），再重启 gateway。数据不在插件目录里，更新不会丢。
 
 ## 数据存在哪
 
@@ -238,10 +249,10 @@ hermes -p shion plugins doctor shion  # 用 Hermes 自己的发现和注册流�
 
 ```json
 {"plugin_version": "0.1.0", "schema_version": 1, "profile": "shion", "timezone": "Asia/Tokyo",
- "today": "2026-11-09", "revision": 42}
+ "today": "2026-11-09", "revision": 42, "tz_database": true}
 ```
 
-`profile` 是处理这次调用的 profile，可以用来确认 `profile` 参数生效了。
+`profile` 是处理这次调用的 profile，可以用来确认 `profile` 参数生效了。`tz_database` 是服务器上有没有时区数据库：Hermes 的镜像是 Debian 13，用 `--no-install-recommends` 装包，不一定带 tzdata。没有的话，没有夏令时的时区（`Asia/Tokyo`、`Asia/Shanghai` 等几个，以及 `UTC`）照样按固定的时差算，结果一样；其他时区会被拒，要在容器里装上 tzdata。
 
 ### `sync.state`
 
@@ -491,7 +502,7 @@ Hermes 现在缺的、或者和需求有出入的地方。没有改 Hermes。
 3. **`plugins.isolation: host` 下没有推送。** 那时插件跑在单独的插件宿主进程里，`broadcast_plugin_event` 在那个进程里找不到客户端，Hermes 只转发 `emit_to_session`。要保持默认的 `in_process`。
 4. **插件 RPC 拿不到会话的路由键**，只有会话 id，而 `inject_message` 要路由键。现在靠 `pre_llm_call` 钩子记下来（见 `focus.report`），所以詩音的 Bot Chat 要先有过一轮对话；会话被压缩换了 id 后，第一次报告会退回到「最近一轮本地会话」。
 5. **詩音的 Bot Chat 不在活动会话里时叫不醒。** Hermes 只往插件自己 profile 里活动的本地会话注入（`_plugin_local_session`）。gateway 重启后、Shion 还没打开她的对话前，`focus.report` 会是 `inject_refused`；结论照样存着。
-6. **插件要在每个 profile 里分别装、分别启用**，设置也只能各自写进各自的 `config.yaml`，所以设置放在共用的数据库里，不用 Hermes 的 `config_schema`（Desktop 的插件设置页因此看不到这几项）。
+6. **插件要在每个 profile 里分别装、分别启用**（Hermes 没有跨 profile 的安装），设置也只能各自写进各自的 `config.yaml`，所以设置放在共用的数据库里，不用 Hermes 的 `config_schema`（Desktop 的插件设置页因此看不到这几项）。
 7. **调用者不分人。** Hermes 对插件方法只检查连接有 `session:control`，通过认证的客户端都能调所有方法（Hermes `SECURITY.md` §2.6）。这里只暴露插件自己的数据。
 8. 同一个 gateway 里 Mac 要是经两个 profile 都调过 `sync.state`，只会起一个推送线程（按线程名判断）；但起推送的那个 profile 的插件被卸载时线程跟着停，要等下一次 `sync.state` 才重起。
 
