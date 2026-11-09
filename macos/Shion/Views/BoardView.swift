@@ -31,8 +31,6 @@ struct BoardView: View {
             .inspector(isPresented: $showInspector) {
                 if let id = selection, let item = items.first(where: { $0.id == id }) {
                     BoardInspector(item: item) { open($0) }
-                } else {
-                    Color.clear.inspectorColumnWidth(min: 260, ideal: 300, max: 400)
                 }
             }
             .sheet(isPresented: $composing) {
@@ -80,8 +78,11 @@ struct BoardView: View {
                     BoardColumn(group: group, items: items.filter { $0.group == group }, selection: selection) { open($0) }
                 }
             }
-            .padding(.horizontal, 18)
+            .padding(.horizontal, 16)
             .padding(.top, 14)
+            // the columns' ideal width would otherwise be their longest title on one line, and the
+            // split view sizes the window from it
+            .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
     }
 
@@ -166,7 +167,7 @@ struct BoardColumn: View {
             .scrollIndicators(.automatic)
         }
         .padding(6)
-        .frame(minWidth: 150, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .frame(minWidth: 110, idealWidth: 150, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(
             targeted ? Palette.accent.opacity(0.08) : Color.clear,
             in: RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -310,7 +311,7 @@ struct BoardInspector: View {
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .inspectorColumnWidth(min: 260, ideal: 300, max: 400)
+        .inspectorColumnWidth(min: 240, ideal: 280, max: 360)
         .accessibilityIdentifier("card-inspector")
     }
 

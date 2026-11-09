@@ -67,7 +67,7 @@ final class BoardTests: XCTestCase {
         XCTAssertTrue(card.waitForExistence(timeout: 5) && done.exists)
         card.click(forDuration: 0.6, thenDragTo: done)
         var moved = waitUntil(timeout: 8) { done.frame.contains(CGPoint(x: card.frame.midX, y: card.frame.midY)) }
-        print("drag: \(moved ? "moved" : "did not move") card at \(card.frame), done column \(done.frame)")
+        var how = moved ? "drag" : "none"
         if !moved {
             // the context menu does the same move
             card.rightClick()
@@ -75,12 +75,12 @@ final class BoardTests: XCTestCase {
             if item.waitForExistence(timeout: 3) {
                 item.click()
                 moved = waitUntil(timeout: 8) { done.frame.contains(CGPoint(x: card.frame.midX, y: card.frame.midY)) }
-                print("menu: \(moved ? "moved" : "did not move")")
+                how = moved ? "menu" : "none"
             }
         }
         let promoted = waitUntil(timeout: 10) { self.findText("等「下载第8回课件（CI）」做完", in: app) == nil }
         Thread.sleep(forTimeInterval: 0.5)
-        keep(window.screenshot(), "board-4-moved")
+        keep(window.screenshot(), "board-4-moved-by-\(how)")
         XCTAssertTrue(moved, "the card did not move to 完成")
         XCTAssertTrue(promoted, "the child card still waits on its parent")
 
