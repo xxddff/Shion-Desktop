@@ -151,6 +151,7 @@ final class AppStore {
 extension AppStore {
     /// Saves the settings and connects; on success the assistants come from the server.
     func connect() async {
+        serverSettings = serverSettings.trimmed
         serverSettings.save()
         await gateway.connect(serverSettings)
         guard gateway.phase == .online else { return }

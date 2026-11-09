@@ -7,7 +7,7 @@ nonisolated enum GatewayError: LocalizedError {
     case timeout(String)
     case accessDenied
     case tokenLoginOff([String])
-    case badToken
+    case badToken(String)
     case upgradeRefused(Int)
     case http(Int)
     case closed(Int, String)
@@ -22,8 +22,8 @@ nonisolated enum GatewayError: LocalizedError {
         case .tokenLoginOff(let providers):
             let now = providers.isEmpty ? "现在一个登录方式都没有" : "现在只有 \(providers.joined(separator: "、"))"
             return "服务器没开会话令牌登录：/api/status 的 auth_providers 里没有 session-token（\(now)）。在运行 hermes gateway 的环境里设好 HERMES_DASHBOARD_SESSION_TOKEN，确认 dashboard.session_token_auth.enabled 不是 false，再重启 gateway。"
-        case .badToken:
-            return "会话令牌和服务器上的 HERMES_DASHBOARD_SESSION_TOKEN 对不上（/api/auth/me 返回 401）。服务器换过令牌的话，这里要填新的。"
+        case .badToken(let hint):
+            return "会话令牌和服务器上的 HERMES_DASHBOARD_SESSION_TOKEN 对不上（/api/auth/me 返回 401）。这里填的是 \(hint)，和服务器上 gateway 进程实际用的值比一比；服务器换过令牌的话，这里要填新的。"
         case .upgradeRefused(let status):
             switch status {
             case 404: return "这个地址下面没有 /api/ws（HTTP 404）：要填 hermes gateway 的 Webapp 地址。"
@@ -147,10 +147,11 @@ final class Gateway {
         var me = URLRequest(url: meURL)
         me.timeoutInterval = 15
         settings.applyAccessHeaders(to: &me)
-        me.setValue("Bearer \(settings.token)", forHTTPHeaderField: "Authorization")
+        // the header Hermes Desktop's "Session token" connection uses on REST
+        me.setValue(settings.token, forHTTPHeaderField: "X-Hermes-Session-Token")
         let (_, meResponse) = try await URLSession.shared.data(for: me)
         if let http = meResponse as? HTTPURLResponse, http.statusCode == 401 {
-            throw GatewayError.badToken
+            throw GatewayError.badToken(settings.tokenHint)
         }
     }
 

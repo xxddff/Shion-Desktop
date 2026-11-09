@@ -360,6 +360,15 @@ open Shion.xcodeproj
   ```
 
   第一条要有 `"session-token"`，第二条要是 `200`。
+- **令牌对不上时，找 gateway 实际用的值**：变量在启动时读一次，以启动 gateway 的那个环境为准，不是你后来打开的 shell。启动时注入的值（systemd、启动脚本）优先，`~/.hermes/.env` 里的同名一行不会覆盖它；值是 `file:<路径>` 的话，令牌是那个文件的内容。值原样使用，引号和空格也算在里面。在服务器上看：
+
+  ```bash
+  pgrep -af "hermes.*gateway"
+  sudo tr '\0' '\n' < /proc/<上面的 PID>/environ | grep HERMES_DASHBOARD_SESSION_TOKEN
+  grep HERMES_DASHBOARD_SESSION_TOKEN ~/.hermes/.env
+  ```
+
+  设置看 `hermes config show`（或 `~/.hermes/config.yaml` 里的 `dashboard:` 一节）。改了令牌要重启 gateway。
 - **开会话令牌登录**：在运行 `hermes gateway` 的环境里设 `HERMES_DASHBOARD_SESSION_TOKEN`（可以写进 `~/.hermes/.env`；也可以写成 `file:<路径>` 指向一个只放令牌的文件），确认 `dashboard.session_token_auth.enabled` 没设成 `false`，再重启 gateway。令牌用 `python3 -c "import secrets; print(secrets.token_urlsafe(32))"` 生成，至少 32 个字符。它能完全操作这台 Hermes，当密码保管；换了令牌，Shion 里也要换。
 - **现在能用的**：助手列表（每个 profile 一个助手）、每个助手的 Bot Chat（历史、发消息、流式回复、工具调用）、批准和提问（在「等你确认」里回答）。今天、待办、日程、日报、看板和云桌面还是示例数据，要等 `shion` 插件和看板接口接上。
 - **连接方式**照官方桌面端连远端的做法：`wss://<地址>/api/ws?token=<会话令牌>`，不带子协议，每个请求带 Cloudflare Access 的两个头；连上后等 `gateway.ready`、发 `client.capabilities`，按服务器要求每 15 秒 `gateway.ping`；连上过又断了会自动重连，并重新打开刚才的对话。

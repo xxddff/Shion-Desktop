@@ -25,6 +25,23 @@ struct ServerSettings: Equatable {
         Keychain.write(accessClientSecret, for: "cf-access-client-secret")
     }
 
+    /// Pasted values often carry a trailing newline or space; Hermes compares the token exactly.
+    var trimmed: ServerSettings {
+        ServerSettings(
+            address: address.trimmingCharacters(in: .whitespacesAndNewlines),
+            token: token.trimmingCharacters(in: .whitespacesAndNewlines),
+            accessClientId: accessClientId.trimmingCharacters(in: .whitespacesAndNewlines),
+            accessClientSecret: accessClientSecret.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+    }
+
+    /// Enough of the token to compare with the server's without showing it: the first and last
+    /// four characters and the length.
+    var tokenHint: String {
+        guard token.count > 8 else { return "\(token.count) 个字符" }
+        return "\(token.prefix(4))…\(token.suffix(4))，\(token.count) 个字符"
+    }
+
     var isConfigured: Bool { base != nil }
 
     /// `https://host[/prefix]`, without a trailing slash; a bare host means https.
