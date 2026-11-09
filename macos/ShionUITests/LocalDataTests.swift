@@ -91,27 +91,29 @@ final class LocalDataTests: XCTestCase {
         XCTAssertTrue(screenTime, "the uploaded usage is not in today's screen time")
         XCTAssertFalse(waitForText("1Password", in: app, timeout: 1), "an excluded app reached the server")
 
-        // Settings: what 詩音 was told last, the upload, and the calendars
-        app.typeKey(",", modifierFlags: .command)
-        XCTAssertTrue(settings.waitForExistence(timeout: 5), "no Settings window")
-        let sent = element("focus-last-sent", in: settings)
-        if reveal(sent, in: settings) {
-            keep(settings.screenshot(), "local-7-settings-focus")
+        // Settings → 这台 Mac: what 詩音 was told last, the upload, and the calendars
+        guard let local = openLocalSettings(app, waitingFor: "focus-check") else {
+            keep(XCUIScreen.main.screenshot(), "local-7-no-settings")
+            return XCTFail("no 这台 Mac tab in Settings")
+        }
+        let sent = element("focus-last-sent", in: local)
+        if reveal(sent, in: local) {
+            keep(local.screenshot(), "local-7-settings-focus")
             XCTAssertTrue(says(sent, "回到「CI：实验报告 第3章」上了"), "last report: \(sent.label) / \(String(describing: sent.value))")
         } else {
-            keep(settings.screenshot(), "local-7-settings-focus")
+            keep(local.screenshot(), "local-7-settings-focus")
             XCTFail("no last report in Settings")
         }
-        let upload = element("usage-last-upload", in: settings)
-        if reveal(upload, in: settings) {
+        let upload = element("usage-last-upload", in: local)
+        if reveal(upload, in: local) {
             XCTAssertFalse(says(upload, "还没发过") || says(upload, "没发出去"), "upload: \(upload.label) / \(String(describing: upload.value))")
         }
         // untick 专注: its focus block leaves 今天
-        let focusCalendar = element("calendar-fx-focus", in: settings)
-        if reveal(focusCalendar, in: settings) {
+        let focusCalendar = element("calendar-fx-focus", in: local)
+        if reveal(focusCalendar, in: local) {
             focusCalendar.click()
             Thread.sleep(forTimeInterval: 0.5)
-            keep(settings.screenshot(), "local-8-settings-calendars")
+            keep(local.screenshot(), "local-8-settings-calendars")
         } else {
             XCTFail("no 专注 calendar in Settings")
         }
@@ -125,6 +127,26 @@ final class LocalDataTests: XCTestCase {
             XCTAssertTrue(waitForText("CI：线性代数", in: app, timeout: 2), "the ticked calendars' events went too")
         }
         app.terminate()
+    }
+
+    /// Settings, on its 这台 Mac tab (the window opens on the tab used last); nil without it.
+    @MainActor
+    private func openLocalSettings(_ app: XCUIApplication, waitingFor identifier: String) -> XCUIElement? {
+        app.typeKey(",", modifierFlags: .command)
+        let settings = app.windows.matching(NSPredicate(format: "identifier CONTAINS[c] 'settings'")).firstMatch
+        guard settings.waitForExistence(timeout: 5) else { return nil }
+        let mine = element(identifier, in: settings)
+        if !mine.waitForExistence(timeout: 1) {
+            let tabs = [settings.toolbarButtons["这台 Mac"], settings.toolbars.buttons["这台 Mac"], settings.buttons["这台 Mac"],
+                        settings.radioButtons["这台 Mac"]]
+            if let tab = tabs.first(where: { $0.exists }) {
+                tab.click()
+            } else {
+                let any = settings.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "这台 Mac")).firstMatch
+                if any.waitForExistence(timeout: 3) { any.click() }
+            }
+        }
+        return mine.waitForExistence(timeout: 10) ? settings : nil
     }
 
     /// Scrolls Settings until `element` can be clicked. Which sign of a wheel delta scrolls down is

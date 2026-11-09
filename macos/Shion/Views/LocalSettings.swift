@@ -1,7 +1,20 @@
 import SwiftUI
 
-// Settings for what this Mac knows: its calendars, the focus check and the app usage record.
-// What each sends and what it does not is said here, under its switch, and nowhere else.
+// Settings → 这台 Mac: its calendars, the focus check and the app usage record. What each sends
+// and what it does not is said here, under its switch, and nowhere else.
+
+/// The 这台 Mac tab.
+struct LocalSettingsView: View {
+    var body: some View {
+        Form {
+            CalendarSettings()
+            FocusSettings()
+            UsageSettings()
+        }
+        .formStyle(.grouped)
+        .frame(width: 520, height: 640)
+    }
+}
 
 /// The calendars on this Mac, by account: which ones Shion reads, and what each holds.
 struct CalendarSettings: View {

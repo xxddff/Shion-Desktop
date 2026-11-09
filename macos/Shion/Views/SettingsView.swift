@@ -67,11 +67,6 @@ struct SettingsView: View {
                     .font(.t12)
                     .foregroundStyle(.secondary)
             }
-
-            // this Mac's calendars, the focus check and the app usage record (LocalSettings.swift)
-            CalendarSettings()
-            FocusSettings()
-            UsageSettings()
         }
         .formStyle(.grouped)
         // tall enough for the server and the board at once
@@ -93,7 +88,7 @@ struct SettingsView: View {
         case .sessionToken:
             "会话令牌是服务器上的 HERMES_DASHBOARD_SESSION_TOKEN。"
         }
-        return login + "Access 两项填 Cloudflare Access 的 service token，没有就留空。这些都存在钥匙串里，只发给这个地址。连上后，助手、对话和看板来自服务器；服务器装了 shion 插件时，今天、待办和日报也是。日程来自这台 Mac 的日历（见下面），和服务器无关；云桌面暂时还是示例数据。"
+        return login + "Access 两项填 Cloudflare Access 的 service token，没有就留空。这些都存在钥匙串里，只发给这个地址。连上后，助手、对话和看板来自服务器；服务器装了 shion 插件时，今天、待办和日报也是。日程来自这台 Mac 的日历（见「这台 Mac」），和服务器无关；云桌面暂时还是示例数据。"
     }
 }
 

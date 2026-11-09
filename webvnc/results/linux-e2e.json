@@ -1,0 +1,216 @@
+[
+  {
+    "name": "filter: noVNC side-button PointerEvent vs Hermes rfb_filter",
+    "ok": true,
+    "detail": {
+      "plain pointer + key": {
+        "forwarded": 34,
+        "of": 34,
+        "buffered": 0,
+        "intact": true
+      },
+      "back button (noVNC, server offers -316)": {
+        "bridge": "closes 1003",
+        "error": "unknown RFB client message type 1"
+      },
+      "forward button (noVNC, server offers -316)": {
+        "forwarded": 6,
+        "of": 29,
+        "buffered": 23,
+        "intact": false
+      }
+    },
+    "ms": 34
+  },
+  {
+    "name": "replay: the committed noVNC sample decodes to its recorded picture (what the macOS shell checks)",
+    "ok": true,
+    "detail": {
+      "picture": "f2edbe99",
+      "updates": 5
+    },
+    "ms": 1162
+  },
+  {
+    "name": "page: loads from the app origin, CSP holds",
+    "ok": true,
+    "detail": {
+      "ready": {
+        "type": "ready",
+        "secureContext": true,
+        "subtleCrypto": true,
+        "nativeBase64": true,
+        "origin": "https://webvnc.test",
+        "at": 1794241186350
+      },
+      "fetchBlocked": true,
+      "violations": [
+        "connect-src",
+        "connect-src",
+        "script-src-elem"
+      ],
+      "inlineRan": false
+    },
+    "ms": 472
+  },
+  {
+    "name": "relay: refuses other local clients; one page only",
+    "ok": true,
+    "detail": {
+      "before": {
+        "no subprotocol": "refused 403",
+        "wrong token": "refused 403",
+        "token, foreign origin": "refused 403",
+        "token, no origin": "refused 403"
+      },
+      "after": {
+        "right token and origin, second connection": "refused (ConnectionRefusedError)"
+      },
+      "rejected": 4,
+      "reasons": [
+        "no token",
+        "no token",
+        "origin",
+        "origin"
+      ],
+      "pageOrigin": "https://webvnc.test"
+    },
+    "ms": 547
+  },
+  {
+    "name": "watch: picture through the relay, stats",
+    "ok": true,
+    "detail": {
+      "firstFrameMs": 18,
+      "updates": 8,
+      "extendedClipboard": true,
+      "qemuKeys": true,
+      "extendedMouseButtons": false,
+      "cursor": "url(\"data:image/",
+      "relayDown": 41613,
+      "relayUp": 334,
+      "sentUpstream": 1000
+    },
+    "ms": 1797
+  },
+  {
+    "name": "holder: plain keys arrive (noVNC keyboard on the IME textarea)",
+    "ok": true,
+    "detail": "Hello 123 typed, Ctrl+A Backspace cleared it",
+    "ms": 448
+  },
+  {
+    "name": "holder: Chinese, Japanese, emoji by clipboard + Ctrl+V",
+    "ok": true,
+    "detail": {
+      "bytes": 41
+    },
+    "ms": 268
+  },
+  {
+    "name": "holder: input method — nothing sent while composing, the result pasted",
+    "ok": true,
+    "detail": "composition \"nihao\" stayed local; committed 你好 arrived",
+    "ms": 854
+  },
+  {
+    "name": "holder: text inserted without composition (emoji picker)",
+    "ok": true,
+    "detail": "ok",
+    "ms": 1813
+  },
+  {
+    "name": "holder: paste event",
+    "ok": true,
+    "detail": "ok",
+    "ms": 236
+  },
+  {
+    "name": "holder: keyboard layout — Xvnc types the character, not the key position",
+    "ok": true,
+    "detail": "key \"a\" at the QWERTY \"q\" position arrived as \"a\"",
+    "ms": 234
+  },
+  {
+    "name": "holder: a dropped link keeps the lease",
+    "ok": true,
+    "detail": {
+      "pageSaw": 1006,
+      "lease": "human"
+    },
+    "ms": 530
+  },
+  {
+    "name": "reconnect with the same viewer id: lease still ours; ⌘A → Ctrl+A on a Mac",
+    "ok": true,
+    "detail": {
+      "handBack": 1000,
+      "lease": "agent"
+    },
+    "ms": 1236
+  },
+  {
+    "name": "watcher: the bridge drops input even when the page sends it",
+    "ok": true,
+    "detail": {
+      "typeText": true,
+      "title": "T:mac",
+      "clipboard": "before"
+    },
+    "ms": 1335
+  },
+  {
+    "name": "watcher takes over on the same connection: paste works (capabilities sent while watching were dropped)",
+    "ok": true,
+    "detail": "ok",
+    "ms": 642
+  },
+  {
+    "name": "another viewer takes over: 4000 reaches the page through the relay",
+    "ok": true,
+    "detail": {
+      "pageCode": 4000,
+      "reason": "control-taken"
+    },
+    "ms": 27
+  },
+  {
+    "name": "spent ticket: 4401 reaches the page",
+    "ok": true,
+    "detail": {
+      "code": 4401,
+      "reason": "display ticket missing, expired or used"
+    },
+    "ms": 615
+  },
+  {
+    "name": "no Access headers: upgrade refused (403), the page gets 4403",
+    "ok": true,
+    "detail": {
+      "code": 4403,
+      "upstream": 403
+    },
+    "ms": 285
+  },
+  {
+    "name": "HostChannel: picture, typing and hand-back without any socket in the page",
+    "ok": true,
+    "detail": {
+      "firstFrameMs": 33,
+      "updates": 6,
+      "batches": 15,
+      "bytesDown": 54901,
+      "bytesUp": 544,
+      "sentClose": 1000
+    },
+    "ms": 1973
+  },
+  {
+    "name": "HostChannel: 4000 reaches the page",
+    "ok": true,
+    "detail": {
+      "code": 4000
+    },
+    "ms": 237
+  }
+]

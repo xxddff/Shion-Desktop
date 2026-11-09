@@ -1,0 +1,13 @@
+{
+  "kind": "static",
+  "novnc": "1.7.0",
+  "xvnc": "TigerVNC 1.13.1",
+  "updates": 5,
+  "bytes": 110853,
+  "picture": {
+    "width": 1440,
+    "height": 900,
+    "fnv1a": "f2edbe99"
+  },
+  "recorded": "2026-11-09T16:04:34.830Z"
+}

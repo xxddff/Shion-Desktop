@@ -1,0 +1,174 @@
+name: Web viewer (noVNC)
+
+# The exploration in webvnc/: noVNC 1.7.0 (as Hermes' official desktop app uses it) in a web view.
+# Linux runs on every change to webvnc/: the page in headless Chrome against a real Xvnc behind
+# Hermes' own RFB filter (rfb/testbed), through the loopback relay and through the in-app channel;
+# it also records a scroll session for the macOS job and times decoding it in Chrome. The macOS job uses the
+# limited macOS minutes: only on a manual run with "macos" ticked, or when the commit message
+# contains [macos]. It builds the shell (WKWebView + relay + channel) and runs its self-test against
+# recorded sessions (no Xvnc on macOS).
+on:
+  push:
+    paths:
+      - 'webvnc/**'
+      - '.github/workflows/webvnc.yml'
+  workflow_dispatch:
+    inputs:
+      macos:
+        description: 'Also run the macOS shell (limited minutes)'
+        type: boolean
+        default: false
+
+concurrency:
+  group: webvnc-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # the testbed bridge, the relay and the replay server use websockets' asyncio API (13+)
+  WEBSOCKETS: 'websockets>=13,<18'
+
+jobs:
+  linux:
+    name: Linux — Chrome against Xvnc
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: webvnc
+    env:
+      WEBVNC_CHROMIUM: /usr/bin/google-chrome
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: noVNC (pinned version, checked against its npm integrity)
+        run: |
+          web/fetch-novnc.sh
+          web/fetch-novnc.sh --check
+
+      - name: Packages (Xvnc, X clients, CJK fonts)
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq tigervnc-standalone-server x11-apps x11-utils x11-xserver-utils \
+            xterm xdotool xclip fonts-dejavu-core fonts-noto-cjk
+          Xvnc -version 2>&1 | head -1
+          google-chrome --version
+
+      - name: Python (websockets)
+        run: |
+          python3 -m venv ~/testbed-venv
+          ~/testbed-venv/bin/pip install -q "$WEBSOCKETS"
+          echo "RFB_TESTBED_PYTHON=$HOME/testbed-venv/bin/python3" >> "$GITHUB_ENV"
+
+      - name: Playwright (driver only; the runner's Chrome)
+        run: npm ci --no-audit --no-fund
+
+      - name: Hermes' RFB filter and noVNC's side-button PointerEvent
+        run: python3 -I -B linux/filter_check.py
+
+      - name: End-to-end in Chrome
+        run: node linux/e2e.mjs --out out
+
+      - name: Record a scroll session (for the macOS job)
+        if: success() || failure()
+        run: node linux/record-sample.mjs scroll samples
+
+      - name: Decode that recording in Chrome (the macOS job times the same one)
+        run: node linux/decode.mjs samples/novnc-scroll.messages.z --engines chrome --out out/decode-chrome.json
+
+      # WebKitGTK (linux/webkit.mjs) is not run here: on the runner its web-process sandbox
+      # (bubblewrap) cannot set up its network namespace, and the web process never starts. It
+      # runs locally with the sandbox on; see webvnc/README.md.
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: webvnc-linux
+          path: webvnc/out
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Upload the scroll recording
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: webvnc-samples
+          path: webvnc/samples
+          retention-days: 3
+          if-no-files-found: ignore
+
+  macos:
+    name: macOS — the shell (WKWebView) against recorded sessions
+    needs: linux
+    # runs even when a Linux check failed (the recording may still be there); never without [macos]
+    if: ${{ !cancelled() && ((github.event_name == 'workflow_dispatch' && inputs.macos) || contains(github.event.head_commit.message, '[macos]')) }}
+    runs-on: xcode-27
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+
+      # What the SDK says about the script bridge: WKScriptMessage's body types, and the new
+      # WKJSScriptingBuffer (macOS 27 SDK), which might carry frames to the page without base64.
+      - name: WebKit SDK headers
+        continue-on-error: true
+        run: |
+          H="$(xcrun --sdk macosx --show-sdk-path)/System/Library/Frameworks/WebKit.framework/Headers"
+          ls "$H" | grep -iE "buffer|handle|script|scheme" || true
+          for f in WKJSScriptingBuffer.h WKJSHandle.h; do [ -f "$H/$f" ] && { echo "== $f"; cat "$H/$f"; }; done
+          echo "== WKUserContentController.h (buffers, handles)"; grep -n -iE "buffer|handle" "$H/WKUserContentController.h" || true
+          echo "== WKScriptMessage.h"; grep -n -A3 "body" "$H/WKScriptMessage.h" || true
+          I="$(find "$(xcrun --sdk macosx --show-sdk-path)/System/Library/Frameworks/WebKit.framework" -name '*.swiftinterface' | head -1)"
+          echo "== $I"; [ -n "$I" ] && grep -n -E "URLSchemeHandler|callJavaScript|userContentController|JSScriptingBuffer|struct Configuration" "$I" | head -60 || true
+
+      - name: noVNC
+        working-directory: webvnc
+        run: web/fetch-novnc.sh
+
+      - name: Python for the replay server
+        run: |
+          python3 -m venv ~/venv
+          ~/venv/bin/pip install -q "$WEBSOCKETS"
+
+      - name: The scroll recording from the Linux job
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: webvnc-samples
+          path: samples
+
+      - name: Build
+        working-directory: webvnc/macos
+        run: |
+          set -o pipefail
+          swift build -c release 2>&1 | tail -80
+
+      - name: Self-test (WKWebView, relay, channel, keys)
+        run: |
+          set -o pipefail
+          webvnc/macos/.build/release/webvnc-shell --web-root webvnc/web --python ~/venv/bin/python3 \
+            --replay webvnc/linux/replay_messages.py \
+            --static-sample webvnc/testdata/novnc-static.messages.z \
+            --static-expected webvnc/testdata/novnc-static.expected.png \
+            --scroll-sample samples/novnc-scroll.messages.z --out macos-out 2>&1 | tee macos-out.log
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: webvnc-macos
+          path: |
+            macos-out
+            macos-out.log
+          retention-days: 14
+          if-no-files-found: ignore
