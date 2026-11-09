@@ -48,6 +48,8 @@ final class AppStore {
     private(set) var boardLimits: BoardLimits?
     /// The server's kanban board, live while connected.
     let board = BoardStore()
+    /// The server's profiles, and who leads and who is hidden on this Mac (AppStore+Bots.swift).
+    let roster = Roster(persist: !LaunchOptions.current.snapshot)
     /// What `runtime.describe` says the server can do (`session-transcript-v1`, …).
     @ObservationIgnored var serverCapabilities: Set<String> = []
     /// Today, todos and reports come from the server's `shion` plugin (AppStore+Plugin.swift).
@@ -105,7 +107,8 @@ final class AppStore {
         }
     }
 
-    func bot(_ id: String) -> Bot? { bots.first { $0.id == id } }
+    /// An assistant by id; one hidden in Settings too, for the name on what it left behind.
+    func bot(_ id: String) -> Bot? { bots.first { $0.id == id } ?? roster.hiddenBots.first { $0.id == id } }
     func card(_ id: String) -> Card? { cards.first { $0.id == id } }
     func todo(_ id: String) -> Todo? { todos.first { $0.id == id } }
 
@@ -224,7 +227,7 @@ extension AppStore {
     /// Attaches every assistant's existing Bot Chat, without its rows, so approvals, questions and
     /// busy states come from all of them, not only from the chats you open. A Bot Chat is only
     /// created when you open the chat. Needs the paged transcript (an attach without rows).
-    private func attachAll() async {
+    func attachAll() async {
         guard pagesTranscripts else { return }
         for bot in bots where sessions[bot.id] == nil {
             guard live, gateway.phase == .online else { return }
@@ -298,6 +301,25 @@ extension AppStore {
         leaveLive()
     }
 
+    /// An assistant Shion stops following (hidden in Settings, or deleted): its Bot Chat's events,
+    /// approvals and questions no longer come in, and what it had in 等你确认 goes.
+    func forgetChat(_ botId: String) {
+        if let sessionId = sessions.removeValue(forKey: botId) {
+            sessionBots[sessionId] = nil
+        }
+        streaming[botId] = nil
+        attachMarks[botId] = nil
+        loadedChats.remove(botId)
+        olderPages[botId] = nil
+        olderErrors[botId] = nil
+        chats[botId] = nil
+        replying.remove(botId)
+        for ask in asks where ask.botId == botId {
+            Notifier.shared.withdraw(ask.id)
+        }
+        asks.removeAll { $0.botId == botId }
+    }
+
     /// Screenshot and test runs keep what they type in memory: no keychain, no preferences.
     private func keepSettings() {
         serverSettings = serverSettings.trimmed
@@ -348,36 +370,15 @@ extension AppStore {
         }
     }
 
-    /// One assistant per profile; the profile named `shion` (else the default one) leads.
+    /// One assistant per profile, named as Bot Mode names it (its ui_meta title, then the profile's
+    /// display name); 总秘书 leads, and the ones hidden in Settings are left out (AppStore+Bots.swift).
     private func enterLive(with rows: [JSONValue]) {
         if !live {
             demoBots = bots
             demoChats = chats
             demoAsks = asks
         }
-        let names = rows.compactMap { $0["name"]?.string }
-        let defaultRow = rows.first(where: { $0["is_default"]?.bool == true })
-        let chiefName = names.contains("shion") ? "shion" : (defaultRow?["name"]?.string ?? names.first ?? "")
-        var liveBots: [Bot] = []
-        for (index, row) in rows.enumerated() {
-            guard let name = row["name"]?.string else { continue }
-            // the name Bot Mode shows: its ui_meta title, then the profile's display name
-            let display = [row["ui_meta"]?["hermes-bots"]?["title"]?.string, row["display_name"]?.string]
-                .compactMap { $0 }
-                .first { !$0.isEmpty } ?? name
-            let description = row["description"]?.string ?? ""
-            let chief = name == chiefName
-            liveBots.append(Bot(
-                id: name,
-                name: display,
-                title: chief ? "总秘书" : (description.isEmpty ? name : description),
-                chief: chief,
-                hue: chief ? Palette.accent : Palette.hues[index % Palette.hues.count],
-                status: .idle,
-                statusNote: ""
-            ))
-        }
-        bots = liveBots.filter { $0.chief } + liveBots.filter { !$0.chief }
+        bots = assistants(from: rows)
         chats = [:]
         asks = []
         sessions = [:]

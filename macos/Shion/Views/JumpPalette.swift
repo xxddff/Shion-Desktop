@@ -161,10 +161,10 @@ struct JumpPalette: View {
             all[hit.id] = hit
             candidates.append(JumpCandidate(id: hit.id, group: hit.group, title: hit.title, keywords: keywords))
         }
-        for (index, page) in Route.pages.enumerated() {
-            add(JumpHit(id: "jump-page-\(page.pageToken)", group: .page, title: page.pageTitle, trailing: "⌘\(index + 1)",
-                        icon: .symbol(page.pageSymbol), target: .route(page)),
-                keywords: [page.pageToken])
+        for (index, page) in SidebarPage.all.enumerated() {
+            add(JumpHit(id: "jump-page-\(page.token)", group: .page, title: page.title, trailing: "⌘\(index + 1)",
+                        icon: .symbol(page.symbol), target: .route(page.route)),
+                keywords: [page.token])
         }
         for bot in store.bots {
             add(JumpHit(id: "jump-bot-\(bot.id)", group: .assistant, title: bot.name, subtitle: bot.title,

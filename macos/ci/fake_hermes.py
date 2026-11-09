@@ -22,6 +22,9 @@ hermes_cli/dashboard_auth and the Canonical Gateway Protocol:
                                session.transcript; 课程's is created on first open)
   /api/plugins/kanban/…        the kanban plugin: boards, cards, moves, comments and the
                                /events socket (fake_kanban.py)
+  /api/profiles, /api/mcp/…,   the assistants' profiles: create, title, SOUL, model, MCP
+  /api/skills, /api/tools/…,   servers, skills, toolsets, config, delete (fake_profiles.py, which
+  /api/config?profile=         also answers profiles.list, profiles.create and profiles.configure)
   prompt.submit "小窗：…"       詩音's answer to the ⌥Space window, streamed slowly (fake_quick.py)
 
 Like Hermes's contracts (extra="forbid"), session.resume, session.transcript and prompt.submit
@@ -47,6 +50,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fake_kanban  # noqa: E402  the kanban plugin's routes (BoardTests)
+import fake_profiles  # noqa: E402  the profiles' routes and RPCs (BotsTests)
 import fake_shion  # noqa: E402  the shion plugin's RPCs
 import fake_quick  # noqa: E402  詩音's answers to the ⌥Space window (QuickAskTests)
 
@@ -302,6 +306,8 @@ class Handler(BaseHTTPRequestHandler):
                                      "auth_flows": ["cookie", "native_pkce"],
                                      "memory": {"pressure": "ok", "gateway_rss_mb": 310,
                                                 "system_total_mb": 2048, "system_available_mb": 1200}})
+        if fake_profiles.handles(url.path, query):
+            return fake_profiles.route(self, "GET", url, query, {})
         if url.path == "/api/config":
             bearer = self.headers.get("Authorization", "").removeprefix("Bearer ").strip()
             if not valid_access(bearer):
@@ -348,9 +354,12 @@ class Handler(BaseHTTPRequestHandler):
             return self.answer(200, mint_pair())
         if url.path.startswith(fake_kanban.PREFIX):
             return fake_kanban.route(self, self.command, url, dict(urllib.parse.parse_qsl(url.query)), body)
+        query = dict(urllib.parse.parse_qsl(url.query))
+        if fake_profiles.handles(url.path, query):
+            return fake_profiles.route(self, self.command, url, query, body)
         self.answer(404, {"detail": "Not Found"})
 
-    do_PATCH = do_DELETE = do_POST
+    do_PATCH = do_PUT = do_DELETE = do_POST
 
     def authorize(self, query):
         problems = []
@@ -622,20 +631,24 @@ class Handler(BaseHTTPRequestHandler):
         if method != "gateway.ping":
             log(f"  rpc {method} {json.dumps(params, ensure_ascii=False)[:160]}")
         if method.startswith("plugin.shion."):
+            if params.get("profile") and not fake_profiles.has_plugin(params["profile"], "shion"):
+                # the plugin is installed in 詩音's profile only: elsewhere Hermes knows no such method
+                log(f"    no shion plugin in profile {params['profile']}")
+                return self.send_json({"jsonrpc": "2.0", "id": rid,
+                                       "error": {"code": -32601, "message": f"no method {method}"}})
             return fake_shion.handle(self, log, method, params, rid)
+        if fake_profiles.handles_rpc(method):
+            return fake_profiles.rpc(self, method, params, rid)
         result = None
         if method == "client.capabilities":
             result = {"server_requests": True}
         elif method == "gateway.ping":
             result = {"pong": True}
         elif method == "profiles.list":
-            result = {"profiles": [
-                {"name": "shion", "display_name": "詩音", "description": "", "is_default": True, "ui_meta": {}},
-                {"name": "study", "display_name": "study", "description": "课程", "is_default": False,
-                 "ui_meta": {"hermes-bots": {"title": "课程（CI）"}}},
-                {"name": "commute", "display_name": "通勤（CI）", "description": "通勤", "is_default": False,
-                 "ui_meta": {}},
-            ]}
+            # 詩音, 课程（CI）, 通勤（CI） and Hermes's own default profile (fake_profiles.py)
+            if set(params) - {"include_sessions", "profile"}:
+                return self.refuse(rid, sorted(set(params) - {"include_sessions", "profile"}))
+            result = fake_profiles.roster()
         elif method == "runtime.describe":
             if params:
                 return self.refuse(rid, sorted(params))
@@ -740,6 +753,7 @@ def main():
     parser.add_argument("--port", type=int, default=8765)
     args = parser.parse_args()
     fake_kanban.setup(log, valid_access)
+    fake_profiles.setup(log, valid_access)
     server = Server(("127.0.0.1", args.port), Handler)
     log(f"stand-in Hermes on http://127.0.0.1:{args.port}")
     try:

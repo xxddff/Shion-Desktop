@@ -11,9 +11,9 @@ struct ShionCommands: Commands {
 
     var body: some Commands {
         CommandMenu("前往") {
-            ForEach(Array(Route.pages.enumerated()), id: \.offset) { index, page in
-                Button(page.pageTitle) {
-                    go(page)
+            ForEach(Array(SidebarPage.all.enumerated()), id: \.offset) { index, page in
+                Button(page.title) {
+                    go(page.route)
                 }
                 .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .command)
             }
@@ -45,50 +45,26 @@ struct ShionCommands: Commands {
     }
 }
 
-extension Route {
-    /// The pages in sidebar order: ⌘1 is the first.
-    static let pages: [Route] = [.today, .confirm, .todos, .calendar, .reports, .board, .desktop]
+/// A page of the sidebar as ⌘1…⌘7 and ⌘K list it. A table rather than a switch over Route, which
+/// gains cases for pages that are not on these keys.
+struct SidebarPage {
+    let route: Route
+    let title: String
+    /// The sidebar's symbol for it.
+    let symbol: String
+    /// Its launch argument name (`-ShionRoute today`), which ⌘K also finds it by.
+    let token: String
 
-    var pageTitle: String {
-        switch self {
-        case .today: "今天"
-        case .confirm: "等你确认"
-        case .todos: "待办"
-        case .calendar: "日程"
-        case .reports: "日报"
-        case .board: "看板"
-        case .desktop: "云桌面"
-        case .chat: ""
-        }
-    }
-
-    /// The sidebar's symbol for the page.
-    var pageSymbol: String {
-        switch self {
-        case .today: "sun.max"
-        case .confirm: "hand.raised"
-        case .todos: "checklist"
-        case .calendar: "calendar"
-        case .reports: "doc.text"
-        case .board: "rectangle.split.3x1"
-        case .desktop: "display"
-        case .chat: "bubble.left"
-        }
-    }
-
-    /// The launch argument's name for it (`-ShionRoute today`), which ⌘K also finds it by.
-    var pageToken: String {
-        switch self {
-        case .today: "today"
-        case .confirm: "confirm"
-        case .todos: "todos"
-        case .calendar: "calendar"
-        case .reports: "reports"
-        case .board: "board"
-        case .desktop: "desktop"
-        case .chat(let id): "chat-\(id)"
-        }
-    }
+    /// In sidebar order: ⌘1 is the first.
+    static let all: [SidebarPage] = [
+        SidebarPage(route: .today, title: "今天", symbol: "sun.max", token: "today"),
+        SidebarPage(route: .confirm, title: "等你确认", symbol: "hand.raised", token: "confirm"),
+        SidebarPage(route: .todos, title: "待办", symbol: "checklist", token: "todos"),
+        SidebarPage(route: .calendar, title: "日程", symbol: "calendar", token: "calendar"),
+        SidebarPage(route: .reports, title: "日报", symbol: "doc.text", token: "reports"),
+        SidebarPage(route: .board, title: "看板", symbol: "rectangle.split.3x1", token: "board"),
+        SidebarPage(route: .desktop, title: "云桌面", symbol: "display", token: "desktop"),
+    ]
 }
 
 enum MainWindow {

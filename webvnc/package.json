@@ -1,0 +1,15 @@
+{
+  "name": "shion-webvnc",
+  "private": true,
+  "description": "Exploration: noVNC in a web view for Shion's cloud desktop (tests and measurements)",
+  "type": "module",
+  "scripts": {
+    "novnc": "web/fetch-novnc.sh",
+    "e2e": "node linux/e2e.mjs",
+    "webkit": "node linux/webkit.mjs",
+    "measure": "node linux/measure.mjs"
+  },
+  "devDependencies": {
+    "playwright-core": "1.63.0"
+  }
+}

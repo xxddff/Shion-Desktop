@@ -1,0 +1,358 @@
+{
+  "info" : {
+    "macOS" : "Version 27.0.1 (Build 26A434)",
+    "webkit" : "22625.1.29.11.28",
+    "WKJSScriptingBuffer" : {
+      "present" : false
+    },
+    "WKUserContentController buffer\/handle methods" : [
+      "_addBuffer:dataSpan:name:contentWorld:",
+      "_addScriptMessageHandler:",
+      "_addScriptMessageHandler:name:contentWorld:",
+      "_addScriptMessageHandler:name:userContentWorld:",
+      "_removeAllScriptMessageHandlersAssociatedWithUserContentWorld:",
+      "_removeScriptMessageHandlerForName:userContentWorld:",
+      "addBuffer:name:contentWorld:",
+      "addScriptMessageHandler:contentWorld:name:",
+      "addScriptMessageHandler:name:",
+      "addScriptMessageHandlerWithReply:contentWorld:name:",
+      "removeAllScriptMessageHandlers",
+      "removeAllScriptMessageHandlersFromContentWorld:",
+      "removeBufferWithName:contentWorld:",
+      "removeScriptMessageHandlerForName:",
+      "removeScriptMessageHandlerForName:contentWorld:"
+    ]
+  },
+  "results" : [
+    {
+      "detail" : {
+        "csp" : {
+          "fetchBlocked" : true,
+          "inlineRan" : false,
+          "ua" : "Mozilla\/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit\/605.1.15 (KHTML, like Gecko)"
+        },
+        "ready" : {
+          "nativeBase64" : true,
+          "origin" : "shion-webvnc:\/\/app",
+          "secureContext" : true,
+          "subtleCrypto" : true,
+          "t" : 1321
+        },
+        "served" : [
+          "viewer.html",
+          "viewer.css",
+          "viewer.js",
+          "vendor\/novnc\/core\/rfb.js",
+          "vendor\/novnc\/core\/input\/keyboard.js",
+          "vendor\/novnc\/core\/input\/keysym.js",
+          "vendor\/novnc\/core\/input\/util.js",
+          "channel.js",
+          "host.js",
+          "vendor\/novnc\/core\/util\/int.js",
+          "vendor\/novnc\/core\/util\/logging.js",
+          "vendor\/novnc\/core\/util\/strings.js",
+          "vendor\/novnc\/core\/util\/browser.js",
+          "vendor\/novnc\/core\/util\/element.js",
+          "vendor\/novnc\/core\/util\/events.js",
+          "vendor\/novnc\/core\/util\/eventtarget.js",
+          "vendor\/novnc\/core\/display.js",
+          "vendor\/novnc\/core\/inflator.js",
+          "vendor\/novnc\/core\/deflator.js",
+          "vendor\/novnc\/core\/input\/gesturehandler.js",
+          "vendor\/novnc\/core\/util\/cursor.js",
+          "vendor\/novnc\/core\/websock.js",
+          "vendor\/novnc\/core\/input\/xtscancodes.js",
+          "vendor\/novnc\/core\/encodings.js",
+          "vendor\/novnc\/core\/ra2.js",
+          "vendor\/novnc\/core\/crypto\/crypto.js",
+          "vendor\/novnc\/core\/decoders\/raw.js",
+          "vendor\/novnc\/core\/decoders\/copyrect.js",
+          "vendor\/novnc\/core\/decoders\/rre.js",
+          "vendor\/novnc\/core\/decoders\/hextile.js",
+          "vendor\/novnc\/core\/decoders\/zlib.js",
+          "vendor\/novnc\/core\/decoders\/tight.js",
+          "vendor\/novnc\/core\/decoders\/tightpng.js",
+          "vendor\/novnc\/core\/decoders\/zrle.js",
+          "vendor\/novnc\/core\/decoders\/jpeg.js",
+          "vendor\/novnc\/core\/decoders\/h264.js",
+          "vendor\/novnc\/core\/input\/keysymdef.js",
+          "vendor\/novnc\/core\/input\/vkeys.js",
+          "vendor\/novnc\/core\/input\/fixedkeys.js",
+          "vendor\/novnc\/core\/input\/domkeytable.js",
+          "vendor\/novnc\/core\/base64.js",
+          "vendor\/novnc\/vendor\/pako\/lib\/zlib\/inflate.js",
+          "vendor\/novnc\/vendor\/pako\/lib\/zlib\/zstream.js",
+          "vendor\/novnc\/vendor\/pako\/lib\/zlib\/deflate.js",
+          "vendor\/novnc\/core\/crypto\/aes.js",
+          "vendor\/novnc\/core\/crypto\/des.js",
+          "vendor\/novnc\/core\/crypto\/rsa.js",
+          "vendor\/novnc\/core\/crypto\/dh.js",
+          "vendor\/novnc\/core\/crypto\/md5.js",
+          "vendor\/novnc\/vendor\/pako\/lib\/utils\/common.js",
+          "vendor\/novnc\/vendor\/pako\/lib\/zlib\/adler32.js",
+          "vendor\/novnc\/vendor\/pako\/lib\/zlib\/crc32.js",
+          "vendor\/novnc\/vendor\/pako\/lib\/zlib\/inffast.js",
+          "vendor\/novnc\/vendor\/pako\/lib\/zlib\/inftrees.js",
+          "vendor\/novnc\/vendor\/pako\/lib\/zlib\/trees.js",
+          "vendor\/novnc\/vendor\/pako\/lib\/zlib\/messages.js",
+          "vendor\/novnc\/core\/crypto\/bigint.js"
+        ]
+      },
+      "ms" : 1541,
+      "name" : "page: from the URL scheme (ES modules, CSP header)",
+      "ok" : true,
+      "required" : true
+    },
+    {
+      "detail" : "no ready message within 8 s: ES modules from file:\/\/ (or 'self' in the CSP) do not load",
+      "ms" : 8072,
+      "name" : "page: from a file URL (loadFileURL)",
+      "ok" : false,
+      "required" : false
+    },
+    {
+      "detail" : {
+        "bytesIn" : 110785,
+        "firstFrameMs" : 63,
+        "picture" : {
+          "chromeHash" : "f2edbe99",
+          "fractionOver16" : 0,
+          "hash" : "cdbe9a9f",
+          "height" : 900,
+          "maxDiff" : 3,
+          "meanAbsDiff" : 0.0041877572016460907,
+          "pixelsOver16" : 0,
+          "width" : 1440
+        },
+        "relay" : {
+          "accepted" : true,
+          "downBytes" : 110785,
+          "pageClose" : 1000,
+          "rejected" : [
+
+          ],
+          "requestHeaderNames" : [
+            "accept",
+            "accept-encoding",
+            "accept-language",
+            "cache-control",
+            "host",
+            "origin",
+            "pragma",
+            "sec-fetch-dest",
+            "sec-fetch-mode",
+            "sec-fetch-site",
+            "sec-websocket-extensions",
+            "user-agent"
+          ],
+          "seenOrigins" : [
+            "shion-webvnc:\/\/app"
+          ],
+          "sentPage" : null,
+          "sentUpstream" : "1000",
+          "upBytes" : 274,
+          "upstreamClose" : null
+        },
+        "replay" : [
+          "client closed 1000"
+        ],
+        "updates" : 5
+      },
+      "ms" : 2633,
+      "name" : "relay: the picture, and a clean close (1000) passes through to the bridge",
+      "ok" : true,
+      "required" : true
+    },
+    {
+      "detail" : "page saw [\"t\": 185, \"code\": 1006, \"ms\": 50, \"type\": state, \"state\": disconnected, \"clean\": 1, \"reason\": ], relay [\"downBytes\": 110417, \"sentUpstream\": <null>, \"seenOrigins\": [\"shion-webvnc:\/\/app\"], \"requestHeaderNames\": [\"accept\", \"accept-encoding\", \"accept-language\", \"cache-control\", \"host\", \"origin\", \"pragma\", \"sec-fetch-dest\", \"sec-fetch-mode\", \"sec-fetch-site\", \"sec-websocket-extensions\", \"user-agent\"], \"accepted\": true, \"upBytes\": 0, \"pageClose\": <null>, \"upstreamClose\": <null>, \"sentPage\": \"abort\", \"rejected\": []]",
+      "ms" : 205,
+      "name" : "relay: another viewer took over (4000) reaches the page",
+      "ok" : false,
+      "required" : true
+    },
+    {
+      "detail" : {
+        "attempts" : {
+          "no subprotocol" : "refused (POSIXErrorCode(rawValue: 53): Software caused connection abo)",
+          "token and origin, second connection" : "refused (POSIXErrorCode(rawValue: 61): Connection refused)",
+          "token, foreign origin" : "refused (POSIXErrorCode(rawValue: 53): Software caused connection abo)",
+          "token, no origin" : "refused (POSIXErrorCode(rawValue: 53): Software caused connection abo)",
+          "wrong token" : "refused (POSIXErrorCode(rawValue: 53): Software caused connection abo)"
+        },
+        "relay" : {
+          "accepted" : true,
+          "downBytes" : 110785,
+          "pageClose" : 1000,
+          "rejected" : [
+            "no token",
+            "no token",
+            "origin",
+            "origin"
+          ],
+          "requestHeaderNames" : [
+            "host",
+            "origin"
+          ],
+          "seenOrigins" : [
+            "shion-webvnc:\/\/app",
+            "shion-webvnc:\/\/app",
+            "https:\/\/evil.example",
+            "(none)",
+            "shion-webvnc:\/\/app"
+          ],
+          "sentPage" : null,
+          "sentUpstream" : "1000",
+          "upBytes" : 274,
+          "upstreamClose" : null
+        }
+      },
+      "ms" : 264,
+      "name" : "relay: refuses other local clients and a foreign Origin; one page only",
+      "ok" : true,
+      "required" : true
+    },
+    {
+      "detail" : {
+        "bytesIn" : 110785,
+        "channel" : {
+          "batches" : 2,
+          "bytesDown" : 110785,
+          "bytesUp" : 274,
+          "closeCode" : 1000,
+          "sentClose" : "1000"
+        },
+        "firstFrameMs" : 17,
+        "picture" : {
+          "chromeHash" : "f2edbe99",
+          "fractionOver16" : 0,
+          "hash" : "cdbe9a9f",
+          "height" : 900,
+          "maxDiff" : 3,
+          "meanAbsDiff" : 0.0041877572016460907,
+          "pixelsOver16" : 0,
+          "width" : 1440
+        },
+        "updates" : 5
+      },
+      "ms" : 2886,
+      "name" : "channel: the picture, and a clean close (1000) passes through to the bridge",
+      "ok" : true,
+      "required" : true
+    },
+    {
+      "detail" : "page saw [\"type\": state, \"reason\": POSIXErrorCode(rawValue: 57): Socket is not connected, \"t\": 159, \"ms\": 28, \"clean\": 1, \"state\": disconnected, \"code\": 1006]",
+      "ms" : 168,
+      "name" : "channel: 4000 reaches the page",
+      "ok" : false,
+      "required" : true
+    },
+    {
+      "detail" : {
+        "dispatch" : [
+          "NSApp.sendEvent",
+          "NSApp.sendEvent",
+          "NSApp.sendEvent",
+          "NSApp.sendEvent"
+        ],
+        "keysSent" : [
+          "+62",
+          "-62",
+          "+ffe3",
+          "+61",
+          "-61",
+          "-ffe3",
+          "+ffe3",
+          "+76",
+          "-76",
+          "-ffe3"
+        ],
+        "quitMenuItem" : 1,
+        "routedToMac" : [
+          "q"
+        ],
+        "typed" : [
+          {
+            "chars" : 9,
+            "ok" : true,
+            "reason" : null,
+            "t" : 1994,
+            "type" : "typed"
+          }
+        ],
+        "windowWasKey" : true
+      },
+      "ms" : 3072,
+      "name" : "keys: plain key, ⌘A → Ctrl+A, ⌘Q to the menu (never the page), ⌘V → clipboard + Ctrl+V",
+      "ok" : true,
+      "required" : true
+    },
+    {
+      "detail" : {
+        "channel" : null,
+        "expectedUpdates" : 87,
+        "MB" : 17.751892999999999,
+        "MBps" : 17.999240165169748,
+        "seconds" : 0.98625791072845459,
+        "shellCPU" : 0.21473000000000009,
+        "updates" : 87,
+        "webContentCPU" : 1.1399999999999999
+      },
+      "ms" : 1377,
+      "name" : "throughput: recorded scroll through the relay",
+      "ok" : true,
+      "required" : false
+    },
+    {
+      "detail" : {
+        "channel" : {
+          "batches" : 3,
+          "bytesDown" : 17751893,
+          "bytesUp" : 1914,
+          "closeCode" : 1000,
+          "sentClose" : "1000"
+        },
+        "expectedUpdates" : 87,
+        "MB" : 17.751892999999999,
+        "MBps" : 16.534106723350167,
+        "seconds" : 1.073652982711792,
+        "shellCPU" : 0.19718400000000025,
+        "updates" : 87,
+        "webContentCPU" : 1.1999999999999997
+      },
+      "ms" : 1409,
+      "name" : "throughput: recorded scroll through the channel",
+      "ok" : true,
+      "required" : false
+    },
+    {
+      "detail" : {
+        "1 MB" : {
+          "base64Length" : 1048576,
+          "base64Ms" : 1.8759965896606445,
+          "buffer" : {
+            "byteLength" : null,
+            "found" : true,
+            "intact" : false,
+            "kind" : "[object WebKitBuffer]"
+          },
+          "bufferMs" : 1.3529062271118164
+        },
+        "8 MB" : {
+          "base64Length" : 8388608,
+          "base64Ms" : 13.360023498535156,
+          "buffer" : {
+            "byteLength" : null,
+            "found" : true,
+            "intact" : false,
+            "kind" : "[object WebKitBuffer]"
+          },
+          "bufferMs" : 1.2300014495849609
+        }
+      },
+      "ms" : 150,
+      "name" : "WebKit 27: bytes to the page without base64 (window.webkit.buffers)",
+      "ok" : true,
+      "required" : false
+    }
+  ]
+}

@@ -29,6 +29,23 @@ final class ScreenshotTests: XCTestCase {
         }
     }
 
+    /// 詩音's own settings page (`assistant-shion`), on the demo's content.
+    @MainActor
+    func testAssistantPage() throws {
+        continueAfterFailure = true
+        for appearance in ["light", "dark"] {
+            let app = launch(route: "assistant-shion", appearance: appearance)
+            let window = app.windows.firstMatch
+            if window.waitForExistence(timeout: 20) {
+                Thread.sleep(forTimeInterval: 1)
+                keep(window.screenshot(), name: "assistant-shion-\(appearance)")
+            } else {
+                XCTFail("No window for the assistant page (\(appearance))")
+            }
+            app.terminate()
+        }
+    }
+
     @MainActor
     func testMenuBarAndSettings() throws {
         continueAfterFailure = true
@@ -161,28 +178,35 @@ final class ScreenshotTests: XCTestCase {
         }
     }
 
-    /// The Settings section with the global shortcut's recorder, scrolled into view.
+    /// Settings → 快捷键: the global shortcut's recorder, light and dark.
     @MainActor
     func testShortcutSettings() throws {
         continueAfterFailure = true
-        let app = launch(route: "today", appearance: "light")
-        _ = app.windows.firstMatch.waitForExistence(timeout: 20)
-        app.typeKey(",", modifierFlags: .command)
-        let settings = app.windows.matching(NSPredicate(format: "identifier CONTAINS[c] 'settings'")).firstMatch
-        guard settings.waitForExistence(timeout: 5) else {
-            keep(XCUIScreen.main.screenshot(), name: "settings-shortcut-screen")
-            return XCTFail("No Settings window")
-        }
-        let recorder = app.descendants(matching: .any)["quick-shortcut"]
-        // which sign of a wheel delta scrolls down is the runner's: try one, then the other
-        for delta: CGFloat in [-2000, 4000] where !(recorder.exists && recorder.isHittable) {
-            settings.hover()
-            settings.scroll(byDeltaX: 0, deltaY: delta)
+        for appearance in ["light", "dark"] {
+            let app = launch(route: "today", appearance: appearance)
+            _ = app.windows.firstMatch.waitForExistence(timeout: 20)
+            app.typeKey(",", modifierFlags: .command)
+            let settings = app.windows.matching(NSPredicate(format: "identifier CONTAINS[c] 'settings'")).firstMatch
+            guard settings.waitForExistence(timeout: 5) else {
+                keep(XCUIScreen.main.screenshot(), name: "settings-shortcut-\(appearance)-screen")
+                XCTFail("No Settings window")
+                app.terminate()
+                continue
+            }
+            // a tab is a toolbar button, a radio button or a plain one, depending on the system
+            let tabs = [settings.toolbarButtons["快捷键"], settings.toolbars.buttons["快捷键"], settings.buttons["快捷键"],
+                        settings.radioButtons["快捷键"]]
+            if let tab = tabs.first(where: { $0.exists }) {
+                tab.click()
+            } else {
+                settings.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "快捷键")).firstMatch.click()
+            }
+            let recorder = settings.descendants(matching: .any)["quick-shortcut"]
+            XCTAssertTrue(recorder.waitForExistence(timeout: 5), "no shortcut recorder on the 快捷键 tab")
             Thread.sleep(forTimeInterval: 0.8)
+            keep(settings.screenshot(), name: "settings-shortcut-\(appearance)")
+            app.terminate()
         }
-        keep(settings.screenshot(), name: "settings-shortcut-light")
-        XCTAssertTrue(recorder.exists, "no shortcut recorder in Settings")
-        app.terminate()
     }
 
     @MainActor
