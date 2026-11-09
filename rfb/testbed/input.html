@@ -1,0 +1,8 @@
+<!doctype html>
+<!-- A text box for smoke.sh: whatever is typed into it shows up in the window title. -->
+<meta charset="utf-8">
+<title>empty</title>
+<textarea id="t" autofocus style="width: 90%; height: 300px; font-size: 24px"></textarea>
+<script>
+  t.addEventListener('input', () => { document.title = 'T:' + t.value.replace(/\n/g, '⏎') })
+</script>
