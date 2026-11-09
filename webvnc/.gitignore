@@ -1,0 +1,5 @@
+# noVNC is fetched by web/fetch-novnc.sh (pinned version, checked hash) and never edited
+web/vendor/
+node_modules/
+macos/.build/
+__pycache__/

@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8">
+<!-- Everything the page loads is its own (served by the app from its bundle). The only network it
+     may touch is the app's relay on 127.0.0.1; with HostChannel it needs none, and the app can send
+     a stricter header policy (connect-src 'none' or the relay's exact port) on top of this one. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src data:; connect-src ws://127.0.0.1:*; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<title>Shion</title>
+<link rel="stylesheet" href="viewer.css">
+<script type="module" src="viewer.js"></script>
+</head>
+<body>
+<div id="screen"></div>
+<textarea id="ime" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-hidden="true" tabindex="-1"></textarea>
+</body>
+</html>
