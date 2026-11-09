@@ -41,6 +41,9 @@ final class AppStore {
     /// bot ids whose older page is on its way, and why one did not come
     private(set) var loadingOlder: Set<String> = []
     private(set) var olderErrors: [String: String] = [:]
+    /// Bot ids whose turn is under way, from its first event to message.complete: until then the
+    /// turn's latest tool calls show one by one, after it they fold into a line (ChatLines.swift).
+    private(set) var replying: Set<String> = []
     /// The server's board limits, read after connecting.
     private(set) var boardLimits: BoardLimits?
     /// The server's kanban board, live while connected.
@@ -413,6 +416,7 @@ extension AppStore {
         olderErrors = [:]
         attachMarks = [:]
         loadedChats = []
+        replying = []
         Notifier.shared.withdrawAll()
     }
 
@@ -484,6 +488,7 @@ extension AppStore {
             olderPages[botId] = nil
         }
         setRunning(botId, snapshot["running"]?.bool ?? false)
+        setReplying(botId, snapshot["running"]?.bool ?? false)
         for prompt in snapshot["prompts"]?.array ?? [] {
             addPrompt(prompt, sessionId: sessionId, botId: botId)
         }
@@ -694,6 +699,16 @@ extension AppStore {
         // a chat not opened yet has no rows to add to: its first page brings them
         let shown = loadedChats.contains(botId)
         switch type {
+        case "message.start", "message.delta", "message.interim", "tool.start":
+            setReplying(botId, true)
+        case "message.complete":
+            setReplying(botId, false)
+        case "session.info" where payload["running"]?.bool == false:
+            setReplying(botId, false)
+        default:
+            break
+        }
+        switch type {
         case "message.start":
             if shown { beginReply(botId) }
         case "message.delta":
@@ -725,7 +740,9 @@ extension AppStore {
                 }
                 append(ChatItem(id: id, role: .card, at: Date(), cardTitle: made.title, cardAssignee: made.assignee), to: botId)
             } else {
-                append(ChatItem(id: UUID().uuidString, role: .tool, at: Date(), text: toolLine(name, payload["context"]?.string ?? "")), to: botId)
+                // the id the transcript gives the call's row, so a read of it keeps the line's id
+                let id = freshId(payload["tool_id"]?.string.map { "tool-\($0)" }, in: botId)
+                append(ChatItem(id: id, role: .tool, at: Date(), text: toolLine(name, payload["context"]?.string ?? "")), to: botId)
             }
         case "tool.complete":
             // a kanban_create call's result names the card it made
@@ -798,6 +815,21 @@ extension AppStore {
 
     private func append(_ item: ChatItem, to botId: String) {
         chats[botId, default: []].append(item)
+    }
+
+    /// `preferred`, unless the chat already has a row with it.
+    private func freshId(_ preferred: String?, in botId: String) -> String {
+        guard let preferred, !(chats[botId] ?? []).contains(where: { $0.id == preferred }) else { return UUID().uuidString }
+        return preferred
+    }
+
+    private func setReplying(_ botId: String, _ on: Bool) {
+        guard replying.contains(botId) != on else { return }
+        if on {
+            replying.insert(botId)
+        } else {
+            replying.remove(botId)
+        }
     }
 
     private func note(_ text: String, in botId: String) {

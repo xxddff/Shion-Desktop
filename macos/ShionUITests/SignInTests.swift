@@ -148,7 +148,7 @@ final class SignInTests: XCTestCase {
             }
         }
         // the oldest page opens with a compaction that has the row_id of 第 1 条, the ask it was
-        // stored on, as Hermes sends it: both rows show, with the tool rows after it
+        // stored on, as Hermes sends it: both rows show, with the tool calls after it in one line
         var summarized = waitForText("更早的对话压缩成了摘要", in: app, timeout: 2)
         if reachedTop && !summarized {
             transcript.hover()
@@ -159,7 +159,9 @@ final class SignInTests: XCTestCase {
         XCTAssertTrue(reachedTop, "older pages did not load on scrolling up")
         XCTAssertTrue(summarized, "the compaction above 第 1 条 is not shown")
         XCTAssertTrue(waitForText("第 1 条（你）", in: app, timeout: 1), "第 1 条, which holds the compaction, is not shown")
-        XCTAssertTrue(waitForText("web_search · 第 1 条问的", in: app, timeout: 1), "the tool row after 第 1 条 is not shown")
+        // the two tool calls after it belong to a finished turn read from the transcript: one line
+        XCTAssertTrue(waitForText("用了 2 个工具 · web_search", in: app, timeout: 1), "the tool calls after 第 1 条 are not folded into one line")
+        XCTAssertFalse(waitForText("web_search · 第 1 条问的", in: app, timeout: 0.5), "the tool calls after 第 1 条 show one by one")
 
         // 通勤 has no Bot Chat on the stand-in yet: Shion creates one (the stand-in checks the
         // fields against Hermes's, and logs which interface the assistant would be told)
