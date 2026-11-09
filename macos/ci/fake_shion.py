@@ -206,8 +206,11 @@ def instant(value, field):
     value = value.strip()
     if len(value) == 10 and value[4] == "-" and value[7] == "-":
         raise ShionError("invalid_params", f"{field} needs a time as well as a date (e.g. {value}T09:00)")
+    # The plugin runs on Hermes's Python (3.11 or later), whose fromisoformat reads a trailing Z;
+    # the runner's python3 may be older, where only +00:00 parses. A Mac set to UTC sends Z.
+    text = value[:-1] + "+00:00" if value.endswith("Z") else value
     try:
-        moment = datetime.fromisoformat(value)
+        moment = datetime.fromisoformat(text)
     except ValueError as exc:
         raise ShionError("invalid_params", f"{field} is not an ISO 8601 date-time: {value!r}") from exc
     if moment.tzinfo is None:
