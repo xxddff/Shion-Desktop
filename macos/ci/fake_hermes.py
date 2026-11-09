@@ -495,11 +495,19 @@ class Handler(BaseHTTPRequestHandler):
     HOMEWORK_CALLS = (("call-ci-hw-1", "web_search", "这周的作业（CI）"),
                       ("call-ci-hw-2", "read_file", "syllabus（CI）"),
                       ("call-ci-hw-3", "web_extract", "moodle.example（CI）"))
+    # a table that fits, then one wider than the reply, which scrolls on its own
     HOMEWORK_REPLY = ("这周要交的有两项：\n\n"
                       "| 作业 | 截止 | 进度 |\n"
                       "| :-- | :-: | --: |\n"
                       "| 实验报告（CI） | 周三 17:00（CI） | 50% |\n"
                       "| 作业5（CI） | 周五 23:59 | 0% |\n\n"
+                      "各门课这周的情况：\n\n"
+                      "| 课 | 这周讲了什么 | 要交的 | 要读的 | 下次课前 | 备注（CI） |\n"
+                      "| --- | --- | --- | --- | --- | --- |\n"
+                      "| 数据结构与算法 | 堆和优先队列：插入时上浮，删除最小值时下沉，建堆是 O(n) | 作业4：实现二叉堆，周五 23:59 前交 "
+                      "| 教科书第 6 章，重点是建堆那一节 | 把 push 和 pop 写完，先测空堆 | 最右这列的格子（CI） |\n"
+                      "| 机器学习基础 | 线性回归和梯度下降，学习率太大会发散 | 课前小测，今天 12:50 截止 | 讲义第 3 章 "
+                      "| 复习矩阵求导 | 小测可以带一张手写笔记 |\n\n"
                       "先写**实验报告**，周三前交。")
 
     def homework(self, session_id, text):

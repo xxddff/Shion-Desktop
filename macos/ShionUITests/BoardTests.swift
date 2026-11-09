@@ -182,9 +182,9 @@ final class BoardTests: XCTestCase {
         XCTAssertTrue(both, "助手在做 does not list the cards running on both boards")
         XCTAssertFalse(waitForText("整理「数据结构与算法 第7回」录音", in: app, timeout: 0.5), "demo cards on 今天")
 
-        // back in 詩音's chat, a turn of three tool calls and then a reply with a table: the calls
-        // show while the turn runs and fold into one line once the reply is in, which a click
-        // opens; the table is laid out, so a cell is a text of its own, not a line with pipes
+        // back in 詩音's chat, a turn of three tool calls and then a reply with two tables: the
+        // calls show while the turn runs and fold into one line once the reply is in; the tables
+        // are laid out, so a cell is a text of its own, not a line with pipes
         element("bot-shion", in: app).click()
         XCTAssertTrue(composer.waitForExistence(timeout: 10), "詩音's chat did not open again")
         Thread.sleep(forTimeInterval: 1)
@@ -202,13 +202,63 @@ final class BoardTests: XCTestCase {
         XCTAssertTrue(cell, "the reply's table is not laid out: no text is just 周三 17:00（CI）")
         XCTAssertTrue(element("markdown-table", in: app).exists, "no table in the reply")
         XCTAssertTrue(folded, "the turn's tool calls did not fold into one line once the reply was in")
+
+        // the second table is wider than the reply even with its cells wrapped: it scrolls sideways
+        // in its own box until its last column shows, and the words before it stay where they are
+        let wide = element("markdown-table-scroll", in: app)
+        let edge = exactText("最右这列的格子（CI）", in: app)
+        let words = findText("各门课这周的情况", in: app)
+        guard wide.waitForExistence(timeout: 5), let edge, let words else {
+            keep(window.screenshot(), "board-13a-no-wide-table")
+            return XCTFail("the wide table does not scroll on its own, or its last column or the words before it are missing")
+        }
+        let past = edge.frame.maxX > wide.frame.maxX + 1
+        let wordsX = words.frame.minX
+        let shown = scrollSideways(wide, revealing: edge)
+        keep(window.screenshot(), "board-13a-wide-table-scrolled")
+        XCTAssertTrue(past, "the wide table's last column fits already: \(edge.frame) in \(wide.frame)")
+        XCTAssertTrue(shown, "scrolling the wide table did not bring its last column into view: \(edge.frame) in \(wide.frame)")
+        XCTAssertEqual(words.frame.minX, wordsX, accuracy: 1, "the words before the wide table moved with it")
+
+        // a click opens the folded calls below the line, which stays under the pointer while what
+        // is below it moves down; a second click closes them, and the line stays again
         let run = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "用了 3 个工具")).firstMatch
         XCTAssertTrue(run.waitForExistence(timeout: 3), "no button for the folded tool calls")
+        let line = run.frame.minY
         run.click()
         let opened = waitForText("read_file · syllabus（CI）", in: app, timeout: 5)
+        Thread.sleep(forTimeInterval: 0.5)
+        let openedAt = run.frame.minY
         keep(window.screenshot(), "board-14-chat-tools-opened")
         XCTAssertTrue(opened, "the folded tool calls did not open on a click")
+        XCTAssertEqual(openedAt, line, accuracy: 4, "the line moved as it opened: from \(line) to \(openedAt)")
+        run.click()
+        let closed = waitUntil(timeout: 5) { self.findText("read_file · syllabus（CI）", in: app) == nil }
+        Thread.sleep(forTimeInterval: 0.5)
+        let closedAt = run.frame.minY
+        keep(window.screenshot(), "board-15-chat-tools-closed")
+        XCTAssertTrue(closed, "the opened tool calls did not close on a second click")
+        XCTAssertEqual(closedAt, line, accuracy: 4, "the line moved as it closed: from \(line) to \(closedAt)")
         app.terminate()
+    }
+
+    /// Scrolls `area` sideways until `target`'s right edge is inside it. Which sign of a wheel
+    /// delta moves content left is the runner's business: at the leading edge a nudge the other
+    /// way moves nothing, so the first nudge tells.
+    @MainActor
+    private func scrollSideways(_ area: XCUIElement, revealing target: XCUIElement) -> Bool {
+        let inside = { target.frame.maxX <= area.frame.maxX + 2 }
+        let start = target.frame.minX
+        var step: CGFloat = -300
+        for attempt in 0..<10 {
+            if inside() { return true }
+            area.scroll(byDeltaX: step, deltaY: 0)
+            Thread.sleep(forTimeInterval: 0.4)
+            if attempt == 0, target.frame.minX >= start - 1 {
+                step = -step
+            }
+        }
+        return inside()
     }
 
     /// Anything labelled with `text`, a button among them.
