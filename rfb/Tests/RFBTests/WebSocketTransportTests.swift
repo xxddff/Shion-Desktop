@@ -14,7 +14,8 @@ import Testing
 /// Needs a python3 with `websockets` (>= 13): set RFB_TESTBED_PYTHON to it, as for the testbed.
 /// On macOS this exercises NWWebSocketTransport and URLSessionWebSocketTransport; everywhere it
 /// also runs the small ws:// client.
-@Suite(.serialized, .enabled(if: ReplayServer.python != nil, "RFB_TESTBED_PYTHON with websockets not set"))
+@Suite(.serialized, .timeLimit(.minutes(1)),
+       .enabled(if: ReplayServer.python != nil, "RFB_TESTBED_PYTHON with websockets not set"))
 struct WebSocketTransportTests {
     enum Kind: String, CaseIterable, CustomTestStringConvertible, Sendable {
         case plain, urlSession, network
@@ -29,16 +30,20 @@ struct WebSocketTransportTests {
         }
 
         func transport(_ url: URL, headers: [(String, String)]) throws -> any RFBTransport {
+            // What the platform transports report goes to stderr, which CI shows even when the
+            // test output is buffered.
+            let name = rawValue
+            let log: @Sendable (String) -> Void = { FileHandle.standardError.write(Data("[\(name)] \($0)\n".utf8)) }
             switch self {
             case .plain:
                 return try PlainWebSocketTransport(url: url, headers: headers)
             case .urlSession:
                 var request = URLRequest(url: url)
                 for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
-                return URLSessionWebSocketTransport(request: request)
+                return URLSessionWebSocketTransport(request: request, log: log)
             case .network:
                 #if canImport(Network)
-                return NWWebSocketTransport(url: url, headers: headers)
+                return NWWebSocketTransport(url: url, headers: headers, connectTimeout: 5, log: log)
                 #else
                 fatalError("Network.framework only")
                 #endif

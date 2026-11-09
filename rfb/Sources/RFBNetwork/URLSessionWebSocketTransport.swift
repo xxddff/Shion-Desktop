@@ -30,8 +30,13 @@ public final class URLSessionWebSocketTransport: NSObject, RFBTransport, URLSess
     /// The task finished (didCompleteWithError); nothing more will arrive.
     private var completed = false
 
-    /// The request's URL is logged nowhere; it carries the single-use ticket.
-    public init(request: URLRequest, configuration: URLSessionConfiguration = .ephemeral) {
+    private let log: (@Sendable (String) -> Void)?
+
+    /// The request's URL is logged nowhere; it carries the single-use ticket. `log` hears close
+    /// codes and errors (for debugging; no secrets).
+    public init(request: URLRequest, configuration: URLSessionConfiguration = .ephemeral,
+                log: (@Sendable (String) -> Void)? = nil) {
+        self.log = log
         super.init()
         session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
         task = session.webSocketTask(with: request)
@@ -75,6 +80,7 @@ public final class URLSessionWebSocketTransport: NSObject, RFBTransport, URLSess
     /// over, so the session is let go (it holds this delegate until invalidated).
     private func closed(or error: Error) async -> Error {
         defer { session.finishTasksAndInvalidate() }
+        log?("receive/send failed: \(error); closeCode now \(task.closeCode.rawValue)")
         if let info = currentClose() { return info }
         let code = task.closeCode.rawValue
         if code != URLSessionWebSocketTask.CloseCode.invalid.rawValue {
@@ -118,6 +124,7 @@ public final class URLSessionWebSocketTransport: NSObject, RFBTransport, URLSess
 
     /// The task is over. If a close frame came in, its code may only be readable now.
     public func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        log?("didCompleteWithError \(error.map { "\($0)" } ?? "nil"); closeCode \((task as? URLSessionWebSocketTask)?.closeCode.rawValue ?? -1)")
         var info: RFBConnectionClosed?
         if let ws = task as? URLSessionWebSocketTask,
            ws.closeCode.rawValue != URLSessionWebSocketTask.CloseCode.invalid.rawValue {
@@ -135,6 +142,7 @@ public final class URLSessionWebSocketTransport: NSObject, RFBTransport, URLSess
 
     public func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask,
                            didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
+        log?("didCloseWith \(closeCode.rawValue)")
         let info = RFBConnectionClosed(code: closeCode.rawValue, reason: reason.map { String(decoding: $0, as: UTF8.self) } ?? "")
         let waiters = lock.withLock { () -> [CheckedContinuation<Void, Never>] in
             closeInfo = info

@@ -38,10 +38,14 @@ public final class NWWebSocketTransport: RFBTransport, @unchecked Sendable {
     private var phase = Phase.connecting
     private var readyWaiters: [CheckedContinuation<Void, Error>] = []
     private var closeReceived: RFBConnectionClosed?
+    private let log: (@Sendable (String) -> Void)?
 
     /// `url` is `ws://` or `wss://`; it carries the single-use ticket and is logged nowhere.
-    /// Header values are sent, never logged.
-    public init(url: URL, headers: [(String, String)] = []) {
+    /// Header values are sent, never logged. Not ready within `connectTimeout` seconds counts as
+    /// refused. `log` hears connection states and close codes (for debugging; no secrets).
+    public init(url: URL, headers: [(String, String)] = [], connectTimeout: Double = 15,
+                log: (@Sendable (String) -> Void)? = nil) {
+        self.log = log
         let options = NWProtocolWebSocket.Options()
         options.autoReplyPing = true
         options.maximumMessageSize = 64 * 1024 * 1024
@@ -51,9 +55,32 @@ public final class NWWebSocketTransport: RFBTransport, @unchecked Sendable {
         connection = NWConnection(to: .url(url), using: parameters)
         connection.stateUpdateHandler = { [weak self] state in self?.stateChanged(state) }
         connection.start(queue: queue)
+        queue.asyncAfter(deadline: .now() + connectTimeout) { [weak self] in
+            self?.settle(.failure(RFBError.connectionRefused("WebSocket not connected after \(Int(connectTimeout)) s")))
+        }
+    }
+
+    /// Resolves the connect phase once: the first outcome wins.
+    private func settle(_ outcome: Result<Void, Error>) {
+        let waiters = lock.withLock { () -> [CheckedContinuation<Void, Error>]? in
+            guard case .connecting = phase else { return nil }
+            switch outcome {
+            case .success: phase = .ready
+            case .failure(let error): phase = .failed(error)
+            }
+            defer { readyWaiters = [] }
+            return readyWaiters
+        }
+        guard let waiters else { return }
+        if case .failure(let error) = outcome {
+            log?("not connected: \(error)")
+            connection.cancel()
+        }
+        waiters.forEach { $0.resume(with: outcome) }
     }
 
     private func stateChanged(_ state: NWConnection.State) {
+        log?("state \(state)")
         let outcome: Result<Void, Error>?
         switch state {
         case .ready:
@@ -70,17 +97,7 @@ public final class NWWebSocketTransport: RFBTransport, @unchecked Sendable {
             outcome = nil
         }
         guard let outcome else { return }
-        let waiters = lock.withLock { () -> [CheckedContinuation<Void, Error>] in
-            guard case .connecting = phase else { return [] }
-            switch outcome {
-            case .success: phase = .ready
-            case .failure(let error): phase = .failed(error)
-            }
-            defer { readyWaiters = [] }
-            return readyWaiters
-        }
-        waiters.forEach { $0.resume(with: outcome) }
-        if case .failure = outcome, case .waiting = state { connection.cancel() }
+        settle(outcome)
     }
 
     private func waitUntilReady() async throws {
@@ -150,6 +167,7 @@ public final class NWWebSocketTransport: RFBTransport, @unchecked Sendable {
             case .data(let data):
                 return [UInt8](data)
             case .close(let code, let reason):
+                log?("close frame, code \(code.map(String.init) ?? "none")")
                 let closed = RFBConnectionClosed(code: code, reason: reason)
                 lock.withLock { closeReceived = closed }
                 connection.cancel()
@@ -159,6 +177,7 @@ public final class NWWebSocketTransport: RFBTransport, @unchecked Sendable {
             case .control:
                 continue
             case .failed(let message):
+                log?("receive failed: \(message)")
                 if let closed = lock.withLock({ closeReceived }) { throw closed }
                 throw RFBConnectionClosed(code: nil, reason: message)
             case .ended:
@@ -171,7 +190,7 @@ public final class NWWebSocketTransport: RFBTransport, @unchecked Sendable {
         let metadata = NWProtocolWebSocket.Metadata(opcode: .close)
         metadata.closeCode = .protocolCode(code == .normal ? .normalClosure : .goingAway)
         let context = NWConnection.ContentContext(identifier: "close", metadata: [metadata])
-        connection.send(content: nil, contentContext: context, isComplete: true, completion: .idempotent)
+        connection.send(content: nil, contentContext: context, isComplete: true, completion: .contentProcessed { _ in })
         // Give the close frame a moment to leave, then drop the connection.
         try? await Task.sleep(nanoseconds: 200_000_000)
         connection.cancel()
