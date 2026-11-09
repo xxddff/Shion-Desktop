@@ -221,8 +221,9 @@ public actor RFBClient {
 
     /// Asks for our pixel format and encodings, requests the whole screen and processes server
     /// messages until the connection ends, which it reports by throwing (`RFBConnectionClosed`
-    /// for a WebSocket close, `RFBError.endOfStream` for EOF). `onEvent` runs on this actor, with
-    /// the framebuffer as it is right after the event.
+    /// for a WebSocket close, `RFBError.endOfStream` for EOF). A failed send of the client's own
+    /// replies does not end it early: the read side's reason wins (see `sendFailureGrace`).
+    /// `onEvent` runs on this actor, with the framebuffer as it is right after the event.
     public func run(onEvent: @Sendable (RFBEvent, Framebuffer) -> Void = { _, _ in }) async throws {
         if serverInit == nil { try await handshake() }
         if !setupSent {
@@ -232,22 +233,22 @@ public actor RFBClient {
         }
         await sendWhileRunning(fullUpdateRequest(incremental: false))
 
-        while true {
-            let type: UInt8
-            do {
-                type = try await u8()
-            } catch RFBError.endOfStream where sendFailure != nil {
-                throw sendFailure!
+        do {
+            while true {
+                let type = try await u8()
+                switch type {
+                case 0: try await framebufferUpdate(onEvent)
+                case 1: try await colourMapEntries()
+                case 2: onEvent(.bell, framebuffer)
+                case 3: try await serverCutText(onEvent)
+                case 150: try await endOfContinuousUpdates(onEvent)
+                case 248: try await serverFence()
+                default: throw RFBError.unknownServerMessage(type)
+                }
             }
-            switch type {
-            case 0: try await framebufferUpdate(onEvent)
-            case 1: try await colourMapEntries()
-            case 2: onEvent(.bell, framebuffer)
-            case 3: try await serverCutText(onEvent)
-            case 150: try await endOfContinuousUpdates(onEvent)
-            case 248: try await serverFence()
-            default: throw RFBError.unknownServerMessage(type)
-            }
+        } catch RFBError.endOfStream where sendFailure != nil {
+            // The stream just stopped after our send had failed: that failure is the reason.
+            throw sendFailure!
         }
     }
 
