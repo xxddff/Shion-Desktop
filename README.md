@@ -346,6 +346,15 @@ xcodegen           # 生成 Shion.xcodeproj（不进仓库）
 open Shion.xcodeproj
 ```
 
+### 装测试版，连自己的服务器
+
+- **下载**：手动运行 Actions 里的「macOS app」工作流，或者推一个提交说明里带 `[package]` 的提交。跑完后在这次运行的附件里下载 `Shion-macOS-<编号>`（保留 30 天），解压出 `Shion.dmg`，把 Shion 拖进「应用程序」。
+- **第一次打开**：测试版只做了本机签名，没有 Developer ID 签名和公证，macOS 会拦下来。到「系统设置 → 隐私与安全性」里点「仍要打开」，或者在终端运行：`xattr -dr com.apple.quarantine /Applications/Shion.app`。
+- **填设置（⌘,）**：地址填 Webapp 的地址（比如 `https://hermes.example.dev`）；会话令牌填服务器上的 `HERMES_DASHBOARD_SESSION_TOKEN`；Access Client ID / Secret 填 Cloudflare Access 的 service token。点「连接」。令牌和密钥存在钥匙串里；装了新版本后第一次读，macOS 可能问要不要允许，选「始终允许」。
+- **服务器那边**：`/api/ws` 要由 `hermes gateway` 提供，Canonical 协议只在它上面有；单独跑的 `hermes serve` / `hermes dashboard` 说的是旧协议。`HERMES_DASHBOARD_SESSION_TOKEN` 要事先设好，不设的话每次启动都是随机值。经 Cloudflare Tunnel 转到本机端口时，Webapp 的 `public_url` 要填对外的地址，不然 Host 对不上会被拒（4403）。
+- **现在能用的**：助手列表（每个 profile 一个助手）、每个助手的 Bot Chat（历史、发消息、流式回复、工具调用）、批准和提问（在「等你确认」里回答）。今天、待办、日程、日报、看板和云桌面还是示例数据，要等 `shion` 插件和看板接口接上。
+- **连接方式**照官方桌面端连远端的做法：`wss://<地址>/api/ws?token=<会话令牌>`，不带子协议，每个请求带 Cloudflare Access 的两个头；连上后等 `gateway.ready`、发 `client.capabilities`，按服务器要求每 15 秒 `gateway.ping`；连上过又断了会自动重连，并重新打开刚才的对话。
+
 ### 原生 App 的界面检查
 
 界面靠 CI 截图来看，不在本地开模拟器：
