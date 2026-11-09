@@ -97,9 +97,8 @@ final class AppStore {
             guard let self else { throw GatewayError.offline }
             return try await self.credential(for: settings, renew: renew)
         }
-        if !LaunchOptions.current.snapshot {
-            Notifier.shared.start(self)
-        }
+        // screenshot and test runs post nothing and ask for no permission: Notifier sees to that
+        Notifier.shared.start(self)
         if canConnect(serverSettings) && !LaunchOptions.current.snapshot {
             Task { await connect() }
         }

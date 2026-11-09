@@ -1,0 +1,284 @@
+import AppKit
+import XCTest
+
+/// What the board asks of you and tells you, against ci/fake_hermes.py (its cards are in
+/// ci/fake_kanban.py): the cards that stopped on your answer come to 等你确认, where you answer and
+/// let them go on; each assistant's 工作记录 lists the cards it ran today on every board; and the
+/// card notifications, which a test run writes down in a file instead of posting
+/// (`-ShionNotificationLog`). A picture at each step (`work-*.png`).
+final class WorkTests: XCTestCase {
+    private let server = "http://127.0.0.1:8765"
+    private let notes = "/tmp/shion-work-notifications.jsonl"
+
+    @MainActor
+    func testWorkForYou() throws {
+        continueAfterFailure = false
+        try? FileManager.default.removeItem(atPath: notes)
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-ShionSnapshot", "YES",
+            "-ShionRoute", "confirm",
+            "-ShionAppearance", "light",
+            "-ApplePersistenceIgnoreState", "YES",
+            "-ShionNotificationLog", notes,
+        ]
+        app.launch()
+        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 20))
+        let window = app.windows.firstMatch
+        let demo = waitForText("下载上学期成绩单", in: app, timeout: 5)
+        keep(window.screenshot(), "work-0-demo-confirm")
+        XCTAssertTrue(demo, "the demo card waiting on you is not in 等你确认")
+
+        // sign in as BoardTests does
+        app.typeKey(",", modifierFlags: .command)
+        let settings = app.windows.matching(NSPredicate(format: "identifier CONTAINS[c] 'settings'")).firstMatch
+        XCTAssertTrue(settings.waitForExistence(timeout: 5), "no Settings window")
+        type(server, into: settings.textFields["server-address"])
+        type("ci-client", into: settings.textFields["access-id"])
+        type("ci-secret", into: settings.secureTextFields["access-secret"])
+        settings.buttons["sign-in"].click()
+        let state = element("connection-state", in: settings)
+        let online = NSPredicate(format: "label BEGINSWITH %@ OR value BEGINSWITH %@", "已连接", "已连接")
+        let connected = XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: online, object: state)], timeout: 45)
+        guard connected == .completed else {
+            keep(XCUIScreen.main.screenshot(), "work-1-not-connected")
+            return XCTFail("Not connected: \(state.label) / \(String(describing: state.value))")
+        }
+        app.typeKey("w", modifierFlags: .command)
+
+        // 等你确认: the cards stopped on you, on both boards: a code only you get (needs_input), an
+        // account it does not have (capability); not the one stopped on a flaky site (transient)
+        let grades = element("card-ask-t_grades", in: app)
+        XCTAssertTrue(grades.waitForExistence(timeout: 20), "the card waiting on a code did not come to 等你确认")
+        XCTAssertTrue(element("card-ask-t_moodle", in: app).waitForExistence(timeout: 5), "no card waiting on an account")
+        XCTAssertTrue(element("card-ask-t_bank", in: app).waitForExistence(timeout: 15), "no card from the other board")
+        XCTAssertTrue(waitForText("门户要两步验证码，等你把验证码发过来", in: app, timeout: 5), "no reason on the card")
+        XCTAssertTrue(waitForText("缺少能力：Moodle 要学校的统一认证登录", in: app, timeout: 5), "no capability reason")
+        XCTAssertTrue(waitForText("门户要两步验证码，发到你的手机了。", in: app, timeout: 5), "the assistant's note is not shown")
+        XCTAssertFalse(element("card-ask-t_weather", in: app).exists, "a block a retry clears came to 等你确认")
+        XCTAssertFalse(waitForText("下载上学期成绩单", in: app, timeout: 0.5), "the demo card is still there")
+        Thread.sleep(forTimeInterval: 1)
+        keep(window.screenshot(), "work-1-confirm")
+        // what was waiting before Shion connected is not news
+        XCTAssertTrue(cardNotes().isEmpty, "notified about cards that were waiting already: \(cardNotes())")
+
+        // the code, and 让它继续: the card leaves; its worker runs, stops on the same thing again
+        // (the code expired), and Hermes's loop breaker sends it to triage: it comes back. 等你确认
+        // is in front, so that is no notification.
+        answer("验证码是 135790（CI）", card: "t_grades", in: app)
+        XCTAssertTrue(waitUntil(timeout: 5) { !self.element("card-ask-t_grades", in: app).exists }, "the card stayed after 让它继续")
+        let again = waitForText("又卡在同一处：验证码过期了，再发一个新的（CI）", in: app, timeout: 20)
+        keep(window.screenshot(), "work-2-asks-again")
+        XCTAssertTrue(again, "the card that stopped on the same thing again did not come back")
+        XCTAssertFalse(cardNotes().contains { $0.card == "t_grades" }, "notified while 等你确认 was in front")
+
+        // again: this time it hands the card in for review in a few seconds, while 整理第8回录音 is
+        // done and 詩音's 把这周的日程排进日历 stops on a question for you
+        answer("验证码是 864200（CI）", card: "t_grades", in: app)
+        XCTAssertTrue(waitUntil(timeout: 5) { !self.element("card-ask-t_grades", in: app).exists }, "the card stayed after 让它继续 again")
+
+        // 课程's 工作记录: the cards it ran today, on both boards; not yesterday's, not 通勤's
+        element("bot-study", in: app).click()
+        let tab = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "工作记录")).firstMatch
+        XCTAssertTrue(tab.waitForExistence(timeout: 10), "no 工作记录 tab")
+        tab.click()
+        let other = element("work-t_receipt", in: app).waitForExistence(timeout: 10)
+        Thread.sleep(forTimeInterval: 0.5)
+        keep(window.screenshot(), "work-3-log")
+        XCTAssertTrue(other, "the card it ran on the other board is not in its log")
+        for card in ["t_rec8", "t_grades", "t_moodle"] {
+            XCTAssertTrue(element("work-\(card)", in: app).exists, "\(card) is not in the log")
+        }
+        XCTAssertFalse(element("work-t_notes7", in: app).exists, "yesterday's card is in today's log")
+        XCTAssertFalse(element("work-t_weather", in: app).exists, "通勤's card is in 课程's log")
+        XCTAssertFalse(element("work-t_dl8", in: app).exists, "a card that never ran is in the log")
+        XCTAssertTrue(waitForText("收据 12 张，记进了表格（CI）。", in: app, timeout: 3), "no handoff in the log")
+        XCTAssertTrue(waitForText("中途出错", in: app, timeout: 3), "the run that crashed is not in the log")
+
+        // the review, the done card and the question come as notifications: 课程's page is in front
+        let told = waitUntil(timeout: 30) {
+            let notes = self.cardNotes()
+            return notes.contains { $0.card == "t_grades" && $0.title.contains("等你检查") }
+                && notes.contains { $0.card == "t_rec8" && $0.title.hasSuffix("做完了") }
+                && notes.contains { $0.card == "t_week" && $0.title.contains("卡住了") }
+        }
+        XCTAssertTrue(told, "missing notifications: \(cardNotes())")
+        let review = cardNotes().first { $0.card == "t_grades" }
+        XCTAssertEqual(review?.board, "study", "the notification does not say the card's board")
+        XCTAssertTrue(review?.body.contains("成绩单下载好了") == true, "the handoff is not in the notification: \(String(describing: review))")
+        XCTAssertTrue(cardNotes().first { $0.card == "t_week" }?.body.contains("你定一下") == true, "the question is not in its notification")
+        let handedIn = waitForText("交给你检查", in: app, timeout: 10)
+        keep(window.screenshot(), "work-4-log-updated")
+        XCTAssertTrue(handedIn, "the log does not show the card handed in")
+
+        // a card of the log opens on the side, from the other board too
+        element("work-t_receipt", in: app).click()
+        let detail = waitForText("原件在「副业」文件夹里（CI）。", in: app, timeout: 10)
+        Thread.sleep(forTimeInterval: 0.5)
+        keep(window.screenshot(), "work-5-log-detail")
+        XCTAssertTrue(detail, "the card's comments did not show")
+        XCTAssertTrue(waitForText("看板 side", in: app, timeout: 3), "the detail does not say the other board")
+
+        // on the board page nothing is notified: a card made there runs and is done in front of you
+        element("nav-board", in: app).click()
+        XCTAssertTrue(waitForText("整理第8回录音（CI）", in: app, timeout: 10), "the board did not show")
+        make("在看板上做完的卡（CI 通知）", in: app)
+        let doneHere = waitUntil(timeout: 20) { self.inColumn("在看板上做完的卡（CI 通知）", "done", in: app) }
+        Thread.sleep(forTimeInterval: 1)
+        keep(window.screenshot(), "work-6-done-on-board")
+        XCTAssertTrue(doneHere, "the card made on the board was not done")
+        XCTAssertFalse(cardNotes().contains { $0.body.contains("在看板上做完的卡") }, "notified while the board was in front")
+
+        // done cards can be left out: Settings, then a card that is done while you are on 今天
+        app.typeKey(",", modifierFlags: .command)
+        let prefs = app.windows.matching(NSPredicate(format: "identifier CONTAINS[c] 'settings'")).firstMatch
+        XCTAssertTrue(prefs.waitForExistence(timeout: 5), "no Settings window")
+        let toggle = element("board-notify-done", in: prefs)
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5), "no setting for done cards")
+        let off = turnOff(toggle)
+        keep(prefs.screenshot(), "work-7-settings")
+        XCTAssertTrue(off, "the setting did not turn off: \(String(describing: toggle.value))")
+        app.typeKey("w", modifierFlags: .command)
+        make("离开看板后做完的卡（CI 通知）", in: app)
+        element("nav-today", in: app).click()
+        Thread.sleep(forTimeInterval: 9)
+        element("nav-board", in: app).click()
+        let doneAway = waitUntil(timeout: 15) { self.inColumn("离开看板后做完的卡（CI 通知）", "done", in: app) }
+        XCTAssertTrue(doneAway, "the second card was not done")
+        XCTAssertFalse(cardNotes().contains { $0.body.contains("离开看板后做完的卡") }, "notified about a done card with that turned off")
+
+        // 打开卡片 in 等你确认 opens it on its board: the other board's card switches the board
+        element("nav-confirm", in: app).click()
+        let open = element("card-ask-open-t_bank", in: app)
+        XCTAssertTrue(open.waitForExistence(timeout: 10), "no 打开卡片 on the other board's card")
+        open.click()
+        let opened = waitForText("银行要你在手机上点一下确认", in: app, timeout: 10) && waitForText("看板 side", in: app, timeout: 5)
+        let switched = waitForText("整理副业发票（CI）", in: app, timeout: 5)
+        Thread.sleep(forTimeInterval: 0.5)
+        keep(window.screenshot(), "work-8-opened-on-its-board")
+        XCTAssertTrue(opened, "the card did not open")
+        XCTAssertTrue(switched, "the board did not switch to the card's")
+        print("notifications written down:\n\(cardNotes().map { "\($0.card) \($0.title) | \($0.body)" }.joined(separator: "\n"))")
+        app.terminate()
+    }
+
+    /// A notification about a card, as the test run wrote it down.
+    private struct Note: CustomStringConvertible {
+        let card: String
+        let board: String
+        let title: String
+        let body: String
+
+        var description: String { "\(card)@\(board): \(title) / \(body)" }
+    }
+
+    /// The card notifications so far (the others, replies and approvals, are left out).
+    private func cardNotes() -> [Note] {
+        guard let text = try? String(contentsOfFile: notes, encoding: .utf8) else { return [] }
+        return text.split(separator: "\n").compactMap { line in
+            guard let row = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+                  let info = row["info"] as? [String: Any], let card = info["card"] as? String
+            else { return nil }
+            return Note(card: card, board: info["board"] as? String ?? "", title: row["title"] as? String ?? "",
+                        body: row["body"] as? String ?? "")
+        }
+    }
+
+    /// Writes `text` on a card in 等你确认 and lets it go on.
+    @MainActor
+    private func answer(_ text: String, card: String, in app: XCUIApplication) {
+        let field = element("card-ask-reply-\(card)", in: app)
+        XCTAssertTrue(field.waitForExistence(timeout: 5), "no reply field on \(card)")
+        field.click()
+        field.typeText(text)
+        element("card-ask-resume-\(card)", in: app).click()
+    }
+
+    /// A new card for 课程 from the board page's 「＋」.
+    @MainActor
+    private func make(_ title: String, in app: XCUIApplication) {
+        element("new-card", in: app).click()
+        let field = element("new-card-title", in: app)
+        XCTAssertTrue(field.waitForExistence(timeout: 5), "no new-card sheet")
+        field.click()
+        field.typeText(title)
+        element("new-card-create", in: app).click()
+        XCTAssertTrue(waitForText(title, in: app, timeout: 10), "the new card did not show")
+    }
+
+    /// Whether a card titled `title` is in one of the board page's columns. Labels only: a column's
+    /// scroll bar has a number for its value, which a CONTAINS predicate throws on.
+    @MainActor
+    private func inColumn(_ title: String, _ column: String, in app: XCUIApplication) -> Bool {
+        let box = element("board-column-\(column)", in: app)
+        return box.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", title)).firstMatch.exists
+    }
+
+    /// Turns a switch off: a click on it, or on its knob at the trailing end when the click went
+    /// to its label.
+    @MainActor
+    private func turnOff(_ toggle: XCUIElement) -> Bool {
+        func isOn() -> Bool {
+            if let number = toggle.value as? NSNumber { return number.boolValue }
+            if let text = toggle.value as? String { return text == "1" || text.lowercased() == "on" }
+            return true
+        }
+        guard isOn() else { return true }
+        toggle.click()
+        if waitUntil(timeout: 2, { !isOn() }) { return true }
+        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.5)).click()
+        if waitUntil(timeout: 2, { !isOn() }) { return true }
+        let control = toggle.switches.firstMatch.exists ? toggle.switches.firstMatch : toggle.checkBoxes.firstMatch
+        if control.exists {
+            control.click()
+        }
+        return waitUntil(timeout: 2) { !isOn() }
+    }
+
+    @MainActor
+    private func type(_ text: String, into field: XCUIElement) {
+        XCTAssertTrue(field.waitForExistence(timeout: 5), "no field \(field)")
+        field.click()
+        field.typeKey("a", modifierFlags: .command)
+        field.typeText(text)
+    }
+
+    @MainActor
+    private func element(_ identifier: String, in root: XCUIElement) -> XCUIElement {
+        root.descendants(matching: .any).matching(identifier: identifier).firstMatch
+    }
+
+    @MainActor
+    private func waitUntil(timeout: TimeInterval, _ condition: () -> Bool) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            if condition() { return true }
+            Thread.sleep(forTimeInterval: 0.5)
+        } while Date() < deadline
+        return false
+    }
+
+    /// Text anywhere in the app, plain or selectable; `value` only on text elements.
+    @MainActor
+    private func waitForText(_ text: String, in app: XCUIApplication, timeout: TimeInterval) -> Bool {
+        let either = NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", text, text)
+        let queries = [
+            app.staticTexts.matching(either),
+            app.textViews.matching(either),
+            app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", text)),
+        ]
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            if queries.contains(where: { $0.firstMatch.exists }) { return true }
+            Thread.sleep(forTimeInterval: 0.5)
+        } while Date() < deadline
+        return false
+    }
+
+    private func keep(_ screenshot: XCUIScreenshot, _ name: String) {
+        let attachment = XCTAttachment(screenshot: screenshot)
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+}

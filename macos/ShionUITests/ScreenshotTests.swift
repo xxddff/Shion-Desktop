@@ -84,6 +84,33 @@ final class ScreenshotTests: XCTestCase {
         app.terminate()
     }
 
+    /// 课程's 工作记录 on the demo day (`-ShionTab work`), light and dark, and a card of it opened
+    /// on the side.
+    @MainActor
+    func testWorkLog() throws {
+        continueAfterFailure = true
+        for appearance in ["light", "dark"] {
+            let app = launch(route: "chat-study", appearance: appearance, extra: ["-ShionTab", "work"])
+            let window = app.windows.firstMatch
+            guard window.waitForExistence(timeout: 20) else {
+                XCTFail("No window for 工作记录 (\(appearance))")
+                app.terminate()
+                continue
+            }
+            Thread.sleep(forTimeInterval: 1)
+            keep(window.screenshot(), name: "work-study-\(appearance)")
+            let row = window.descendants(matching: .any).matching(identifier: "work-g5d2").firstMatch
+            if row.waitForExistence(timeout: 5) {
+                row.click()
+                Thread.sleep(forTimeInterval: 1)
+                keep(window.screenshot(), name: "work-study-detail-\(appearance)")
+            } else {
+                XCTFail("No card in 工作记录 (\(appearance))")
+            }
+            app.terminate()
+        }
+    }
+
     @MainActor
     private func launch(route: String, appearance: String, extra: [String] = []) -> XCUIApplication {
         let app = XCUIApplication()

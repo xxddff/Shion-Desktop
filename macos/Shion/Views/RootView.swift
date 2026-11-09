@@ -37,7 +37,7 @@ struct DetailView: View {
         case .reports: ReportsView().askToolbar()
         case .board: BoardView().askToolbar()
         case .desktop: DesktopView().askToolbar()
-        case .chat(let id): ChatView(botId: id).askToolbar(id != store.chiefId).id(id)
+        case .chat(let id): AssistantView(botId: id).askToolbar(id != store.chiefId).id(id)
         }
     }
 }
@@ -64,7 +64,7 @@ struct Sidebar: View {
             }
             Section("助手") {
                 ForEach(store.bots) { bot in
-                    BotRow(bot: bot, waiting: store.asks.contains { $0.botId == bot.id })
+                    BotRow(bot: bot, waiting: store.waitsOnYou(bot.id))
                         .accessibilityIdentifier("bot-\(bot.id)")
                         .tag(Route.chat(bot.id))
                 }
@@ -79,8 +79,9 @@ struct Sidebar: View {
     /// Warm while asks wait on you; the system's own color on the selected row, where warm would
     /// sink into the accent fill.
     private var confirmBadge: Text? {
-        guard !store.asks.isEmpty else { return nil }
-        let count = Text("\(store.asks.count)")
+        let waiting = store.confirmCount
+        guard waiting > 0 else { return nil }
+        let count = Text("\(waiting)")
         return selection == .confirm ? count : count.foregroundStyle(Palette.warm).fontWeight(.semibold)
     }
 }

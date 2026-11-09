@@ -15,7 +15,7 @@ struct MenuBarLabel: View {
         }
         // the label lives as long as the app: it keeps the Dock badge (asks waiting on you) and
         // lets a clicked notification reopen a closed main window
-        .onChange(of: store.asks.count, initial: true) { _, count in
+        .onChange(of: store.confirmCount, initial: true) { _, count in
             NSApp.dockTile.badgeLabel = count > 0 ? "\(count)" : nil
         }
         .onAppear {
@@ -88,12 +88,12 @@ struct MenuBarPanel: View {
             .padding(.horizontal, 10)
             Divider().padding(.vertical, 6)
 
-            if !store.asks.isEmpty {
+            if store.confirmCount > 0 {
                 Button {
                     store.route = .confirm
                     NSApp.activate()
                 } label: {
-                    PanelRow(systemImage: "hand.raised", text: "\(store.asks.count) 件事等你确认") {
+                    PanelRow(systemImage: "hand.raised", text: "\(store.confirmCount) 件事等你确认") {
                         Image(systemName: "arrow.right").foregroundStyle(.secondary)
                     }
                 }

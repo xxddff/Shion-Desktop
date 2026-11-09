@@ -4,8 +4,13 @@ import Observation
 /// The server's kanban board while connected: the cards (`GET /board`), every board's counts
 /// (`GET /boards`, for the server-wide limit), who is doing what on this board (`GET /assignees`,
 /// for the per-assistant limit), and the details the cards need (`GET /tasks/{id}`: a block's
-/// reason, the parents a card waits for). Kept current by the plugin's event socket; any event
-/// reads the board again.
+/// reason, the parents a card waits for, the runs of the cards that ran today). Kept current by
+/// the plugin's event socket; any event reads the board again. The other boards are read when
+/// their counts move (checked every 15 seconds) and once a minute.
+///
+/// Across every board it also keeps what concerns you: the cards waiting on your answer (for
+/// 等你确认), each assistant's runs today (its 工作记录), and the changes worth a notification
+/// (`onMoment`), worked out in BoardWork.swift.
 ///
 /// Shion never calls `POST /dispatch`: it would start cards past `kanban.max_in_progress` and
 /// `max_in_progress_per_profile`. A ready card waits for the dispatcher's next tick.
@@ -29,10 +34,23 @@ final class BoardStore {
     /// The other boards' cards, by board, for 今天's 助手在做 and the cards in chats: the page
     /// shows one board at a time, the rest is read once a minute.
     private(set) var elsewhere: [String: [KanbanTask]] = [:]
-    /// Details of the other boards' blocked cards, for their reasons.
+    /// Details of the other boards' cards: the blocked ones (for their reasons), the waiting ones,
+    /// and the ones that ran today.
     private(set) var elsewhereDetails: [String: KanbanDetail] = [:]
     /// Why the last change did not go through.
     var actionError: String?
+    /// Whether a card being done is a notification too; a card stopped on you, or handed to you
+    /// to check, always is. Kept in the preferences, except in screenshot and test runs.
+    var notifyDone = BoardStore.savedNotifyDone {
+        didSet {
+            guard !LaunchOptions.current.snapshot else { return }
+            UserDefaults.standard.set(notifyDone, forKey: Self.notifyDoneKey)
+        }
+    }
+    /// A card to open on the board page (from a notification, or 等你确认), until the page has.
+    var revealing: CardRef?
+    /// Told of a card whose moment changed to one worth a notification (Notifier listens).
+    @ObservationIgnored var onMoment: ((CardMoment) -> Void)?
 
     /// The name you signed in with, sent as your comments' author; without it (a session token)
     /// Hermes records them as `dashboard`. Cards you make are always `dashboard`'s: the server sets that.
@@ -49,8 +67,31 @@ final class BoardStore {
     @ObservationIgnored private var stale: Set<String> = []
     /// The card open in the inspector.
     @ObservationIgnored private var focus: String?
+    /// The card open in an inspector away from the board page (an assistant's 工作记录), when it is
+    /// on another board: its detail is kept fresh as the other boards are read.
+    @ObservationIgnored private var focusElsewhere: CardRef?
     /// The server's clock minus this Mac's, from `/board`'s `now`.
     @ObservationIgnored private var skew: TimeInterval = 0
+    /// board → card → its moment (BoardWork.momentKey) at the last read. A board not in it has not
+    /// been read yet: what is on it then is not news.
+    @ObservationIgnored private var moments: [String: [String: String]] = [:]
+    /// The other boards' cards as they were when their details were read (BoardWork.signature).
+    @ObservationIgnored private var elsewhereSigns: [String: String] = [:]
+    /// Reads the boards' counts every 15 seconds.
+    @ObservationIgnored private var watcher: Task<Void, Never>?
+    /// The generation a read of this board (of the other boards) is under way for, and whether
+    /// another was asked for meanwhile.
+    @ObservationIgnored private var reading: Int?
+    @ObservationIgnored private var readAgain = false
+    @ObservationIgnored private var readingElsewhere: Int?
+    @ObservationIgnored private var readElsewhereAgain = false
+
+    private static let notifyDoneKey = "BoardNotifyDone"
+
+    private static var savedNotifyDone: Bool {
+        guard !LaunchOptions.current.snapshot else { return true }
+        return UserDefaults.standard.object(forKey: notifyDoneKey) as? Bool ?? true
+    }
 
     var serverNow: Date { Date().addingTimeInterval(skew) }
 
@@ -60,6 +101,24 @@ final class BoardStore {
     var totalRunning: Int { boards.reduce(0) { $0 + ($1.counts["running"] ?? 0) } }
 
     func task(_ id: String) -> KanbanTask? { tasks.first { $0.id == id } }
+
+    /// Whether `board` names the board shown (nil does).
+    private func isShown(_ board: String?) -> Bool { board == nil || board == slug }
+
+    /// A card on any board.
+    func task(_ id: String, on board: String?) -> KanbanTask? {
+        guard let board, !isShown(board) else { return task(id) }
+        return elsewhere[board]?.first { $0.id == id }
+    }
+
+    func detail(_ id: String, on board: String?) -> KanbanDetail? {
+        isShown(board) ? details[id] : elsewhereDetails[id]
+    }
+
+    func boardInfo(_ board: String?) -> KanbanBoardInfo? {
+        let wanted = board ?? slug
+        return boards.first { $0.slug == wanted }
+    }
 
     // MARK: starting and stopping
 
@@ -97,17 +156,36 @@ final class BoardStore {
         actionError = nil
         stale = []
         focus = nil
+        focusElsewhere = nil
+        moments = [:]
+        elsewhereSigns = [:]
+        watcher?.cancel()
+        watcher = nil
+        revealing = nil
     }
 
-    /// Shows another board: its own cards and its own event stream.
+    /// Shows another board: its own cards and its own event stream. The board left counts as one
+    /// of the others from now on, and the one shown starts from what was read of it.
     func switchTo(_ slug: String) {
         guard active, slug != self.slug else { return }
         generation += 1
         close()
+        if let old = self.slug {
+            elsewhere[old] = tasks
+            for task in tasks {
+                guard let detail = details[task.id] else { continue }
+                elsewhereDetails[task.id] = detail
+                elsewhereSigns[task.id] = BoardWork.signature(task)
+            }
+        }
+        let incoming = elsewhere.removeValue(forKey: slug) ?? []
         self.slug = slug
-        tasks = []
-        details = [:]
-        stale = []
+        tasks = incoming
+        details = incoming.reduce(into: [:]) { held, task in
+            held[task.id] = elsewhereDetails[task.id]
+        }
+        // read again with the board: what was read of it may be a minute old
+        stale = Set(incoming.map(\.id))
         loaded = false
         loadError = nil
         let token = generation
@@ -117,6 +195,7 @@ final class BoardStore {
             guard token == self.generation else { return }
             self.listen(token)
             await self.readElsewhere(token)
+            self.poll(token)
         }
     }
 
@@ -130,14 +209,40 @@ final class BoardStore {
         guard token == generation else { return }
         listen(token)
         await readElsewhere(token)
-        // other boards have no event stream here: their counts (the server-wide limit) and cards
-        // are read now and then
+        poll(token)
+    }
+
+    /// Other boards have no event stream here: their counts (the server-wide limit) and cards are
+    /// read once a minute, and again whenever their counts move (checked every 15 seconds), so a
+    /// card there that stops on you or is done is noticed soon after. Restarted with each board.
+    private func poll(_ token: Int) {
+        poller?.cancel()
         poller = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(60))
                 guard let self, token == self.generation else { return }
                 await self.reload()
                 await self.readElsewhere(token)
+            }
+        }
+        watcher?.cancel()
+        watcher = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(15))
+                guard let self, token == self.generation, let client = self.client else { return }
+                guard let listing = try? await client.get("/boards"), token == self.generation else { continue }
+                let fresh = (listing["boards"]?.array ?? []).compactMap { KanbanBoardInfo($0) }
+                let shown = self.slug
+                func others(_ list: [KanbanBoardInfo]) -> [String: [String: Int]] {
+                    Dictionary(list.filter { $0.slug != shown }.map { ($0.slug, $0.counts) }, uniquingKeysWith: { a, _ in a })
+                }
+                let moved = others(fresh) != others(self.boards)
+                if fresh != self.boards {
+                    self.boards = fresh
+                }
+                if moved {
+                    await self.readElsewhere(token)
+                }
             }
         }
     }
@@ -154,10 +259,27 @@ final class BoardStore {
 
     // MARK: reading
 
-    /// The boards, this board's cards and assignees, then the details its cards need.
+    /// The boards, this board's cards and assignees, then the details its cards need, then what
+    /// changed that is worth telling. One read at a time: one asked for meanwhile follows it, so
+    /// an older read never lands after a newer one.
     func reload() async {
         let token = generation
-        guard let client else { return }
+        if reading == token {
+            readAgain = true
+            return
+        }
+        reading = token
+        repeat {
+            readAgain = false
+            await readShown(token)
+        } while readAgain && token == generation
+        if reading == token {
+            reading = nil
+        }
+    }
+
+    private func readShown(_ token: Int) async {
+        guard let client, token == generation else { return }
         do {
             let listing = try await client.get("/boards")
             guard token == generation else { return }
@@ -177,6 +299,9 @@ final class BoardStore {
             return
         }
         await fetchDetails(token)
+        guard token == generation, let slug else { return }
+        // a detail an event touched and not read since is the card as it was
+        notice(slug, tasks) { id in self.stale.contains(id) ? nil : self.details[id] }
     }
 
     /// A `/board` reply's cards, less the archived ones.
@@ -186,26 +311,62 @@ final class BoardStore {
             .flatMap { column in (column["tasks"]?.array ?? []).compactMap { KanbanTask($0) } }
     }
 
-    /// The other boards' cards, and the reasons their blocked ones give; a board with no cards is
-    /// not read.
+    /// The other boards' cards and the details they need (a detail read before is kept while its
+    /// card has not changed), then what changed on them that is worth telling. One read at a
+    /// time, as `reload`. A board with no cards is not read.
     private func readElsewhere(_ token: Int) async {
-        guard let client else { return }
+        if readingElsewhere == token {
+            readElsewhereAgain = true
+            return
+        }
+        readingElsewhere = token
+        repeat {
+            readElsewhereAgain = false
+            await readOthers(token)
+        } while readElsewhereAgain && token == generation
+        if readingElsewhere == token {
+            readingElsewhere = nil
+        }
+    }
+
+    private func readOthers(_ token: Int) async {
+        guard let client, token == generation else { return }
+        let start = BoardWork.today(serverNow)
         var cards: [String: [KanbanTask]] = [:]
-        var blocked: [String: KanbanDetail] = [:]
-        for info in boards where info.slug != slug && info.counts.values.contains(where: { $0 > 0 }) {
+        var kept: [String: KanbanDetail] = [:]
+        var signs: [String: String] = [:]
+        for info in boards where info.slug != slug {
+            guard info.counts.values.contains(where: { $0 > 0 }) else {
+                // nothing on it: whatever comes later is news
+                if moments[info.slug] == nil {
+                    moments[info.slug] = [:]
+                }
+                continue
+            }
             guard let reply = try? await client.get("/board", board: info.slug) else { continue }
             guard token == generation else { return }
             let found = Self.tasks(in: reply)
             cards[info.slug] = found
-            for task in found where task.status == "blocked" {
-                if let detail = try? await client.get("/tasks/\(KanbanClient.encode(task.id))", board: info.slug) {
-                    blocked[task.id] = KanbanDetail(detail)
+            for task in found where wantsDetail(task, since: start) || focusElsewhere == CardRef(board: info.slug, id: task.id) {
+                let sign = BoardWork.signature(task)
+                if let held = elsewhereDetails[task.id], elsewhereSigns[task.id] == sign {
+                    kept[task.id] = held
+                    signs[task.id] = sign
+                    continue
                 }
+                guard let reply = try? await client.get("/tasks/\(KanbanClient.encode(task.id))", board: info.slug) else { continue }
+                guard token == generation else { return }
+                kept[task.id] = KanbanDetail(reply)
+                signs[task.id] = sign
             }
         }
         guard token == generation else { return }
         elsewhere = cards
-        elsewhereDetails = blocked
+        elsewhereDetails = kept
+        elsewhereSigns = signs
+        for (board, found) in cards {
+            notice(board, found) { kept[$0] }
+        }
     }
 
     private func apply(_ reply: JSONValue, assignees: JSONValue?) {
@@ -231,34 +392,57 @@ final class BoardStore {
         details = details.filter { ids.contains($0.key) }
     }
 
-    /// Blocked cards (for the reason) and cards waiting on parents (for their titles), plus the one
-    /// in the inspector.
+    /// The details this board's cards need, plus the one in the inspector.
     private func fetchDetails(_ token: Int) async {
-        let wanted = tasks.filter { task in
-            task.id == focus || task.status == "blocked" || task.status == "scheduled"
-                || (task.status == "todo" && task.parents > 0)
-        }
+        let start = BoardWork.today(serverNow)
+        let wanted = tasks.filter { $0.id == focus || wantsDetail($0, since: start) }
         for task in wanted where details[task.id] == nil || stale.contains(task.id) {
             guard token == generation else { return }
             await loadDetail(task.id)
         }
     }
 
-    func loadDetail(_ id: String) async {
-        let token = generation
-        guard let client else { return }
-        guard let reply = try? await client.get("/tasks/\(KanbanClient.encode(id))", board: slug),
-              token == generation
-        else { return }
-        details[id] = KanbanDetail(reply)
-        stale.remove(id)
+    /// Cards whose detail is kept: blocked ones (for the reason), ones waiting on parents (for
+    /// their titles) or on time, and the ones that ran today (their runs are the 工作记录).
+    private func wantsDetail(_ task: KanbanTask, since start: Date) -> Bool {
+        task.status == "blocked" || task.status == "scheduled" || (task.status == "todo" && task.parents > 0)
+            || BoardWork.touched(task, since: start)
     }
 
-    /// The card shown in the inspector: its detail is read now and kept fresh.
-    func select(_ id: String?) {
-        focus = id
-        guard let id, active, details[id] == nil || stale.contains(id) else { return }
-        Task { await loadDetail(id) }
+    /// A card's detail, on this board or another.
+    func loadDetail(_ id: String, on board: String? = nil) async {
+        let token = generation
+        let board = board ?? slug
+        guard let client else { return }
+        guard let reply = try? await client.get("/tasks/\(KanbanClient.encode(id))", board: board),
+              token == generation
+        else { return }
+        if isShown(board) {
+            details[id] = KanbanDetail(reply)
+            stale.remove(id)
+        } else {
+            elsewhereDetails[id] = KanbanDetail(reply)
+            if let board, let task = elsewhere[board]?.first(where: { $0.id == id }) {
+                elsewhereSigns[id] = BoardWork.signature(task)
+            }
+        }
+    }
+
+    /// The card shown in an inspector: its detail is read now and kept fresh.
+    func select(_ id: String?, on board: String? = nil) {
+        let here = isShown(board)
+        if here {
+            focus = id
+        } else {
+            focusElsewhere = id.map { CardRef(board: board, id: $0) }
+        }
+        guard let id, active else { return }
+        if here {
+            guard details[id] == nil || stale.contains(id) else { return }
+        } else {
+            guard elsewhereDetails[id] == nil else { return }
+        }
+        Task { await loadDetail(id, on: board) }
     }
 
     // MARK: live updates
@@ -395,22 +579,149 @@ final class BoardStore {
 
     /// A comment on the card; with `resume`, a blocked card then goes back to ready (what a
     /// worker reads first when it runs again is the comment thread).
-    func comment(_ id: String, _ text: String, resume: Bool) async {
-        guard let client else { return }
+    func comment(_ id: String, _ text: String, resume: Bool, on board: String? = nil) async {
+        if let failure = await answer(id, on: board, text: text, resume: resume) {
+            actionError = failure
+        }
+    }
+
+    /// Your word on a card, as a comment under the name you signed in with (none: Hermes writes
+    /// `dashboard`); with `resume` the card then goes on: PATCH ready unblocks a blocked card, and
+    /// takes one the loop breaker moved to triage back to the queue. Its worker reads the comments
+    /// first when it runs again. The move shows at once and is put back if refused. Returns why
+    /// it did not go through.
+    func answer(_ id: String, on board: String?, text: String, resume: Bool) async -> String? {
+        guard let client else { return GatewayError.offline.localizedDescription }
+        let board = board ?? slug
         let path = "/tasks/\(KanbanClient.encode(id))"
+        let before = resume ? setStatus(id, on: board, to: "ready") : nil
+        var failure: String?
         do {
-            var comment: [String: JSONValue] = ["body": .string(text)]
-            if let author { comment["author"] = .string(author) }
-            try await client.request("POST", path + "/comments", board: slug, body: .object(comment))
-            if resume {
-                try await client.request("PATCH", path, board: slug, body: ["status": "ready"])
+            if !text.isEmpty {
+                var comment: [String: JSONValue] = ["body": .string(text)]
+                if let author { comment["author"] = .string(author) }
+                try await client.request("POST", path + "/comments", board: board, body: .object(comment))
             }
         } catch {
-            actionError = "没能留言：\(error.localizedDescription)"
+            failure = "没能留言：\(error.localizedDescription)"
         }
-        stale.insert(id)
-        await loadDetail(id)
-        scheduleRefresh()
+        if resume, failure == nil {
+            do {
+                try await client.request("PATCH", path, board: board, body: ["status": "ready"])
+            } catch {
+                failure = "没能让它继续：\(error.localizedDescription)"
+            }
+        }
+        if failure != nil, let before {
+            put(before, on: board)
+        }
+        await refreshCard(id, on: board)
+        return failure
+    }
+
+    /// Opens a card on the board page, switching to its board first when it is another one.
+    func reveal(_ id: String, on board: String?) {
+        if active, let board, !isShown(board), boards.contains(where: { $0.slug == board }) {
+            switchTo(board)
+        }
+        revealing = CardRef(board: board, id: id)
+    }
+
+    /// A card's status in what is shown, before the server says so; returns it as it was.
+    private func setStatus(_ id: String, on board: String?, to status: String) -> KanbanTask? {
+        if isShown(board) {
+            guard let index = tasks.firstIndex(where: { $0.id == id }) else { return nil }
+            let before = tasks[index]
+            tasks[index].status = status
+            return before
+        }
+        guard let board, let index = elsewhere[board]?.firstIndex(where: { $0.id == id }) else { return nil }
+        let before = elsewhere[board]?[index]
+        elsewhere[board]?[index].status = status
+        return before
+    }
+
+    private func put(_ task: KanbanTask, on board: String?) {
+        if isShown(board) {
+            if let index = tasks.firstIndex(where: { $0.id == task.id }) {
+                tasks[index] = task
+            }
+        } else if let board, let index = elsewhere[board]?.firstIndex(where: { $0.id == task.id }) {
+            elsewhere[board]?[index] = task
+        }
+    }
+
+    /// After a change to a card: its detail and its board again.
+    private func refreshCard(_ id: String, on board: String?) async {
+        if isShown(board) {
+            stale.insert(id)
+            await loadDetail(id)
+            scheduleRefresh()
+        } else {
+            await loadDetail(id, on: board)
+            await readElsewhere(generation)
+        }
+    }
+
+    // MARK: every board
+
+    /// Every board's cards with the board each is on, this one's first.
+    var allCards: [(board: String?, task: KanbanTask)] {
+        tasks.map { (board: slug, task: $0) }
+            + elsewhere.keys.sorted().flatMap { board in
+                (elsewhere[board] ?? []).map { (board: Optional(board), task: $0) }
+            }
+    }
+
+    /// The cards waiting on your answer, on every board, the latest first, each with what was
+    /// said on it since it stopped.
+    var waitingOnYou: [BoardAsk] {
+        allCards.compactMap { board, task -> BoardAsk? in
+            let detail = detail(task.id, on: board)
+            guard let ask = BoardWork.ask(task, detail: detail) else { return nil }
+            let since = (ask.at ?? .distantPast).addingTimeInterval(-60)
+            return BoardAsk(board: board, cardId: task.id, title: task.title, assignee: task.assignee, ask: ask,
+                            comments: (detail?.comments ?? []).filter { ($0.at ?? .distantPast) >= since })
+        }
+        .sorted { ($0.ask.at ?? .distantPast) > ($1.ask.at ?? .distantPast) }
+    }
+
+    /// What `profile` ran today, on every board: each card with its runs today, the latest first.
+    func workLog(_ profile: String) -> [WorkLogEntry] {
+        let start = BoardWork.today(serverNow)
+        return allCards.compactMap { board, task -> WorkLogEntry? in
+            guard let detail = detail(task.id, on: board) else { return nil }
+            let runs = BoardWork.runs(of: detail, card: task, by: profile, since: start)
+            guard !runs.isEmpty else { return nil }
+            return WorkLogEntry(board: board, boardName: boardInfo(board)?.name, cardId: task.id, title: task.title,
+                                assignee: task.assignee, status: task.status, runs: runs)
+        }
+        .sorted { $0.latest > $1.latest }
+    }
+
+    /// Tells `onMoment` about the cards of `board` whose moment changed since its last read: one
+    /// that stopped on you, was handed to you to check, or is done. The first read of a board only
+    /// takes note. A card whose detail is needed and not in (or not fresh) is looked at again next
+    /// time.
+    private func notice(_ board: String, _ cards: [KanbanTask], _ details: (String) -> KanbanDetail?) {
+        guard !Task.isCancelled else { return }
+        let before = moments[board]
+        var now: [String: String] = [:]
+        for task in cards {
+            guard let key = BoardWork.momentKey(task) else { continue }
+            now[task.id] = key
+            guard let before, before[task.id] != key else { continue }
+            switch BoardWork.news(task, detail: details(task.id)) {
+            case .wait:
+                now[task.id] = before[task.id]
+            case .none:
+                break
+            case .tell(let kind, let text):
+                onMoment?(CardMoment(board: board, cardId: task.id, title: task.title, assignee: task.assignee,
+                                     kind: kind, text: text))
+            }
+        }
+        moments[board] = now
     }
 
     // MARK: in words
@@ -427,8 +738,13 @@ final class BoardStore {
             if minutes < 1 { return "刚开始做" }
             return minutes < 60 ? "做了 \(minutes) 分钟" : "做了 \(minutes / 60) 小时"
         case "blocked":
-            let reason = detail?.blockReason
-            switch task.blockKind {
+            // what stopped it last: the card's own kind may be left from an earlier block
+            let stop = detail?.stop
+            let reason = stop?.reason ?? detail?.blockReason
+            if stop?.event == "gave_up" {
+                return reason.map { "反复出错，停下了：\($0)" } ?? "反复出错，停下了"
+            }
+            switch stop?.blockKind ?? task.blockKind {
             case "capability": return reason.map { "缺少能力：\($0)" } ?? "缺少它需要的能力"
             case "transient": return reason.map { "出错停下了：\($0)" } ?? "出错停下了"
             default: return reason ?? "卡住了，等你"
@@ -438,6 +754,10 @@ final class BoardStore {
         case "done":
             return task.latestSummary ?? task.result ?? "做完了"
         case "triage":
+            // the loop breaker's: it stopped on the same thing again after it was let go on
+            if BoardWork.looped(task), let stop = detail?.stop, stop.event == "block_loop_detected" {
+                return stop.reason.map { "又卡在同一处：\($0)" } ?? "又卡在同一处了"
+            }
             return "还没整理"
         case "scheduled":
             return detail?.scheduleReason ?? "到时间再开始"
@@ -516,10 +836,14 @@ struct BoardItem: Identifiable, Hashable {
     let line: String
     var progress: String?
     var comments = 0
+    /// The board it is on, when that is not the one the board page shows (an assistant's
+    /// 工作记录 opens cards from every board).
+    var board: String?
 
     var group: CardStatus { CardStatus(key: status) }
 
-    init(id: String, title: String, assignee: String?, status: String, line: String, progress: String? = nil, comments: Int = 0) {
+    init(id: String, title: String, assignee: String?, status: String, line: String, progress: String? = nil,
+         comments: Int = 0, board: String? = nil) {
         self.id = id
         self.title = title
         self.assignee = assignee
@@ -527,6 +851,7 @@ struct BoardItem: Identifiable, Hashable {
         self.line = line
         self.progress = progress
         self.comments = comments
+        self.board = board
     }
 
     init(demo card: Card) {
@@ -566,7 +891,7 @@ extension CardStatus {
         }
     }
 
-    fileprivate var demoKey: String {
+    var demoKey: String {
         switch self {
         case .queued: return "ready"
         case .running: return "running"
