@@ -319,7 +319,7 @@ final class LocalData {
         /// No Accessibility permission: window titles cannot be read.
         case needsTitles
         case noModel(String)
-        case checking(FocusState)
+        case checking(FocusCheckState)
     }
 
     /// The plan at `now`: the class or focus block under way in a ticked calendar, else today's

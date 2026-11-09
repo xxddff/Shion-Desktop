@@ -169,7 +169,7 @@ nonisolated struct FocusSample: Identifiable, Hashable, Codable, Sendable {
 }
 
 /// Where the focus check stands, against the plan of the moment.
-nonisolated enum FocusState: Equatable, Sendable {
+nonisolated enum FocusCheckState: Equatable, Sendable {
     /// No plan now: nothing to check.
     case free
     /// A plan, and the window in front is not judged yet.
@@ -241,7 +241,7 @@ nonisolated struct FocusEngine: Codable, Sendable {
     }
 
     /// While the window just come to the front is being judged, the last word stands.
-    func state(plan: FocusPlan?) -> FocusState {
+    func state(plan: FocusPlan?) -> FocusCheckState {
         guard let plan else { return .free }
         guard let last = samples.last, last.planId == plan.id else { return .watching(plan) }
         if last.away { return .away(plan) }
