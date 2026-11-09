@@ -513,7 +513,10 @@ extension AppStore {
         (page["rows"]?.array ?? []).compactMap { row in
             guard row["row_kind"]?.string == "compaction" else { return chatItem(from: row) }
             let at = row["timestamp"]?.number.map { Date(timeIntervalSince1970: $0) } ?? Date()
-            let id = row["row_id"]?.int.map { "row-\($0)" } ?? UUID().uuidString
+            // its row_id is the carrier message's, which follows as a row of its own when the carrier
+            // also holds the ask that set the compaction off (gateway/session_transcript_rows.py),
+            // and the transcript's rows are told apart by id
+            let id = row["row_id"]?.int.map { "compaction-\($0)" } ?? UUID().uuidString
             return ChatItem(id: id, role: .system, at: at, text: "更早的对话压缩成了摘要")
         }
     }

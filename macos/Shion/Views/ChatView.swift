@@ -10,11 +10,21 @@ struct ChatView: View {
     /// The transcript is too short to scroll, so its top is always in view.
     @State private var short = false
 
+    /// The id of the transcript's bottom margin, which a chat opens scrolled to.
+    private static let end = "end"
+
     var body: some View {
         let bot = store.bot(botId)
         let items = store.chats[botId] ?? []
         ScrollViewReader { reader in
             transcript(items, bot: bot)
+                // a chat opens on its newest message, with its rows there from the start or coming
+                // after the page is up, without waiting for a scroll to lay them out
+                .onChange(of: items.isEmpty, initial: true) { _, empty in
+                    if !empty {
+                        reader.scrollTo(Self.end, anchor: .bottom)
+                    }
+                }
                 // older rows arrived above: the rows that were at the top stay where they were
                 .onChange(of: items.first?.id) { previous, _ in
                     guard let previous, items.contains(where: { $0.id == previous }) else { return }
@@ -57,9 +67,13 @@ struct ChatView: View {
                 ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                     ChatRow(item: item, bot: bot, showHead: showsHead(items, index))
                 }
+                // the bottom margin, 24 pt with the spacing above it, as a place to scroll to
+                Color.clear
+                    .frame(height: 10)
+                    .id(Self.end)
             }
             .padding(.horizontal, 40)
-            .padding(.vertical, 24)
+            .padding(.top, 24)
             .frame(maxWidth: 760)
             // a short chat sits at the bottom of a full-height page, not on a short one
             .frame(maxWidth: .infinity, minHeight: viewport, alignment: .bottom)
