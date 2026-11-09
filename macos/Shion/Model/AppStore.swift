@@ -529,8 +529,8 @@ extension AppStore {
     }
 
     /// A transcript page's rows, oldest first. A compaction row stands where older messages
-    /// were folded into a summary. Hermes gives a compaction row the `row_id` of the message it was stored on, which
-    /// shows as its own row right after it when it holds real content too: their ids differ here.
+    /// were folded into a summary. Hermes gives it the `row_id` of the message it was stored on,
+    /// which shows as its own row right after it when it holds real content too: their ids differ.
     private func transcriptItems(_ page: JSONValue) -> [ChatItem] {
         uniqued((page["rows"]?.array ?? []).compactMap { row in
             guard row["row_kind"]?.string == "compaction" else { return chatItem(from: row) }
