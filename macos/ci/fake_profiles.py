@@ -156,6 +156,25 @@ def redact(body):
     return json.dumps(shown, ensure_ascii=False)[:200]
 
 
+def loggable(method, params):
+    """A socket call's params as the log shows them: a token, an env or header value never, only
+    its name (mcp.servers.set_api_key's value, mcp.servers.add's bearer_token and config)."""
+    if not isinstance(params, dict):
+        return params
+    shown = dict(params)
+    if method == "mcp.servers.set_api_key" and "value" in shown:
+        shown["value"] = "***"
+    if "bearer_token" in shown:
+        shown["bearer_token"] = "***"
+    if isinstance(shown.get("config"), dict):
+        config = dict(shown["config"])
+        for key in ("env", "headers"):
+            if isinstance(config.get(key), dict):
+                config[key] = {k: "***" for k in config[key]}
+        shown["config"] = config
+    return shown
+
+
 # ---- the socket ------------------------------------------------------------------------------
 
 def roster():
