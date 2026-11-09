@@ -1,4 +1,3 @@
-import AppKit
 import SwiftUI
 
 /// An assistant's Bot Chat. The composer floats over the transcript, so it gets Liquid Glass.
@@ -12,8 +11,6 @@ struct ChatView: View {
     @State private var short = false
     /// Folded runs of tool calls opened by a click, by line id; not kept once the chat closes.
     @State private var openRuns: Set<String> = []
-    /// Keeps the transcript's top where it is while a run of tool calls opens or closes.
-    @State private var holder = TopHolder()
 
     var body: some View {
         let bot = store.bot(botId)
@@ -67,7 +64,6 @@ struct ChatView: View {
                         ChatRow(item: item, bot: bot, showHead: showsHead(lines, index))
                     case .tools(let id, let tools):
                         ToolRun(tools: tools, open: openRuns.contains(id)) {
-                            holder.hold()
                             openRuns.formSymmetricDifference([id])
                         }
                     }
@@ -78,10 +74,6 @@ struct ChatView: View {
             .frame(maxWidth: 760)
             // a short chat sits at the bottom of a full-height page, not on a short one
             .frame(maxWidth: .infinity, minHeight: viewport, alignment: .bottom)
-            .background(alignment: .topLeading) {
-                ScrollViewFinder { holder.scrollView = $0 }
-                    .frame(width: 1, height: 1)
-            }
         }
         // starts at the newest message, and follows new ones
         .defaultScrollAnchor(.bottom)
@@ -122,122 +114,6 @@ struct ChatView: View {
         guard case .item(let item) = lines[index], item.role == .assistant else { return false }
         guard index > 0, case .item(let previous) = lines[index - 1] else { return true }
         return previous.role != .assistant || item.at.timeIntervalSince(previous.at) > 600
-    }
-}
-
-/// Keeps the transcript where it is while a run of tool calls opens or closes. The transcript keeps
-/// its bottom as its content grows or shrinks (that is how it follows new messages), so a run
-/// opening anywhere would push what is above it up, the run's own line too. For a moment after the
-/// click, wherever the top of what shows moves to, it is put back: on the AppKit scroll view under
-/// SwiftUI's, as soon as its bounds change, so the line stays under the pointer and what is below
-/// it moves. A scroll of the reader's own ends the hold.
-final class TopHolder: NSObject {
-    /// The transcript's scroll view, found from inside its content (ScrollViewFinder).
-    weak var scrollView: NSScrollView? {
-        didSet {
-            guard scrollView !== oldValue else { return }
-            let center = NotificationCenter.default
-            center.removeObserver(self)
-            guard let scrollView else { return }
-            // what shows moves, or the content grows or shrinks under it
-            scrollView.contentView.postsBoundsChangedNotifications = true
-            center.addObserver(self, selector: #selector(changed(_:)), name: NSView.boundsDidChangeNotification,
-                               object: scrollView.contentView)
-            if let document = scrollView.documentView {
-                document.postsFrameChangedNotifications = true
-                center.addObserver(self, selector: #selector(changed(_:)), name: NSView.frameDidChangeNotification, object: document)
-            }
-            center.addObserver(self, selector: #selector(liveScrollStarted(_:)), name: NSScrollView.willStartLiveScrollNotification,
-                               object: scrollView)
-        }
-    }
-    private var kept: CGFloat?
-    private var until = Date.distantPast
-    private var puts = 0
-    private var putting = false
-
-    /// A run is about to open or close: the top of what shows stays where it is, for a moment.
-    func hold(for seconds: TimeInterval = 0.8) {
-        guard let scrollView, let top = top(of: scrollView) else { return }
-        kept = top
-        until = Date().addingTimeInterval(seconds)
-        puts = 0
-        Task {
-            // a move that came without a notice, once the rows are laid out
-            for delay in [30, 150, 400] {
-                try? await Task.sleep(for: .milliseconds(delay))
-                putBack()
-            }
-        }
-    }
-
-    @objc private func changed(_ notification: Notification) {
-        putBack()
-    }
-
-    @objc private func liveScrollStarted(_ notification: Notification) {
-        until = .distantPast
-    }
-
-    private func putBack() {
-        guard !putting, Date() < until, puts < 20, let kept, let scrollView, let document = scrollView.documentView,
-              let top = top(of: scrollView), abs(top - kept) > 0.5 else { return }
-        puts += 1
-        putting = true
-        defer { putting = false }
-        let clip = scrollView.contentView
-        let y = document.isFlipped ? kept : document.frame.height - kept - clip.bounds.height
-        clip.scroll(to: NSPoint(x: clip.bounds.minX, y: y))
-        scrollView.reflectScrolledClipView(clip)
-    }
-
-    /// How far below the top of the content what shows starts.
-    private func top(of scrollView: NSScrollView) -> CGFloat? {
-        guard let document = scrollView.documentView else { return nil }
-        let bounds = scrollView.contentView.bounds
-        return document.isFlipped ? bounds.minY : document.frame.height - bounds.maxY
-    }
-}
-
-/// Hands over the AppKit scroll view a SwiftUI scroll view is drawn in, from inside its content.
-/// It draws nothing and takes no clicks.
-struct ScrollViewFinder: NSViewRepresentable {
-    let found: (NSScrollView) -> Void
-
-    func makeNSView(context: Context) -> Probe {
-        Probe(found: found)
-    }
-
-    func updateNSView(_ probe: Probe, context: Context) {
-        probe.look()
-    }
-
-    final class Probe: NSView {
-        private let found: (NSScrollView) -> Void
-
-        init(found: @escaping (NSScrollView) -> Void) {
-            self.found = found
-            super.init(frame: .zero)
-        }
-
-        required init?(coder: NSCoder) {
-            return nil
-        }
-
-        override func viewDidMoveToWindow() {
-            super.viewDidMoveToWindow()
-            look()
-        }
-
-        override func hitTest(_ point: NSPoint) -> NSView? {
-            nil
-        }
-
-        func look() {
-            if let scrollView = enclosingScrollView {
-                found(scrollView)
-            }
-        }
     }
 }
 
