@@ -1,7 +1,8 @@
 name: macOS app
 
 # Builds the app on macOS 27 / Xcode 27 and takes a screenshot of every page, light and dark,
-# then signs in through the browser sheet against a stand-in Hermes (macos/ci/fake_hermes.py).
+# then signs in through the browser sheet against a stand-in Hermes (macos/ci/fake_hermes.py) and
+# runs the board and the assistants against it.
 # macOS runner minutes are limited: this only runs when the app or this file changes.
 # A downloadable Release build (Shion.dmg) is made on manual runs, or when the commit message
 # contains [package].
@@ -75,14 +76,14 @@ jobs:
       # Real Cloudflare Access and a real Hermes are not on the runner: the stand-in plays both,
       # checks what Shion sends (Access headers, PKCE, the loopback redirect, the bearer) and logs
       # each request. A failure here warns, and the screenshots and the package still go out.
-      - name: Sign-in and board against a stand-in Hermes
+      - name: Sign-in, board and assistants against a stand-in Hermes
         continue-on-error: true
         run: |
           set -o pipefail
           # each test gets a fresh stand-in: its one-off events (课程's approval, the todo it adds)
-          # would otherwise go to whichever test connects first
+          # would otherwise go to whichever test connects first, and BotsTests changes its profiles
           failed=""
-          for test in SignInTests BoardTests ChatControlTests; do
+          for test in SignInTests BoardTests BotsTests ChatControlTests; do
             python3 -u ci/fake_hermes.py --port 8765 > "build/fake_hermes-$test.log" 2>&1 &
             standin=$!
             for attempt in 1 2 3 4 5 6 7 8 9 10; do
@@ -102,12 +103,15 @@ jobs:
             else
               failed="$failed $test"
               grep -nE 'error:|failed|Failing' "build/$test.log" | head -40 || true
+              # -quiet leaves out what failed; the result bundle says
+              xcrun xcresulttool get test-results summary --path "build/$test.xcresult" 2>/dev/null \
+                | grep -E '"(failureText|testName)"' | head -20 || true
             fi
             kill "$standin" 2>/dev/null || true
             wait "$standin" 2>/dev/null || true
           done
           if [ -n "$failed" ]; then
-            echo "::warning title=End to end::failed:$failed; see the signin-*, board-* and chatctl-* screenshots and the fake_hermes-*.log files in the shots artifact"
+            echo "::warning title=End to end::failed:$failed; see the signin-*, board-*, bots-* and chatctl-* screenshots and the fake_hermes-*.log files in the shots artifact"
             exit 1
           fi
 
@@ -125,7 +129,7 @@ jobs:
         if: always()
         run: |
           mkdir -p build/shots
-          for bundle in Shots SignInTests BoardTests ChatControlTests; do
+          for bundle in Shots SignInTests BoardTests BotsTests ChatControlTests; do
             if [ -d "build/$bundle.xcresult" ]; then
               mkdir -p "build/export-$bundle"
               xcrun xcresulttool export attachments --path "build/$bundle.xcresult" --output-path "build/export-$bundle" \
@@ -136,7 +140,7 @@ jobs:
           python3 - <<'PY'
           import json, os, re, shutil
           out = 'build/shots'
-          for folder in ('build/export-Shots', 'build/export-SignInTests', 'build/export-BoardTests',
+          for folder in ('build/export-Shots', 'build/export-SignInTests', 'build/export-BoardTests', 'build/export-BotsTests',
                          'build/export-ChatControlTests'):
               manifest = os.path.join(folder, 'manifest.json')
               if not os.path.exists(manifest):
@@ -151,7 +155,13 @@ jobs:
                       name = re.sub(r'_\d+_[0-9A-Fa-f-]{36}', '', name)
                       # upload-artifact refuses " : < > | * ? and line breaks (XCTest's debug descriptions quote ids)
                       name = re.sub(r'["`:<>|*?\r\n]', '', name).strip()
-                      shutil.move(source, os.path.join(out, name))
+                      # newest first: an older attachment of the same name (the UI hierarchy XCTest
+                      # keeps at each failed lookup) gets a number instead of replacing it
+                      target, (stem, extension), count = os.path.join(out, name), os.path.splitext(name), 2
+                      while os.path.exists(target):
+                          target = os.path.join(out, f'{stem} {count}{extension}')
+                          count += 1
+                      shutil.move(source, target)
           print('\n'.join(sorted(os.listdir(out))))
           PY
 

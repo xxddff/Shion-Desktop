@@ -3,7 +3,7 @@ import XCTest
 
 /// Stop, retry, find, the server check and the last data, end to end against ci/fake_hermes.py
 /// (fake_control.py plays the parts Hermes has for them). Signs in as SignInTests does, then:
-/// Settings' 服务器体检 against the stand-in (通勤's profile has no shion plugin); in 詩音's chat a
+/// Settings' 服务器体检 against the stand-in (only 詩音's profile has the shion plugin); in 詩音's chat a
 /// long reply stopped with ⌘. (session.interrupt for the turn's run) and kept as 已停止; 重试 on
 /// it (a fenced rewind, then the same words again); ⌘F over the loaded rows, and back into older
 /// pages for a hit not loaded yet; then 断开, and the window keeps the server's data, read-only.
@@ -53,12 +53,13 @@ final class ChatControlTests: XCTestCase {
         expect("check-login", in: settings, startsWith: "有效 · ci-user · ")
         expect("check-protocol", in: settings, "hermes gateway")
         expect("check-capabilities", in: settings, "Shion 用到的都有")
-        expect("check-plugin", in: settings, "1 个助手没有")
+        // the stand-in has the plugin in 詩音's profile only (fake_profiles.py)
+        expect("check-plugin", in: settings, endsWith: "个助手没有")
         expect("check-plugin-commute", in: settings, "没装或没启用")
         expect("check-plugin-shion", in: settings, startsWith: "ci · 今天是 ")
         expect("check-kanban", in: settings, "在 · 2 块看板")
         expect("check-limits", in: settings, "整台服务器 4 件（按内存推算） · 每个助手 1 件")
-        label("通用", in: settings).click()
+        label("服务器", in: settings).click()
         app.typeKey("w", modifierFlags: .command)
 
         // a long reply, stopped with ⌘. part way: what had come stays, marked 已停止
@@ -134,7 +135,7 @@ final class ChatControlTests: XCTestCase {
         app.typeKey(",", modifierFlags: .command)
         let prefs = settingsWindow(app)
         XCTAssertTrue(prefs.waitForExistence(timeout: 5))
-        label("通用", in: prefs).click()
+        label("服务器", in: prefs).click()
         prefs.buttons["断开"].click()
         let offline = element("connection-state", in: prefs)
         XCTAssertEqual(XCTWaiter().wait(for: [phase("未连接，现在是上次的数据", of: offline)], timeout: 10), .completed,
@@ -205,6 +206,13 @@ final class ChatControlTests: XCTestCase {
         let found = element(identifier, in: root)
         XCTAssertTrue(found.waitForExistence(timeout: 3), "no \(identifier)")
         XCTAssertTrue(says(found).hasPrefix(text), "\(identifier): \(says(found))")
+    }
+
+    @MainActor
+    private func expect(_ identifier: String, in root: XCUIElement, endsWith text: String) {
+        let found = element(identifier, in: root)
+        XCTAssertTrue(found.waitForExistence(timeout: 3), "no \(identifier)")
+        XCTAssertTrue(says(found).hasSuffix(text), "\(identifier): \(says(found))")
     }
 
     /// The find bar's "3/10" as (3, 10).

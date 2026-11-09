@@ -81,7 +81,7 @@ final class ServerCheck {
     /// is Cloudflare Access's.
     private func checkAccess(_ settings: ServerSettings) async -> ServerStatus? {
         guard settings.isConfigured else {
-            set("access", .fail, "还没填服务器地址", fix: "在「通用」里填 Webapp 的地址，比如 https://hermes.example.dev。")
+            set("access", .fail, "还没填服务器地址", fix: "在「服务器」里填 Webapp 的地址，比如 https://hermes.example.dev。")
             return nil
         }
         do {
@@ -94,7 +94,7 @@ final class ServerCheck {
             return status
         } catch GatewayError.accessDenied {
             set("access", .fail, "没有放行",
-                fix: "检查「通用」里的 Access Client ID 和 Secret：要和 Cloudflare Zero Trust 里这个 service token 的一样，而且没过期。这个 Hermes 应用的 Access 策略里要有一条 Service Auth，Include 选这个 service token。")
+                fix: "检查「服务器」里的 Access Client ID 和 Secret：要和 Cloudflare Zero Trust 里这个 service token 的一样，而且没过期。这个 Hermes 应用的 Access 策略里要有一条 Service Auth，Include 选这个 service token。")
             return nil
         } catch {
             set("access", .fail, "连不上：\(error.localizedDescription)",
@@ -112,12 +112,12 @@ final class ServerCheck {
         switch settings.login {
         case .browser:
             guard store.account.tokens(for: settings) != nil else {
-                return set("login", .fail, "还没登录", fix: "在「通用」里点「用浏览器登录…」。")
+                return set("login", .fail, "还没登录", fix: "在「服务器」里点「用浏览器登录…」。")
             }
         case .sessionToken:
             guard !settings.token.isEmpty else {
                 return set("login", .fail, "没填会话令牌",
-                           fix: "在「通用」里填服务器上的 HERMES_DASHBOARD_SESSION_TOKEN，或者改用浏览器登录。")
+                           fix: "在「服务器」里填服务器上的 HERMES_DASHBOARD_SESSION_TOKEN，或者改用浏览器登录。")
             }
             guard status.providers.contains("session-token") else {
                 return set("login", .fail, "服务器没开会话令牌登录",
@@ -140,7 +140,7 @@ final class ServerCheck {
                 guard code == 401 else { return set("login", .fail, "服务器返回 HTTP \(code)") }
                 switch settings.login {
                 case .browser:
-                    return set("login", .fail, "服务器不认这个登录", fix: "在「通用」里退出登录，再登录一次。")
+                    return set("login", .fail, "服务器不认这个登录", fix: "在「服务器」里退出登录，再登录一次。")
                 case .sessionToken:
                     return set("login", .fail, "会话令牌对不上", fix: GatewayError.badToken(settings.tokenHint).localizedDescription)
                 }
@@ -157,7 +157,7 @@ final class ServerCheck {
             }
             set("login", .ok, parts.joined(separator: " · "))
         } catch {
-            let fix = settings.login == .browser ? "在「通用」里退出登录，再登录一次。" : nil
+            let fix = settings.login == .browser ? "在「服务器」里退出登录，再登录一次。" : nil
             set("login", .fail, error.localizedDescription, fix: fix)
         }
     }
@@ -183,7 +183,7 @@ final class ServerCheck {
             } else {
                 reason = gateway.phase == .connecting ? "正在连" : "没连上"
             }
-            set("protocol", .skipped, reason, fix: "在「通用」里连上服务器，再检查一次。")
+            set("protocol", .skipped, reason, fix: "在「服务器」里连上服务器，再检查一次。")
             set("capabilities", .skipped, "连上后检查")
             return nil
         }

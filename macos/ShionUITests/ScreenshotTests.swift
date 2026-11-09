@@ -29,6 +29,23 @@ final class ScreenshotTests: XCTestCase {
         }
     }
 
+    /// 詩音's own settings page (`assistant-shion`), on the demo's content.
+    @MainActor
+    func testAssistantPage() throws {
+        continueAfterFailure = true
+        for appearance in ["light", "dark"] {
+            let app = launch(route: "assistant-shion", appearance: appearance)
+            let window = app.windows.firstMatch
+            if window.waitForExistence(timeout: 20) {
+                Thread.sleep(forTimeInterval: 1)
+                keep(window.screenshot(), name: "assistant-shion-\(appearance)")
+            } else {
+                XCTFail("No window for the assistant page (\(appearance))")
+            }
+            app.terminate()
+        }
+    }
+
     @MainActor
     func testMenuBarAndSettings() throws {
         continueAfterFailure = true

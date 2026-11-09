@@ -1,20 +1,7 @@
 import SwiftUI
 
-/// Settings' pages: 通用 (the server, the board, what this Mac sends, the last data) and 服务器体检.
-struct SettingsTabs: View {
-    var body: some View {
-        TabView {
-            Tab("通用", systemImage: "gearshape") {
-                SettingsView()
-            }
-            Tab("服务器体检", systemImage: "stethoscope") {
-                ServerCheckView()
-            }
-        }
-    }
-}
-
-/// 服务器体检: every check with its state, and how to put it right when it is not.
+/// Settings → 服务器体检 (SettingsTabs, AssistantSettings.swift): every check with its state, and how
+/// to put it right when it is not.
 struct ServerCheckView: View {
     @Environment(AppStore.self) private var store
     @State private var check = ServerCheck()

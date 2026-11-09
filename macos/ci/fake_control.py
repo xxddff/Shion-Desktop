@@ -23,8 +23,9 @@ Shaped like Hermes main (2026-11-09):
   gateway/session_settlement_recovery.py).
 
 The scripted turn: 「讲一个长故事」 streams a sentence every 0.3 s for half a minute, so there is time
-to stop it; once that row has been rewound, the same words get a short reply (the retry). And 通勤's
-profile has no shion plugin, so the server check has a failure to show.
+to stop it; once that row has been rewound, the same words get a short reply (the retry). Which
+profiles have the shion plugin is fake_profiles.py's (詩音's only), so the server check has a
+failure to show.
 """
 import itertools
 import threading
@@ -34,7 +35,6 @@ STORY = "讲一个长故事"
 STORY_PARTS = ["从前有一座山，", "山里有座庙，", "庙里有个老和尚，", "在给小和尚讲故事。"] * 25
 RETRIED = "（重试）故事讲完了：山里有座庙。"
 MUTATE_KEYS = {"session_id", "request_id", "expected_revision", "operation", "payload"}
-NO_PLUGIN = {"commute"}  # profiles where plugin.shion.* is not loaded
 
 state = {"log": print, "transcripts": None, "lock": threading.Lock()}
 fences = {}  # session id -> {"generation", "revision"}
@@ -61,17 +61,10 @@ def snapshot_fences(session_id):
 def handles(method, params):
     if method in ("session.interrupt", "session.mutate"):
         return True
-    if method.startswith("plugin.shion.") and params.get("profile") in NO_PLUGIN:
-        return True
     return method == "prompt.submit" and STORY in str(params.get("text", ""))
 
 
 def handle(conn, method, params, rid):
-    log = state["log"]
-    if method.startswith("plugin.shion."):
-        log(f"    {method} for {params.get('profile')}: not loaded there")
-        return conn.send_json({"jsonrpc": "2.0", "id": rid, "error": {
-            "code": -32601, "message": f"unknown method: {method}", "data": {"reason": "unknown_method"}}})
     if method == "session.interrupt":
         return interrupt(conn, params, rid)
     if method == "session.mutate":
