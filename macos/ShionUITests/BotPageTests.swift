@@ -24,10 +24,14 @@ final class BotPageTests: XCTestCase {
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 20))
         let window = app.windows.firstMatch
 
-        // sign in as SignInTests does
+        // sign in as SignInTests does; Settings opens on the tab it was last left on (BotsTests, just
+        // before, leaves it on 助手)
         app.typeKey(",", modifierFlags: .command)
         let settings = app.windows.matching(NSPredicate(format: "identifier CONTAINS[c] 'settings'")).firstMatch
         XCTAssertTrue(settings.waitForExistence(timeout: 5), "no Settings window")
+        if !settings.textFields["server-address"].waitForExistence(timeout: 2) {
+            selectTab("服务器", in: settings)
+        }
         type(server, into: settings.textFields["server-address"])
         type("ci-client", into: settings.textFields["access-id"])
         type("ci-secret", into: settings.secureTextFields["access-secret"])
@@ -202,6 +206,20 @@ final class BotPageTests: XCTestCase {
         XCTAssertTrue(entry.waitForExistence(timeout: 3), "no \(item) in \(identifier)")
         entry.click()
         Thread.sleep(forTimeInterval: 0.5)
+    }
+
+    /// A tab of Settings, by its name in the toolbar.
+    @MainActor
+    private func selectTab(_ name: String, in settings: XCUIElement) {
+        let tabs = [settings.toolbarButtons[name], settings.toolbars.buttons[name], settings.buttons[name],
+                    settings.radioButtons[name]]
+        if let tab = tabs.first(where: { $0.exists }) {
+            tab.click()
+        } else {
+            let any = settings.descendants(matching: .any).matching(NSPredicate(format: "label == %@", name)).firstMatch
+            XCTAssertTrue(any.waitForExistence(timeout: 3), "no \(name) tab in Settings")
+            any.click()
+        }
     }
 
     /// An assistant's page, from its row's menu in the sidebar.

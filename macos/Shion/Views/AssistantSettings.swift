@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The Settings window: the server, and the assistants on it.
+/// The Settings window: the server, the assistants on it, and the keys (ShortcutSettings.swift).
 struct SettingsTabs: View {
     var body: some View {
         TabView {
@@ -9,6 +9,9 @@ struct SettingsTabs: View {
             }
             Tab("助手", systemImage: "person.2") {
                 AssistantSettings()
+            }
+            Tab("快捷键", systemImage: "keyboard") {
+                ShortcutSettings()
             }
         }
     }
@@ -111,7 +114,7 @@ struct AssistantSettings: View {
         }
     }
 
-    static let chiefNote = "总秘书写今天页顶部那段话；「跟…说」的按钮、今天页的输入框和菜单栏里找的是她，用她的名字和头像；专注检查发给她，shion 插件也在她的 profile 里调用。换成没装 shion 插件的助手，今天、待办和日报会回到示例数据。没选过时，名叫 shion 的 profile 当总秘书，没有就是 Hermes 的默认 profile。"
+    static let chiefNote = "总秘书写今天页顶部那段话；「跟…说」的按钮、今天页的输入框、⌥Space 的小窗、⌘K 和菜单栏找的都是总秘书，用这个助手的名字和头像；专注检查也发给总秘书，shion 插件在总秘书的 profile 里调用。换成没装 shion 插件的助手，今天、待办和日报会回到示例数据。没选过时，名叫 shion 的 profile 当总秘书，没有就是 Hermes 的默认 profile。"
 
     static let showNote = "不显示的助手不在侧栏里，Shion 也不接它的对话，所以它的批准和提问不会到「等你确认」；它在服务器上照常运行，看板上派给它的卡照样显示。总秘书总是显示。Hermes 的默认 profile 删不掉，不用的话可以不显示。这台 Mac 第一次见到一个助手时，照官方桌面端 Bot Mode 的设置（ui_meta 里的 hidden）决定显示不显示；之后以这里的选择为准，Bot Mode 那边再改也不跟着变。这些选择按服务器地址存在这台 Mac 上。新建助手：名字是 profile 的 id，只能用小写字母、数字、- 和 _；显示名随便取。不复制的话，新助手带着 Hermes 自带的技能，用服务器上的密钥和模型；复制的话，带上那个助手的模型、密钥、技能、插件、MCP 服务器和记忆，不带它的消息渠道。新助手的 Bot Chat 在第一次打开对话时才建。"
 

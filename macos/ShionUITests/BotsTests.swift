@@ -25,10 +25,13 @@ final class BotsTests: XCTestCase {
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 20))
         let window = app.windows.firstMatch
 
-        // sign in as SignInTests does
+        // sign in as SignInTests does; Settings opens on the tab it was last left on
         app.typeKey(",", modifierFlags: .command)
         var settings = settingsWindow(app)
         XCTAssertTrue(settings.waitForExistence(timeout: 5), "no Settings window")
+        if !settings.textFields["server-address"].waitForExistence(timeout: 2) {
+            selectTab("服务器", in: settings)
+        }
         type(server, into: settings.textFields["server-address"])
         type("ci-client", into: settings.textFields["access-id"])
         type("ci-secret", into: settings.secureTextFields["access-secret"])
@@ -237,18 +240,24 @@ final class BotsTests: XCTestCase {
         XCTAssertTrue(settings.waitForExistence(timeout: 5), "no Settings window")
         let picker = element("chief-picker", in: settings)
         if !picker.waitForExistence(timeout: 1) {
-            let tabs = [settings.toolbarButtons["助手"], settings.toolbars.buttons["助手"], settings.buttons["助手"],
-                        settings.radioButtons["助手"]]
-            if let tab = tabs.first(where: { $0.exists }) {
-                tab.click()
-            } else {
-                let any = settings.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "助手")).firstMatch
-                XCTAssertTrue(any.waitForExistence(timeout: 3), "no 助手 tab in Settings")
-                any.click()
-            }
+            selectTab("助手", in: settings)
         }
         XCTAssertTrue(picker.waitForExistence(timeout: 10), "no 总秘书 picker on the 助手 tab")
         return settings
+    }
+
+    /// A tab of Settings, by its name in the toolbar.
+    @MainActor
+    private func selectTab(_ name: String, in settings: XCUIElement) {
+        let tabs = [settings.toolbarButtons[name], settings.toolbars.buttons[name], settings.buttons[name],
+                    settings.radioButtons[name]]
+        if let tab = tabs.first(where: { $0.exists }) {
+            tab.click()
+        } else {
+            let any = settings.descendants(matching: .any).matching(NSPredicate(format: "label == %@", name)).firstMatch
+            XCTAssertTrue(any.waitForExistence(timeout: 3), "no \(name) tab in Settings")
+            any.click()
+        }
     }
 
     /// A picker's item, from its pop-up menu.
