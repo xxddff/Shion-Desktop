@@ -110,7 +110,8 @@ struct Box<Content: View>: View {
     }
 }
 
-/// 「跟詩音说」 in the toolbar of every page but Today and her own chat (⌘K).
+/// 「跟詩音说」 in the toolbar of every page but Today and her own chat. ⌘K is the jump palette
+/// now (JumpPalette.swift); her chat is in it too.
 struct AskButton: View {
     @Environment(AppStore.self) private var store
 
@@ -123,7 +124,6 @@ struct AskButton: View {
                 Text("跟詩音说")
             }
         }
-        .keyboardShortcut("k", modifiers: .command)
         .help("跟詩音说")
     }
 }
