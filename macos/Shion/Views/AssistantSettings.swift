@@ -103,6 +103,8 @@ struct NewAssistantSheet: View {
     @State private var loadingModels = false
     @State private var sending = false
     @State private var failure: String?
+    /// Made, though not all of it went in: what is left is done on its page.
+    @State private var made: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -157,13 +159,22 @@ struct NewAssistantSheet: View {
                     ProgressView().controlSize(.small)
                 }
                 Spacer()
-                Button("取消", role: .cancel) { dismiss() }
-                    .keyboardShortcut(.cancelAction)
-                Button("新建") { create() }
+                if let made {
+                    Button("好") {
+                        dismiss()
+                        created(made)
+                    }
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
-                    .disabled(!ProfileName.isValid(name) || nameTaken || sending || !store.live)
-                    .accessibilityIdentifier("new-assistant-create")
+                } else {
+                    Button("取消", role: .cancel) { dismiss() }
+                        .keyboardShortcut(.cancelAction)
+                    Button("新建") { create() }
+                        .buttonStyle(.borderedProminent)
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(!ProfileName.isValid(name) || nameTaken || sending || !store.live)
+                        .accessibilityIdentifier("new-assistant-create")
+                }
             }
             .padding(20)
         }
@@ -185,7 +196,7 @@ struct NewAssistantSheet: View {
     private var nameTaken: Bool { store.roster.profile(name) != nil }
 
     private var nameProblem: String? {
-        guard !name.isEmpty else { return nil }
+        guard !name.isEmpty, made == nil else { return nil }
         if nameTaken { return "已经有叫这个名字的助手了" }
         return ProfileName.isValid(name) ? nil : "名字只能用小写字母、数字、- 和 _，以字母或数字开头"
     }
@@ -200,6 +211,9 @@ struct NewAssistantSheet: View {
                 try await store.createAssistant(new)
                 dismiss()
                 created(new.name)
+            } catch AssistantError.titleNotSet(let reason) {
+                failure = AssistantError.titleNotSet(reason).localizedDescription
+                made = new.name
             } catch {
                 failure = error.localizedDescription
             }
@@ -208,9 +222,10 @@ struct NewAssistantSheet: View {
     }
 }
 
-/// An assistant's row in the sidebar, right-clicked.
+/// An assistant's row in the sidebar, right-clicked. The store is handed over rather than read
+/// from the environment, which a context menu's content is not sure to get.
 struct AssistantMenu: View {
-    @Environment(AppStore.self) private var store
+    let store: AppStore
     let botId: String
 
     var body: some View {

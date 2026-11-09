@@ -6,11 +6,14 @@ import Observation
 nonisolated enum AssistantError: LocalizedError {
     case notSaved(String)
     case offline
+    /// The profile was made; only Bot Mode's title did not go in.
+    case titleNotSet(String)
 
     var errorDescription: String? {
         switch self {
         case .notSaved(let what): return "\(what)没有存上：服务器没有接受"
         case .offline: return "没有连上服务器"
+        case .titleNotSet(let reason): return "助手建好了，但显示名没有写上（\(reason)），在它的设置页里再改一次"
         }
     }
 }
@@ -268,10 +271,11 @@ struct AgentSettings: Equatable {
         }
     }
 
-    /// `resolve_turn_limit`: null, 0, a negative number, "none", "unlimited" or "inf" is no limit.
+    /// `resolve_turn_limit`: null, 0, a negative number, "none", "unlimited" or "inf" is no limit;
+    /// so, here, is a count past any a turn could reach.
     static func turns(_ value: JSONValue?) -> Int? {
         switch value {
-        case .number(let count)?: return count >= 1 ? Int(count) : nil
+        case .number(let count)?: return count >= 1 && count <= 1_000_000_000 ? Int(count) : nil
         case .string(let word)?: return Int(word.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0 >= 1 ? $0 : nil }
         default: return nil
         }
@@ -693,6 +697,7 @@ final class BotEditor {
         let words = Self.words(new.command)
         if demo {
             let envNames = new.env.map { $0.key }.filter { !$0.isEmpty }.sorted()
+            servers.removeAll { $0.name == serverName }
             servers.append(McpServer(name: serverName, transport: url.isEmpty ? "stdio" : "http",
                                      target: url.isEmpty ? words.joined(separator: " ") : url, auth: new.auth,
                                      envNames: envNames))
@@ -729,7 +734,13 @@ final class BotEditor {
     /// `POST /api/mcp/catalog/install`: the entry, with the env values it declares.
     func install(_ entry: McpCatalogEntry, env: [String: String]) async throws {
         if demo {
-            servers.append(McpServer(name: entry.name, transport: "http", target: entry.description))
+            servers.removeAll { $0.name == entry.name }
+            servers.append(McpServer(name: entry.name, transport: "stdio", target: entry.description))
+            catalog = catalog.map { item in
+                item.name == entry.name
+                    ? McpCatalogEntry(name: item.name, description: item.description, env: item.env, installed: true)
+                    : item
+            }
             return
         }
         guard let api else { throw AssistantError.offline }

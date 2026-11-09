@@ -59,24 +59,35 @@ extension AppStore {
     }
 
     /// Settings: 总秘书. The shion plugin is called in her profile, so today, todos and reports
-    /// load again from there, or go back to the demo where the plugin is not installed.
+    /// load again from there, or go back to the demo where the plugin is not installed. One that
+    /// was hidden is shown again, and its Bot Chat attached.
     func chooseChief(_ name: String) {
         guard live, name != chiefId, roster.profile(name) != nil else { return }
         roster.setChief(name)
         applyRoster()
         stopPluginData()
-        Task { await loadPluginData() }
+        Task {
+            await loadPluginData()
+            await attachAll()
+        }
     }
 
-    /// Settings: whether Shion shows this assistant. 总秘书 is always shown.
+    /// Settings: whether Shion shows this assistant. 总秘书 is always shown. A hidden one's Bot
+    /// Chat is let go, so its approvals and questions stop coming; shown again, it is attached as
+    /// on connecting.
     func setShown(_ name: String, _ shown: Bool) {
         guard live, name != chiefId else { return }
         roster.setHidden(name, !shown)
         applyRoster()
-        if !shown, case .chat(let id)? = route, id == name {
+        guard !shown else {
+            Task { await attachAll() }
+            return
+        }
+        forgetChat(name)
+        if case .chat(let id)? = route, id == name {
             route = .today
         }
-        if !shown, case .botSettings(let id)? = route, id == name {
+        if case .botSettings(let id)? = route, id == name {
             route = .today
         }
     }
@@ -123,8 +134,12 @@ extension AppStore {
         let name = reply["name"]?.string ?? new.name
         await refreshProfiles()
         let title = new.title.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !title.isEmpty {
+        guard !title.isEmpty else { return }
+        do {
             try await setTitle(title, of: name)
+        } catch {
+            // the profile is there all the same: making it again would only be refused
+            throw AssistantError.titleNotSet(error.localizedDescription)
         }
     }
 
@@ -132,18 +147,19 @@ extension AppStore {
     /// shows and Shion names the assistant by), through `profiles.configure`: the section as it
     /// is with the title changed, written only if nobody changed it since it was read. Hermes
     /// replaces a ui_meta section whole, so the rest of what Bot Mode keeps there is sent back too.
-    /// A section changed meanwhile is read again and written once more.
+    /// A section changed meanwhile is read again and written once more. A profile the list has not
+    /// shown yet (just made) has no section: revision 0.
     func setTitle(_ title: String, of name: String) async throws {
         for attempt in 0..<2 {
-            guard let profile = roster.profile(name) else { throw AssistantError.notSaved("显示名") }
-            var section = profile.botsMeta
+            let profile = roster.profile(name)
+            var section = profile?.botsMeta ?? [:]
             if title.isEmpty {
                 section.removeValue(forKey: "title")
             } else {
                 section["title"] = .string(title)
             }
             let written: JSONValue = section.isEmpty ? .null : .object(section)
-            let revision: JSONValue = .number(Double(profile.botsRevision))
+            let revision: JSONValue = .number(Double(profile?.botsRevision ?? 0))
             let reply = try await gateway.call("profiles.configure", [
                 "name": .string(name),
                 "ui_meta": ["hermes-bots": written],
@@ -169,6 +185,7 @@ extension AppStore {
         // the server stops the profile's gateway first, waiting up to ten seconds
         try await api.request("DELETE", HermesAPI.profilePath(name), timeout: 90)
         roster.forget(name)
+        forgetChat(name)
         if case .chat(let id)? = route, id == name {
             route = .today
         }

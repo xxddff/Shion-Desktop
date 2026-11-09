@@ -224,7 +224,7 @@ extension AppStore {
     /// Attaches every assistant's existing Bot Chat, without its rows, so approvals, questions and
     /// busy states come from all of them, not only from the chats you open. A Bot Chat is only
     /// created when you open the chat. Needs the paged transcript (an attach without rows).
-    private func attachAll() async {
+    func attachAll() async {
         guard pagesTranscripts else { return }
         for bot in bots where sessions[bot.id] == nil {
             guard live, gateway.phase == .online else { return }
@@ -296,6 +296,24 @@ extension AppStore {
     func disconnect() {
         gateway.disconnect()
         leaveLive()
+    }
+
+    /// An assistant Shion stops following (hidden in Settings, or deleted): its Bot Chat's events,
+    /// approvals and questions no longer come in, and what it had in 等你确认 goes.
+    func forgetChat(_ botId: String) {
+        if let sessionId = sessions.removeValue(forKey: botId) {
+            sessionBots[sessionId] = nil
+        }
+        streaming[botId] = nil
+        attachMarks[botId] = nil
+        loadedChats.remove(botId)
+        olderPages[botId] = nil
+        olderErrors[botId] = nil
+        chats[botId] = nil
+        for ask in asks where ask.botId == botId {
+            Notifier.shared.withdraw(ask.id)
+        }
+        asks.removeAll { $0.botId == botId }
     }
 
     /// Screenshot and test runs keep what they type in memory: no keychain, no preferences.
