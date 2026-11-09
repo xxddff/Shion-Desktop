@@ -90,6 +90,18 @@ extension AppStore {
         return await board.answer(ask.cardId, on: ask.board, text: text, resume: resume)
     }
 
+    /// Your reply from a card's notification: as 回复 and 让它继续 in 等你确认, a comment signed
+    /// with your login name and then the card goes on; only the comment when it has gone on
+    /// meanwhile. Returns why it did not go through.
+    func replyToCard(_ id: String, board slug: String?, text: String) async -> String? {
+        let words = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !words.isEmpty else { return nil }
+        guard board.active else { return "没有连上服务器" }
+        Notifier.shared.withdrawCard(id, board: slug)
+        let waiting = board.task(id, on: slug).map { $0.status == "blocked" || BoardWork.looped($0) } ?? true
+        return await board.answer(id, on: slug, text: words, resume: waiting)
+    }
+
     /// Whether a card's moment becomes a notification: not while its board is on the screen, nor
     /// a card waiting on you while 等你确认 is; a done card only when Settings say so; never one of
     /// an assistant hidden in Settings.

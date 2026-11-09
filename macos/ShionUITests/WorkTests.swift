@@ -5,15 +5,18 @@ import XCTest
 /// ci/fake_kanban.py): the cards that stopped on your answer come to 等你确认, where you answer and
 /// let them go on; each assistant's 工作记录 lists the cards it ran today on every board; and the
 /// card notifications, which a test run writes down in a file instead of posting
-/// (`-ShionNotificationLog`). A picture at each step (`work-*.png`).
+/// (`-ShionNotificationLog`) and answers through another (`-ShionNotificationAnswers`), as typing
+/// into the notification would. A picture at each step (`work-*.png`).
 final class WorkTests: XCTestCase {
     private let server = "http://127.0.0.1:8765"
     private let notes = "/tmp/shion-work-notifications.jsonl"
+    private let answers = "/tmp/shion-work-answers.jsonl"
 
     @MainActor
     func testWorkForYou() throws {
         continueAfterFailure = false
         try? FileManager.default.removeItem(atPath: notes)
+        try? FileManager.default.removeItem(atPath: answers)
         let app = XCUIApplication()
         app.launchArguments = [
             "-ShionSnapshot", "YES",
@@ -21,6 +24,7 @@ final class WorkTests: XCTestCase {
             "-ShionAppearance", "light",
             "-ApplePersistenceIgnoreState", "YES",
             "-ShionNotificationLog", notes,
+            "-ShionNotificationAnswers", answers,
         ]
         app.launch()
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 20))
@@ -91,6 +95,10 @@ final class WorkTests: XCTestCase {
             XCTAssertTrue(element("work-\(card)", in: app).exists, "\(card) is not in the log")
         }
         XCTAssertFalse(element("work-t_notes7", in: app).exists, "yesterday's card is in today's log")
+        // archived since it was done today: read with include_archived for the log alone
+        XCTAssertTrue(element("work-t_quiz", in: app).waitForExistence(timeout: 10), "the card archived since is not in the log")
+        XCTAssertTrue(waitForText("已归档", in: app, timeout: 3), "the archived card does not say so")
+        XCTAssertFalse(element("work-t_hw6", in: app).exists, "a card archived yesterday is in today's log")
         XCTAssertFalse(element("work-t_weather", in: app).exists, "通勤's card is in 课程's log")
         XCTAssertFalse(element("work-t_dl8", in: app).exists, "a card that never ran is in the log")
         XCTAssertTrue(waitForText("收据 12 张，记进了表格（CI）。", in: app, timeout: 3), "no handoff in the log")
@@ -108,6 +116,15 @@ final class WorkTests: XCTestCase {
         XCTAssertEqual(review?.board, "study", "the notification does not say the card's board")
         XCTAssertTrue(review?.body.contains("成绩单下载好了") == true, "the handoff is not in the notification: \(String(describing: review))")
         XCTAssertTrue(cardNotes().first { $0.card == "t_week" }?.body.contains("你定一下") == true, "the question is not in its notification")
+        // a card that stopped on you can be answered in its notification; one to check or done cannot
+        let week = cardNotes().first { $0.card == "t_week" }
+        XCTAssertEqual(week?.category, "card", "詩音's question cannot be answered in its notification")
+        XCTAssertEqual(review?.category, "", "a card to check asks for an answer in its notification")
+        XCTAssertEqual(cardNotes().first { $0.card == "t_rec8" }?.category, "", "a done card asks for an answer in its notification")
+        // answered there, as typing into it would: the reply goes on the card, which goes on
+        if let week {
+            replyInNotification("排作业4（CI，从通知回复）", to: week.id)
+        }
         let handedIn = waitForText("交给你检查", in: app, timeout: 10)
         keep(window.screenshot(), "work-4-log-updated")
         XCTAssertTrue(handedIn, "the log does not show the card handed in")
@@ -123,6 +140,20 @@ final class WorkTests: XCTestCase {
         // on the board page nothing is notified: a card made there runs and is done in front of you
         element("nav-board", in: app).click()
         XCTAssertTrue(waitForText("整理第8回录音（CI）", in: app, timeout: 10), "the board did not show")
+        XCTAssertFalse(waitForText("核对第8回小测答案", in: app, timeout: 1), "an archived card is on the board page")
+
+        // 詩音's card answered from its notification: in 排队 (ready) again, your reply on it
+        let resumed = waitUntil(timeout: 10) { self.inColumn("把这周的日程排进日历（CI）", "queued", in: app) }
+        element("card-t_week", in: app).click()
+        let replied = waitForText("排作业4（CI，从通知回复）", in: app, timeout: 10)
+        let authors = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "comment-author-"))
+        let yours = waitUntil(timeout: 5) { (0..<authors.count).contains { self.says(authors.element(boundBy: $0), "你") } }
+        Thread.sleep(forTimeInterval: 0.5)
+        keep(window.screenshot(), "work-6a-answered-in-notification")
+        XCTAssertTrue(resumed, "the card answered in its notification did not go on")
+        XCTAssertTrue(replied, "the reply from the notification is not on the card")
+        XCTAssertTrue(yours, "the reply from the notification is not shown as yours")
+        XCTAssertFalse(cardNotes().contains { $0.title == "没能回复" }, "the reply did not go through: \(cardNotes())")
         make("在看板上做完的卡（CI 通知）", in: app)
         let doneHere = waitUntil(timeout: 20) { self.inColumn("在看板上做完的卡（CI 通知）", "done", in: app) }
         Thread.sleep(forTimeInterval: 1)
@@ -154,6 +185,7 @@ final class WorkTests: XCTestCase {
         element("nav-confirm", in: app).click()
         let open = element("card-ask-open-t_bank", in: app)
         XCTAssertTrue(open.waitForExistence(timeout: 10), "no 打开卡片 on the other board's card")
+        XCTAssertFalse(element("card-ask-t_week", in: app).exists, "the card answered in its notification still waits on you")
         reveal(open, in: window)
         open.click()
         let opened = waitForText("银行要你在手机上点一下确认", in: app, timeout: 10) && waitForText("看板 side", in: app, timeout: 5)
@@ -166,14 +198,17 @@ final class WorkTests: XCTestCase {
         app.terminate()
     }
 
-    /// A notification about a card, as the test run wrote it down.
+    /// A notification about a card, as the test run wrote it down: what it says, what can be
+    /// answered in it (its category), and where a click goes.
     private struct Note: CustomStringConvertible {
+        let id: String
         let card: String
         let board: String
         let title: String
         let body: String
+        let category: String
 
-        var description: String { "\(card)@\(board): \(title) / \(body)" }
+        var description: String { "\(card)@\(board): \(title) / \(body) [\(category)]" }
     }
 
     /// The card notifications so far (the others, replies and approvals, are left out).
@@ -183,9 +218,31 @@ final class WorkTests: XCTestCase {
             guard let row = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
                   let info = row["info"] as? [String: Any], let card = info["card"] as? String
             else { return nil }
-            return Note(card: card, board: info["board"] as? String ?? "", title: row["title"] as? String ?? "",
-                        body: row["body"] as? String ?? "")
+            return Note(id: row["id"] as? String ?? "", card: card, board: info["board"] as? String ?? "",
+                        title: row["title"] as? String ?? "", body: row["body"] as? String ?? "",
+                        category: row["category"] as? String ?? "")
         }
+    }
+
+    /// Answers a notification as typing into it and sending would: a line in the answers file,
+    /// which the app reads as it comes.
+    private func replyInNotification(_ text: String, to id: String) {
+        guard let json = try? JSONSerialization.data(withJSONObject: ["id": id, "action": "card-reply", "text": text]) else {
+            return XCTFail("the answer could not be written")
+        }
+        let line = json + Data("\n".utf8)
+        guard let handle = FileHandle(forWritingAtPath: answers) else {
+            _ = FileManager.default.createFile(atPath: answers, contents: line)
+            return
+        }
+        _ = try? handle.seekToEnd()
+        try? handle.write(contentsOf: line)
+        try? handle.close()
+    }
+
+    @MainActor
+    private func says(_ element: XCUIElement, _ text: String) -> Bool {
+        element.exists && (element.label == text || (element.value as? String) == text)
     }
 
     /// Writes `text` on a card in 等你确认 and lets it go on.

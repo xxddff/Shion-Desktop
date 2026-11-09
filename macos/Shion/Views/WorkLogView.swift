@@ -11,8 +11,9 @@ enum AssistantTab: Hashable {
 }
 
 /// An assistant's page: its Bot Chat, and 工作记录, the cards it ran today on every board, as two
-/// tabs in the toolbar. The chat stays underneath while the log is up, so a draft and where the
-/// chat was scrolled to survive a look at the log. A card of the log opens on the side.
+/// tabs at the top of the page; the toolbar keeps its buttons (跟詩音说, 助手设置) to itself. The
+/// chat stays underneath while the log is up, so a draft and where the chat was scrolled to
+/// survive a look at the log. A card of the log opens on the side.
 struct AssistantView: View {
     @Environment(AppStore.self) private var store
     let botId: String
@@ -23,44 +24,54 @@ struct AssistantView: View {
 
     var body: some View {
         let entries = tab == .work ? store.workLog(for: botId) : []
-        ChatView(botId: botId)
-            .disabled(tab == .work)
-            .accessibilityHidden(tab == .work)
-            .overlay {
-                if tab == .work {
-                    WorkLogView(entries: entries, selection: selection) { open($0) }
-                        .background(.background)
-                }
-            }
-            .toolbar {
-                ToolbarItem(placement: .principal) {
-                    Picker("显示", selection: $tab) {
-                        Text("Bot Chat").tag(AssistantTab.chat)
-                        Text("工作记录").tag(AssistantTab.work)
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .fixedSize()
-                    .accessibilityIdentifier("assistant-tabs")
-                }
-            }
-            .inspector(isPresented: $showInspector) {
-                if let entry = entries.first(where: { $0.id == selection }) {
-                    BoardInspector(item: store.workItem(entry)) { id in
-                        store.openCard(id, board: entry.board)
+        VStack(spacing: 0) {
+            tabs
+            ChatView(botId: botId)
+                .disabled(tab == .work)
+                .accessibilityHidden(tab == .work)
+                .overlay {
+                    if tab == .work {
+                        WorkLogView(entries: entries, selection: selection) { open($0) }
+                            .background(.background)
                     }
                 }
-            }
-            .alert("没能完成", isPresented: actionFailed) {
-                Button("好") {}
-            } message: {
-                Text(store.board.actionError ?? "")
-            }
-            .onChange(of: tab) { _, now in
-                if now == .chat {
-                    showInspector = false
+        }
+        // archived cards that ran today are read only while the log is up
+        .task(id: tab == .work && store.board.active) {
+            guard tab == .work, store.board.active else { return }
+            await store.board.followArchived()
+        }
+        .inspector(isPresented: $showInspector) {
+            if let entry = entries.first(where: { $0.id == selection }) {
+                BoardInspector(item: store.workItem(entry)) { id in
+                    store.openCard(id, board: entry.board)
                 }
             }
+        }
+        .alert("没能完成", isPresented: actionFailed) {
+            Button("好") {}
+        } message: {
+            Text(store.board.actionError ?? "")
+        }
+        .onChange(of: tab) { _, now in
+            if now == .chat {
+                showInspector = false
+            }
+        }
+    }
+
+    private var tabs: some View {
+        Picker("显示", selection: $tab) {
+            Text("Bot Chat").tag(AssistantTab.chat)
+            Text("工作记录").tag(AssistantTab.work)
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .fixedSize()
+        .accessibilityIdentifier("assistant-tabs")
+        .frame(maxWidth: .infinity)
+        .padding(.top, 10)
+        .padding(.bottom, 6)
     }
 
     private func open(_ entry: WorkLogEntry) {
@@ -106,7 +117,8 @@ struct WorkLogView: View {
                 }
             }
             .padding(.horizontal, 40)
-            .padding(.vertical, 28)
+            .padding(.top, 14)
+            .padding(.bottom, 28)
             .frame(maxWidth: 760, alignment: .leading)
             .frame(maxWidth: .infinity)
         }
@@ -119,8 +131,8 @@ struct WorkLogView: View {
     }
 }
 
-/// A card in the log: its title and where it stands now, its board when there are several, and
-/// its runs today.
+/// A card in the log: its title and where it stands now (archived since, too), its board when there
+/// are several, and its runs today.
 struct WorkLogRow: View {
     let entry: WorkLogEntry
     let selected: Bool
@@ -133,7 +145,11 @@ struct WorkLogRow: View {
                     .font(.t13.weight(.medium))
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 8)
-                CardStateTag(status: CardStatus(key: entry.status))
+                if entry.status == KanbanWorkflow.archived {
+                    Text("已归档").font(.t12).foregroundStyle(.secondary)
+                } else {
+                    CardStateTag(status: CardStatus(key: entry.status))
+                }
             }
             if showsBoard, let name = entry.boardName {
                 Text(name).font(.t12).foregroundStyle(.secondary)

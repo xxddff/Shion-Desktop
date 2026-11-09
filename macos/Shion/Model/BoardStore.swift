@@ -37,6 +37,10 @@ final class BoardStore {
     /// Details of the other boards' cards: the blocked ones (for their reasons), the waiting ones,
     /// and the ones that ran today.
     private(set) var elsewhereDetails: [String: KanbanDetail] = [:]
+    /// Archived cards that ran today, by board, and their details: 工作记录's. They are read (with
+    /// `include_archived`) only while a 工作记录 is open; the board page shows no archived card.
+    private(set) var archived: [String: [KanbanTask]] = [:]
+    private(set) var archivedDetails: [String: KanbanDetail] = [:]
     /// Why the last change did not go through.
     var actionError: String?
     /// Whether a card being done is a notification too; a card stopped on you, or handed to you
@@ -87,6 +91,12 @@ final class BoardStore {
     @ObservationIgnored private var readElsewhereAgain = false
     /// The other boards' counts as the last read of them found them.
     @ObservationIgnored private var readCounts: [String: [String: Int]] = [:]
+    /// How many 工作记录 are open; the archived cards as they were when their details were read;
+    /// each board's archived count at the last read of them; whether a read of them is under way.
+    @ObservationIgnored private var archivedWanted = 0
+    @ObservationIgnored private var archivedSigns: [String: String] = [:]
+    @ObservationIgnored private var archivedCounts: [String: Int] = [:]
+    @ObservationIgnored private var readingArchived = false
 
     private static let notifyDoneKey = "BoardNotifyDone"
 
@@ -107,14 +117,14 @@ final class BoardStore {
     /// Whether `board` names the board shown (nil does).
     private func isShown(_ board: String?) -> Bool { board == nil || board == slug }
 
-    /// A card on any board.
+    /// A card on any board, archived ones of 工作记录 too.
     func task(_ id: String, on board: String?) -> KanbanTask? {
-        guard let board, !isShown(board) else { return task(id) }
-        return elsewhere[board]?.first { $0.id == id }
+        let live = isShown(board) ? task(id) : board.flatMap { name in elsewhere[name]?.first { $0.id == id } }
+        return live ?? (board ?? slug).flatMap { name in archived[name]?.first { $0.id == id } }
     }
 
     func detail(_ id: String, on board: String?) -> KanbanDetail? {
-        isShown(board) ? details[id] : elsewhereDetails[id]
+        (isShown(board) ? details[id] : elsewhereDetails[id]) ?? archivedDetails[id]
     }
 
     func boardInfo(_ board: String?) -> KanbanBoardInfo? {
@@ -155,6 +165,10 @@ final class BoardStore {
         runningByAssignee = [:]
         elsewhere = [:]
         elsewhereDetails = [:]
+        archived = [:]
+        archivedDetails = [:]
+        archivedSigns = [:]
+        archivedCounts = [:]
         actionError = nil
         stale = []
         focus = nil
@@ -242,6 +256,10 @@ final class BoardStore {
                 if self.otherCounts(fresh) != self.readCounts {
                     await self.readElsewhere(token)
                 }
+                // a card archived (or brought back) while a 工作记录 is open
+                if self.archivedWanted > 0, Self.archivedCounts(fresh) != self.archivedCounts {
+                    await self.readArchived()
+                }
             }
         }
     }
@@ -308,6 +326,14 @@ final class BoardStore {
         (reply["columns"]?.array ?? [])
             .filter { $0["name"]?.string != KanbanWorkflow.archived }
             .flatMap { column in (column["tasks"]?.array ?? []).compactMap { KanbanTask($0) } }
+    }
+
+    /// The archived column of a `/board?include_archived=true` reply.
+    static func archivedTasks(in reply: JSONValue) -> [KanbanTask] {
+        (reply["columns"]?.array ?? [])
+            .filter { $0["name"]?.string == KanbanWorkflow.archived }
+            .flatMap { column in (column["tasks"]?.array ?? []).compactMap { KanbanTask($0) } }
+            .filter { $0.status == KanbanWorkflow.archived }
     }
 
     /// The other boards' cards and the details they need (a detail read before is kept while its
@@ -436,6 +462,12 @@ final class BoardStore {
         guard let reply = try? await client.get("/tasks/\(KanbanClient.encode(id))", board: board),
               token == generation
         else { return }
+        // an archived card of 工作记录 (commented on in its detail): kept with the archived ones,
+        // which a read of its board would not drop; one back on its board is that board's again
+        if task(id, on: board)?.status == KanbanWorkflow.archived {
+            archivedDetails[id] = KanbanDetail(reply)
+            return
+        }
         if isShown(board) {
             details[id] = KanbanDetail(reply)
             stale.remove(id)
@@ -455,7 +487,7 @@ final class BoardStore {
         } else {
             focusElsewhere = id.map { CardRef(board: board, id: $0) }
         }
-        guard let id, active else { return }
+        guard let id, active, archivedDetails[id] == nil else { return }
         if here {
             guard details[id] == nil || stale.contains(id) else { return }
         } else {
@@ -706,9 +738,17 @@ final class BoardStore {
     }
 
     /// What `profile` ran today, on every board: each card with its runs today, the latest first.
+    /// Cards archived since are in it too, once read (`followArchived`).
     func workLog(_ profile: String) -> [WorkLogEntry] {
         let start = BoardWork.today(serverNow)
-        return allCards.compactMap { board, task -> WorkLogEntry? in
+        let live = allCards
+        let ids = Set(live.map(\.task.id))
+        // a card brought back from the archive is on its board again; until the archive is read
+        // again it would be in both
+        let gone = archived.keys.sorted().flatMap { board in
+            (archived[board] ?? []).filter { !ids.contains($0.id) }.map { (board: Optional(board), task: $0) }
+        }
+        return (live + gone).compactMap { board, task -> WorkLogEntry? in
             guard let detail = detail(task.id, on: board) else { return nil }
             let runs = BoardWork.runs(of: detail, card: task, by: profile, since: start)
             guard !runs.isEmpty else { return nil }
@@ -716,6 +756,70 @@ final class BoardStore {
                                 assignee: task.assignee, status: task.status, runs: runs)
         }
         .sorted { $0.latest > $1.latest }
+    }
+
+    /// While a 工作记录 is open (its view's task): the archived cards are read now, every minute,
+    /// and when a board's archived count moves (the 15-second check of the counts).
+    func followArchived() async {
+        archivedWanted += 1
+        defer { archivedWanted -= 1 }
+        while !Task.isCancelled {
+            await readArchived()
+            try? await Task.sleep(for: .seconds(60))
+        }
+    }
+
+    /// Each board's archived count, from `/boards`.
+    private static func archivedCounts(_ list: [KanbanBoardInfo]) -> [String: Int] {
+        Dictionary(list.map { ($0.slug, $0.counts[KanbanWorkflow.archived] ?? 0) }, uniquingKeysWith: { first, _ in first })
+    }
+
+    /// The archived cards that ran today: every board with archived cards is read with
+    /// `include_archived`, and those touched today get their details (a detail read before is kept
+    /// while its card has not changed). The board page and its counts do not change.
+    func readArchived() async {
+        guard active, let client, !readingArchived else { return }
+        readingArchived = true
+        defer { readingArchived = false }
+        let token = generation
+        let start = BoardWork.today(serverNow)
+        let counts = Self.archivedCounts(boards)
+        var cards: [String: [KanbanTask]] = [:]
+        var kept: [String: KanbanDetail] = [:]
+        var signs: [String: String] = [:]
+        for info in boards where (counts[info.slug] ?? 0) > 0 {
+            guard let reply = try? await client.get("/board", board: info.slug, query: [("include_archived", "true")]) else {
+                // not read this time: what was read of it stays
+                guard token == generation else { return }
+                let held = archived[info.slug] ?? []
+                cards[info.slug] = held
+                for task in held {
+                    kept[task.id] = archivedDetails[task.id]
+                    signs[task.id] = archivedSigns[task.id]
+                }
+                continue
+            }
+            guard token == generation else { return }
+            let found = Self.archivedTasks(in: reply).filter { BoardWork.touched($0, since: start) }
+            cards[info.slug] = found
+            for task in found {
+                let sign = BoardWork.signature(task)
+                if let held = archivedDetails[task.id], archivedSigns[task.id] == sign {
+                    kept[task.id] = held
+                    signs[task.id] = sign
+                    continue
+                }
+                guard let detail = try? await client.get("/tasks/\(KanbanClient.encode(task.id))", board: info.slug) else { continue }
+                guard token == generation else { return }
+                kept[task.id] = KanbanDetail(detail)
+                signs[task.id] = sign
+            }
+        }
+        guard token == generation else { return }
+        archived = cards
+        archivedDetails = kept
+        archivedSigns = signs
+        archivedCounts = counts
     }
 
     /// Tells `onMoment` about the cards of `board` whose moment changed since its last read: one
@@ -772,6 +876,8 @@ final class BoardStore {
             return task.latestSummary.map { "做完了，等你看：\($0)" } ?? "做完了，等你看"
         case "done":
             return task.latestSummary ?? task.result ?? "做完了"
+        case KanbanWorkflow.archived:
+            return task.latestSummary ?? task.result ?? "已归档"
         case "triage":
             // the loop breaker's: it stopped on the same thing again after it was let go on
             if BoardWork.looped(task), let stop = detail?.stop, stop.event == "block_loop_detected" {

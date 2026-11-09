@@ -273,9 +273,14 @@ struct BoardInspector: View {
             VStack(alignment: .leading, spacing: 18) {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(spacing: 8) {
-                        CardStateTag(status: item.group)
-                        if store.boardLabel(item.status) != item.group.label {
-                            Text(store.boardLabel(item.status)).font(.t12).foregroundStyle(.secondary)
+                        if archived {
+                            // only 工作记录 opens an archived card
+                            Text("已归档").font(.t12).foregroundStyle(.secondary)
+                        } else {
+                            CardStateTag(status: item.group)
+                            if store.boardLabel(item.status) != item.group.label {
+                                Text(store.boardLabel(item.status)).font(.t12).foregroundStyle(.secondary)
+                            }
                         }
                     }
                     Text(item.title)
@@ -296,10 +301,10 @@ struct BoardInspector: View {
                         .textSelection(.enabled)
                 }
 
-                if item.group == .waiting || item.group == .queued || !live {
+                if item.group == .waiting || (item.group == .queued && !archived) || !live {
                     Callout(text: item.line, warm: item.group == .waiting)
                 }
-                if live, item.status == "done" || item.status == "review",
+                if live, item.status == "done" || item.status == "review" || archived,
                    let delivered = detail?.summary ?? detail?.result ?? task?.latestSummary ?? task?.result {
                     Callout(text: delivered, warm: false)
                 }
@@ -326,6 +331,8 @@ struct BoardInspector: View {
         .inspectorColumnWidth(min: 240, ideal: 280, max: 360)
         .accessibilityIdentifier("card-inspector")
     }
+
+    private var archived: Bool { item.status == KanbanWorkflow.archived }
 
     private func meta(bot: Bot?, task: KanbanTask?, now: Date) -> String {
         var parts = ["\(bot?.name ?? item.assignee ?? "还没有人") 负责"]

@@ -207,6 +207,19 @@ def complete(board, task, at=None, summary=None, result=None):
     recompute_ready(board)
 
 
+def archive(board, task, at=None):
+    """archive_task: archived (terminal), the claim dropped; a run still open closes as reclaimed
+    (_end_run: no run is made up when none is open)."""
+    at = at or now()
+    task.update(status="archived")
+    run = None
+    if task["current_run_id"]:
+        run = _end(board, task, "reclaimed", at, summary="task archived with run still active", status="reclaimed")
+    task.update(claim_lock=None, claim_expires=None, worker_pid=None)
+    event(board, task["id"], "archived", None, at=at, run_id=run["id"] if run else None)
+    recompute_ready(board)
+
+
 def request_review(board, task, at=None, summary=None):
     """request_review: the implementer's run closes as review_requested; the card waits in review."""
     at = at or now()
@@ -280,6 +293,16 @@ def seed():
     notes = add(study, _task("t_notes7", "整理第7回笔记（CI）", "study", "ready", yesterday - 3600))
     claim(study, notes, yesterday - 1800)
     complete(study, notes, yesterday, summary="笔记放进了 Notion（CI）。")
+    # done today, then archived: the board page shows it no more, 课程's work log does
+    quiz = add(study, _task("t_quiz", "核对第8回小测答案（CI）", "study", "ready", ago(150)))
+    claim(study, quiz, ago(140))
+    complete(study, quiz, ago(130), summary="小测 10 题都对过了，错的 2 题记进了笔记（CI）。")
+    archive(study, quiz, ago(10))
+    # archived as well, but it ran yesterday
+    old = add(study, _task("t_hw6", "整理第6回作业（CI）", "study", "ready", yesterday - 7200))
+    claim(study, old, yesterday - 6000)
+    complete(study, old, yesterday - 5000, summary="第6回作业整理好了（CI）。")
+    archive(study, old, yesterday - 4000)
 
     invoice = add(side, _task("t_invoice", "整理副业发票（CI）", "shion", "ready", ago(15)))
     claim(side, invoice, ago(3))
@@ -415,13 +438,13 @@ def route(handler, method, url, query, body):
         board = boards.get(slug)
         if board is None and path != "/boards" and path != "/workflow":
             return handler.answer(404, {"detail": f"board {slug!r} does not exist"})
-        status, reply = handle(method, path, board, slug, body)
+        status, reply = handle(method, path, board, slug, body, query)
     if status == 200 and method != "GET":
         _log(f"    kanban {method} {path} on {slug}: {json.dumps(body, ensure_ascii=False)[:120]}")
     return handler.answer(status, reply)
 
 
-def handle(method, path, board, slug, body):
+def handle(method, path, board, slug, body, query=None):
     if method == "GET" and path == "/workflow":
         return 200, {"columns": [{"key": k, "label": label, "icon": "?", "drag_target": drag}
                                  for k, label, drag in COLUMNS], "manual": MANUAL, "archived": "archived"}
@@ -435,6 +458,9 @@ def handle(method, path, board, slug, body):
         return 200, {"boards": rows, "current": CURRENT}
     if method == "GET" and path == "/board":
         columns = {k: [] for k, _, _ in COLUMNS}
+        # Hermes: a bool query parameter; the archived cards come in a column of their own
+        if str((query or {}).get("include_archived", "")).lower() in ("1", "true", "yes", "on"):
+            columns["archived"] = []
         # list_tasks' order: priority, then the oldest first
         for t in sorted(board["tasks"].values(), key=lambda t: (-t["priority"], t["created_at"])):
             if t["status"] in columns:
@@ -532,8 +558,7 @@ def patch(board, slug, t, body):
         names = ", ".join(f"{p['title']!r} ({p['id']}, status={p['status']})" for p in blockers)
         return 409, {"detail": f"Cannot move to {status!r}: blocked by parent(s) not done — {names}"}
     if status == "archived":
-        t["status"] = "archived"
-        event(board, t["id"], "archived")
+        archive(board, t)
     elif status == "blocked":
         block(board, t, None, body.get("block_reason"))
     elif status == "done":

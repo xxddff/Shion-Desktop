@@ -3,9 +3,11 @@ import UserNotifications
 
 /// System notifications for what wants you while its page is not in front of you: an approval or
 /// a question, answered in the notification itself, an assistant's reply, replied to the same
-/// way, and a board card that stopped on you, was handed to you to check, or is done. Clicking
-/// one opens the page it belongs to, or the card. Screenshot and test runs post nothing and ask
-/// for no permission; a test can have them written down instead (`-ShionNotificationLog <file>`).
+/// way, and a board card that stopped on you (replied to the same way too: the reply goes on the
+/// card and lets it go on), was handed to you to check, or is done. Clicking one opens the page it
+/// belongs to, or the card. Screenshot and test runs post nothing and ask for no permission; a
+/// test can have them written down instead (`-ShionNotificationLog <file>`), and answer them
+/// (`-ShionNotificationAnswers <file>`).
 final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     static let shared = Notifier()
 
@@ -17,6 +19,8 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         static let reply = "reply"
         static let approval = "approval"
         static let question = "question"
+        /// A card that stopped on you.
+        static let card = "card"
     }
 
     /// The approval actions are named as Hermes names the choices, so they answer directly.
@@ -25,12 +29,21 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         static let once = "once"
         static let deny = "deny"
         static let answer = "answer"
+        static let cardReply = "card-reply"
     }
 
     /// A test run's file, where each notification is written down as a line of JSON.
     private static let testLog: String? = LaunchOptions.current.snapshot
         ? UserDefaults.standard.string(forKey: "ShionNotificationLog")
         : nil
+    /// A test run's answers to its notifications, a line of JSON each: the notification's id, the
+    /// action, the text typed. Each is handled as that answer from the notification would be.
+    private static let testAnswers: String? = LaunchOptions.current.snapshot
+        ? UserDefaults.standard.string(forKey: "ShionNotificationAnswers")
+        : nil
+    /// What a test run's notifications carried, by id, for its answers; how many answers were read.
+    private var written: [String: [String: String]] = [:]
+    private var answersRead = 0
 
     func start(_ store: AppStore) {
         guard self.store == nil else { return }
@@ -38,7 +51,12 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         store.board.onMoment = { [weak self] moment in
             self?.card(moment)
         }
-        guard !LaunchOptions.current.snapshot else { return }
+        guard !LaunchOptions.current.snapshot else {
+            if let path = Self.testAnswers {
+                readAnswers(path)
+            }
+            return
+        }
         let center = UNUserNotificationCenter.current()
         center.delegate = self
         center.setNotificationCategories([
@@ -59,6 +77,12 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             UNNotificationCategory(
                 identifier: Category.question,
                 actions: [UNTextInputNotificationAction(identifier: Action.answer, title: "回答", options: [],
+                                                        textInputButtonTitle: "发送", textInputPlaceholder: "")],
+                intentIdentifiers: []
+            ),
+            UNNotificationCategory(
+                identifier: Category.card,
+                actions: [UNTextInputNotificationAction(identifier: Action.cardReply, title: "回复", options: [],
                                                         textInputButtonTitle: "发送", textInputPlaceholder: "")],
                 intentIdentifiers: []
             ),
@@ -116,8 +140,22 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         }
         let text = moment.text.map { $0.count > 300 ? String($0.prefix(300)) + "…" : $0 }
         content.body = [moment.title, text].compactMap { $0 }.joined(separator: "\n")
+        if moment.kind == .ask {
+            // what it needs can be typed right in: the reply goes on the card and lets it go on
+            content.categoryIdentifier = Category.card
+        }
         content.userInfo = ["card": moment.cardId, "board": moment.board ?? "", "bot": moment.assignee ?? ""]
         post(Self.cardNotice(moment.cardId, board: moment.board), content, thread: moment.assignee ?? "board")
+    }
+
+    /// A reply from a card's notification that did not go through: why, in its place. A click
+    /// opens the card.
+    private func cardReplyFailed(_ card: CardRef, _ why: String) {
+        let content = UNMutableNotificationContent()
+        content.title = "没能回复"
+        content.body = why
+        content.userInfo = ["card": card.id, "board": card.board ?? ""]
+        post(Self.cardNotice(card.id, board: card.board), content, thread: "board")
     }
 
     func withdrawCard(_ id: String, board: String?) {
@@ -150,28 +188,57 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id, content: content, trigger: nil)) { _ in }
     }
 
-    /// A test run's notification, as a line of JSON in its file: id, title, body, and where a
-    /// click would go.
+    /// A test run's notification, as a line of JSON in its file: id, title, body, what can be
+    /// answered in it (its category), and where a click would go.
     private func writeDown(_ id: String, _ content: UNMutableNotificationContent) {
         guard let path = Self.testLog else { return }
-        var info: [String: JSONValue] = [:]
-        for (key, value) in content.userInfo {
-            if let key = key as? String, let value = value as? String {
-                info[key] = .string(value)
-            }
-        }
+        let strings = Self.strings(content.userInfo)
+        written[id] = strings
         let line: JSONValue = [
-            "id": .string(id), "title": .string(content.title), "body": .string(content.body), "info": .object(info),
+            "id": .string(id), "title": .string(content.title), "body": .string(content.body),
+            "category": .string(content.categoryIdentifier), "info": .object(strings.mapValues { .string($0) }),
         ]
         guard let text = try? line.serialized() else { return }
         let data = Data((text + "\n").utf8)
         guard let handle = FileHandle(forWritingAtPath: path) else {
-            FileManager.default.createFile(atPath: path, contents: data)
+            _ = FileManager.default.createFile(atPath: path, contents: data)
             return
         }
         _ = try? handle.seekToEnd()
         try? handle.write(contentsOf: data)
         try? handle.close()
+    }
+
+    /// A notification's userInfo: every value here is a string.
+    private nonisolated static func strings(_ info: [AnyHashable: Any]) -> [String: String] {
+        var out: [String: String] = [:]
+        for (key, value) in info {
+            if let key = key as? String, let value = value as? String {
+                out[key] = value
+            }
+        }
+        return out
+    }
+
+    /// A test run's answers, read from their file as they come (a test cannot type into a real
+    /// notification); each goes where the same answer from the notification goes.
+    private func readAnswers(_ path: String) {
+        Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(500))
+                guard let self else { return }
+                guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { continue }
+                let lines = text.split(separator: "\n")
+                guard lines.count > self.answersRead else { continue }
+                for line in lines[self.answersRead...] {
+                    guard let row = try? JSONValue.parse(String(line)), let id = row["id"]?.string,
+                          let action = row["action"]?.string, let info = self.written[id]
+                    else { continue }
+                    self.respond(action: action, info: info, text: row["text"]?.string ?? "")
+                }
+                self.answersRead = lines.count
+            }
+        }
     }
 
     // MARK: answers from the notification
@@ -182,17 +249,18 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
         let action = response.actionIdentifier
-        let info = response.notification.request.content.userInfo
-        let botId = info["bot"] as? String ?? ""
-        let askId = info["ask"] as? String
-        let cardId = info["card"] as? String
-        let board = info["board"] as? String ?? ""
+        let info = Self.strings(response.notification.request.content.userInfo)
         let text = (response as? UNTextInputNotificationResponse)?.userText ?? ""
         Task { @MainActor in
-            let card = cardId.map { CardRef(board: board.isEmpty ? nil : board, id: $0) }
-            self.handle(action: action, botId: botId, askId: askId, card: card, text: text)
+            self.respond(action: action, info: info, text: text)
         }
         completionHandler()
+    }
+
+    private func respond(action: String, info: [String: String], text: String) {
+        let board = info["board"] ?? ""
+        let card = info["card"].map { CardRef(board: board.isEmpty ? nil : board, id: $0) }
+        handle(action: action, botId: info["bot"] ?? "", askId: info["ask"], card: card, text: text)
     }
 
     nonisolated func userNotificationCenter(
@@ -218,6 +286,13 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             let answer = text.trimmingCharacters(in: .whitespacesAndNewlines)
             if let pending, !answer.isEmpty {
                 store.answer(pending, with: AskOption(value: answer, label: answer))
+            }
+        case Action.cardReply:
+            guard let card else { return }
+            Task {
+                if let why = await store.replyToCard(card.id, board: card.board, text: text) {
+                    self.cardReplyFailed(card, why)
+                }
             }
         default:
             // clicked: the card on the board, or the page it belongs to

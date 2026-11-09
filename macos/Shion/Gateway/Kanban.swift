@@ -42,16 +42,18 @@ final class KanbanClient {
         self.credential = credential
     }
 
-    func get(_ path: String, board: String? = nil) async throws -> JSONValue {
-        try await request("GET", path, board: board)
+    /// `query`: more parameters than the board, as `include_archived`.
+    func get(_ path: String, board: String? = nil, query: [(String, String)] = []) async throws -> JSONValue {
+        try await request("GET", path, board: board, query: query)
     }
 
     /// One call; a 401 renews the credential once and tries again.
     @discardableResult
-    func request(_ method: String, _ path: String, board: String? = nil, body: JSONValue = .null) async throws -> JSONValue {
+    func request(_ method: String, _ path: String, board: String? = nil, query: [(String, String)] = [],
+                 body: JSONValue = .null) async throws -> JSONValue {
         var renew = false
         while true {
-            guard let url = url(path, board: board) else { throw GatewayError.notConfigured }
+            guard let url = url(path, board: board, query: query) else { throw GatewayError.notConfigured }
             let signed = try await credential(settings, renew)
             var request = URLRequest(url: url)
             request.httpMethod = method
@@ -104,8 +106,8 @@ final class KanbanClient {
         return socket
     }
 
-    private func url(_ path: String, board: String?) -> URL? {
-        let query = board.map { Self.query([("board", $0)]) } ?? ""
+    private func url(_ path: String, board: String?, query more: [(String, String)] = []) -> URL? {
+        let query = Self.query((board.map { [("board", $0)] } ?? []) + more)
         return settings.httpURL(Self.prefix + path + (query.isEmpty ? "" : "?" + query))
     }
 
