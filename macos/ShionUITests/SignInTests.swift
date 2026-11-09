@@ -85,19 +85,24 @@ final class SignInTests: XCTestCase {
         let window = app.windows.firstMatch
         let transcript = element("transcript", in: app)
         XCTAssertTrue(transcript.waitForExistence(timeout: 5), "no transcript")
+        // which sign of a wheel delta scrolls up is the runner's business: nudge, and see which
+        // way a row on screen moved. Towards older messages rows move down; the chat is at its
+        // bottom, so a nudge the other way moves nothing.
         var direction: CGFloat = 1
+        if let row = findText("第 124 条", in: app) {
+            let before = row.frame.minY
+            transcript.hover()
+            transcript.scroll(byDeltaX: 0, deltaY: 200)
+            Thread.sleep(forTimeInterval: 0.5)
+            direction = row.exists && row.frame.minY > before + 1 ? 1 : -1
+            print("wheel: +200 moved 第 124 条 from \(before) to \(row.exists ? row.frame.minY : -1); up is \(direction)")
+        }
         var reachedTop = false
         var sawSecondPage = false
-        for attempt in 0..<18 {
-            if attempt < 10 {
-                // wheel events go where the pointer is: put it on the transcript, not the composer
-                transcript.hover()
-                transcript.scroll(byDeltaX: 0, deltaY: direction * 1200)
-            } else {
-                // gestures that never land: the keyboard's way to the top
-                transcript.click()
-                app.typeKey(.home, modifierFlags: [])
-            }
+        for _ in 0..<24 {
+            // wheel events go where the pointer is: put it on the transcript, not the composer
+            transcript.hover()
+            transcript.scroll(byDeltaX: 0, deltaY: direction * 1200)
             if waitForText("第 1 条（你）", in: app, timeout: 1.5) {
                 reachedTop = true
                 break
@@ -106,10 +111,6 @@ final class SignInTests: XCTestCase {
             if !sawSecondPage && waitForText("第 81 条", in: app, timeout: 0.2) {
                 sawSecondPage = true
                 keep(window.screenshot(), "signin-6a-second-page")
-            }
-            // which sign scrolls up is the runner's business: turn round if a second page never came
-            if attempt == 3 && !waitForText("第 81 条", in: app, timeout: 0.5) {
-                direction = -direction
             }
         }
         keep(window.screenshot(), "signin-6-oldest")
@@ -152,6 +153,14 @@ final class SignInTests: XCTestCase {
     @MainActor
     private func says(_ element: XCUIElement, _ text: String) -> Bool {
         element.label == text || (element.value as? String) == text
+    }
+
+    /// The first text element showing `text`, plain or selectable; nil when none is there.
+    @MainActor
+    private func findText(_ text: String, in app: XCUIApplication) -> XCUIElement? {
+        let either = NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", text, text)
+        return [app.staticTexts.matching(either).firstMatch, app.textViews.matching(either).firstMatch]
+            .first { $0.exists }
     }
 
     /// Text anywhere in the app, plain or selectable (selectable text is not a static text to
