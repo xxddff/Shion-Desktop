@@ -20,6 +20,8 @@ hermes-plugin/
 
 ## 安装到服务器
 
+> Hermes 跑在容器里时（用户的服务器就是），下面的 `hermes …` 命令都在容器里执行，比如 `docker exec -it <容器名> hermes -p shion plugins list`；插件目录和数据目录要在挂载的卷里，容器重建后才还在。
+
 **安装和启用都是按 profile 的。** 这是 Hermes 本身的设计，不是这个插件特有的：
 
 - 插件目录是 `<profile 目录>/plugins/`（`hermes_cli/plugins_cmd.py` 的 `_plugins_dir`、`plugins_discovery.py`），默认 profile 是 `~/.hermes`，其他的在 `~/.hermes/profiles/<名字>`；

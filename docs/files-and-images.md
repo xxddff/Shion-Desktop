@@ -26,6 +26,8 @@ Shion 现在只能发文字，回复里的图片也只显示成链接。这份�
    3. 以后按需要：备份到云、按助手分权限（要先把助手换成 docker 后端）、在 Finder 里直接看到空间。
 6. 要你决定的问题在第 9 节。
 
+> **用户的补充（2026-11-09）**：「空间」（第二步）先不做，用户稍后评估；第一步（对话里的图片和文件，只改 App）已经在做，发图前缩小、去掉位置信息，网上的图片点了才加载。Hermes 跑的是容器版：服务器上的路径都在挂载的卷里，命令要在容器里执行。第 3.2 节说的「profile 在文件上不隔离」指的是容器里各个助手之间；按助手分权限要看每个助手的 `terminal.backend`（第 10 节），评估「空间」时再一起核实。
+
 ## 1. Hermes 现在怎么收图片和文件
 
 Shion 连的是 `hermes gateway` 上的 `/api/ws`，也就是会话 authority，下面只说这条连接和同一个地址上的 REST 能用的东西。官方桌面端在本机时还有一套旧方法：`image.attach`、`clipboard.paste`、`pdf.attach`、`input.detect_drop`（`tui_gateway/methods_prompt.py:976-1155`）。authority 不接这些（`gateway/session_controls.py:221-288` 的方法表里没有），远程用不上。
