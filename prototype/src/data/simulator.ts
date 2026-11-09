@@ -1,4 +1,5 @@
 import { at, demoNow } from './clock';
+import { OFF_REPORT_MIN, focusNow } from './focus';
 import type { AppState } from './model';
 import { nextId } from './seed';
 import {
@@ -9,11 +10,13 @@ import {
   withBot,
   withClaim,
   withComplete,
+  withFocusReport,
   withItem,
   withScreen,
   withToast,
   withTodo,
 } from './store';
+import { hm } from '../ui/format';
 
 /**
  * Plays out the next few minutes of the demo day on the kanban board:
@@ -228,22 +231,37 @@ const scripts: Runner[] = [
       },
     },
   ]),
-  // 詩音's noon nudge
+  // the focus check: this Mac tells 詩音 when you have drifted off the plan, and she decides whether to nudge
   run('shion', 'shion', [
-    { kind: 'wait', ticks: 40 },
+    { kind: 'wait', ticks: 24 },
+    {
+      kind: 'effect',
+      run: (s) => {
+        const v = focusNow(s, demoNow());
+        return v.state === 'off' && v.minutes >= OFF_REPORT_MIN && !s.focus.sent ? withFocusReport(s, 'off') : s;
+      },
+    },
+    { kind: 'wait', ticks: 12 },
     {
       kind: 'effect',
       run: (s) => {
         const quiz = s.todos.find((t) => t.id === 'td2');
-        if (!quiz || quiz.done) return s;
+        if (!quiz || quiz.done || !quiz.doAt) return s;
+        const f = s.focus;
+        // with the check on, she goes by the last verdict she heard: no nudge while you are on the plan
+        if (f.enabled && f.sent?.state !== 'off') return s;
+        const late = Math.max(0, Math.floor((demoNow() - quiz.doAt) / 60_000));
+        const v = focusNow(s, demoNow());
+        const last = f.samples[f.samples.length - 1];
         let next = withTodo(s, 'td2', (t) => ({ ...t, nudges: t.nudges + 1 }));
         next = withItem(next, 'shion', {
           role: 'assistant',
-          text: '提醒一下：「机器学习 课前小测」12:50 截止，大概 15 分钟能做完。现在做，做完正好去吃午饭？',
+          text: `小测原定 ${hm(quiz.doAt)} 开始，已经过了 ${late} 分钟。15 分钟就能做完，现在开始吧？`,
           at: demoNow(),
           todoIds: ['td2'],
+          localNote: f.enabled && v.state === 'off' && last ? `${hm(v.since)} 起，前台是 ${last.app}「${last.title}」` : undefined,
         });
-        return withToast(next, { title: '詩音：课前小测 12:50 截止', body: '大概 15 分钟，做完再去吃饭？', botId: 'shion', href: '#todos' });
+        return withToast(next, { title: '詩音：该做课前小测了', body: `原定 ${hm(quiz.doAt)}，大概 15 分钟`, botId: 'shion', href: '#chat-shion' });
       },
     },
   ]),

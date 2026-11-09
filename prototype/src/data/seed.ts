@@ -189,7 +189,7 @@ export function seedState(): AppState {
         title: '机器学习 课前小测',
         area: 'study',
         source: { kind: 'class', label: '机器学习基础' },
-        doAt: at(0, 12),
+        doAt: at(0, 10, 45),
         dueAt: at(0, 12, 50),
         done: false,
         nudges: 0,
@@ -415,6 +415,16 @@ export function seedState(): AppState {
       { app: 'PDF Expert', area: 'study', minutes: 40 },
       { app: '访达、系统设置等', area: 'other', minutes: 40 },
     ],
+    // the focus check: what was in front on this Mac since class ended (kept on the Mac only)
+    focus: {
+      enabled: true,
+      target: { todoId: 'td2', title: '机器学习 课前小测', from: at(0, 10, 45) },
+      samples: [
+        { at: at(0, 10, 30), app: 'Notion', title: '数据结构与算法 第7回 · 课堂笔记', kind: 'study', fit: 'none' },
+        { at: at(0, 10, 34), app: 'LINE', title: '研究室', kind: 'social', fit: 'none' },
+        { at: at(0, 10, 41), app: 'Safari', title: '猫のおもしろ動画まとめ 2026 - YouTube', kind: 'fun', fit: 'unrelated' },
+      ],
+    },
     asks: [
       {
         id: 'ask-mail',

@@ -2,7 +2,8 @@ import { ArrowRight, CalendarDays, CircleCheck, Hand, Monitor, Newspaper, Search
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { dayDiff } from '../data/clock';
 import type { AppState, Toast } from '../data/model';
-import { dismissToast, sendMessage, setActivityLog, setSimulate } from '../data/store';
+import { dismissToast, sendMessage, setActivityLog, setFocusEnabled, setSimulate } from '../data/store';
+import { FocusRow } from './Focus';
 import { go } from '../route';
 import { AreaDot, Avatar, Mark } from '../ui/bits';
 import { hm, until, useNow, weekday } from '../ui/format';
@@ -161,6 +162,13 @@ export function ConnectionPopover({ state, theme, setTheme, onClose }: { state: 
             </span>
             <input id="activity-toggle" type="checkbox" checked={c.activityLog} onChange={(e) => setActivityLog(e.target.checked)} />
           </label>
+          <label className="pop-switch" htmlFor="focus-toggle">
+            <span className="grow">
+              专注检查
+              <span className="quiet small block">在本机判断你在做的是不是计划里的事，只把结论告诉詩音。要读窗口标题，需要辅助功能权限</span>
+            </span>
+            <input id="focus-toggle" type="checkbox" checked={state.focus.enabled} onChange={(e) => setFocusEnabled(e.target.checked)} />
+          </label>
           <label className="pop-switch" htmlFor="sim-toggle">
             <span className="grow">示例数据自动播放</span>
             <input id="sim-toggle" type="checkbox" checked={state.simulate} onChange={(e) => setSimulate(e.target.checked)} />
@@ -273,6 +281,7 @@ export function MenuBar({ state, onQuickAsk }: { state: AppState; onQuickAsk: ()
       </div>
       {open && (
         <div className="mb-pop" role="dialog" aria-label="Shion">
+          <FocusRow state={state} now={now} />
           {next && (
             <div className="mbp-next">
               <span className="quiet small">下一件 · {until(next.start, now)}</span>

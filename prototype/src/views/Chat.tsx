@@ -1,4 +1,4 @@
-import { ArrowUp, ArrowUpRight, Check, CircleAlert } from 'lucide-react';
+import { ArrowUp, ArrowUpRight, Check, CircleAlert, Laptop } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { CardChip, CardRow, CardState, cardHref, workHref } from '../components/Cards';
 import { AskCard, TodoRow } from '../components/Items';
@@ -176,6 +176,12 @@ function Item({ it, bot, state, now, head }: { it: ChatItem; bot: Bot; state: Ap
             <TodoRow key={t.id} t={t} now={now} />
           ))}
         </div>
+      )}
+      {it.localNote && !it.streaming && (
+        <p className="m-local">
+          <Laptop size={12} />
+          <span>仅本机可见 · {it.localNote}</span>
+        </p>
       )}
     </div>
   );

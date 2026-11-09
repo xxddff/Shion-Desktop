@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react';
 import { demoNow } from './clock';
+import { DEMO_WINDOWS, KIND_LABEL, focusNow } from './focus';
 import { hm } from '../ui/format';
 import type { AppState, Ask, Card, ChatItem, Screen, Todo, Toast } from './model';
 import { nextId, seedState } from './seed';
@@ -268,6 +269,48 @@ export function setSimulate(on: boolean) {
 
 export function setActivityLog(on: boolean) {
   setState((s) => ({ ...s, connection: { ...s.connection, activityLog: on } }));
+}
+
+/**
+ * This Mac tells 詩音 the verdict through the shion plugin, which puts it in
+ * her Bot Chat (Hermes `inject_message`): words only, never window titles.
+ */
+export function withFocusReport(s: AppState, state: 'on' | 'off'): AppState {
+  const f = s.focus;
+  if (!f.target) return s;
+  const v = focusNow(s, demoNow());
+  const text =
+    state === 'off' && v.state === 'off'
+      ? `「${f.target.title}」原定 ${hm(f.target.from)}，已经 ${v.minutes} 分钟没在做；在做的是${KIND_LABEL[v.kind]}。`
+      : `回到「${f.target.title}」上了。`;
+  const next = { ...s, focus: { ...f, sent: { at: demoNow(), text, state } } };
+  return withItem(next, 'shion', { role: 'system', text: `这台 Mac 告诉詩音：${text}`, at: demoNow() });
+}
+
+/** Prototype only: pretend a window came to the front; the on-device model judges it against the plan. */
+export function frontWindow(index: number) {
+  const w = DEMO_WINDOWS[index];
+  if (!w) return;
+  setState((s) => {
+    const planned = !!s.focus.target && demoNow() >= s.focus.target.from;
+    const sample = { ...w, fit: planned || w.fit === 'away' ? w.fit : ('none' as const), at: demoNow() };
+    let next: AppState = { ...s, focus: { ...s.focus, samples: [...s.focus.samples, sample].slice(-20) } };
+    // once 詩音 has heard you were off the plan, tell her as soon as you are back on it
+    if (focusNow(next, demoNow()).state === 'on' && next.focus.sent?.state === 'off') next = withFocusReport(next, 'on');
+    return next;
+  });
+}
+
+export function pauseFocus(minutes: number) {
+  setState((s) => ({ ...s, focus: { ...s.focus, pausedUntil: demoNow() + minutes * 60_000 } }));
+}
+
+export function resumeFocus() {
+  setState((s) => ({ ...s, focus: { ...s.focus, pausedUntil: undefined } }));
+}
+
+export function setFocusEnabled(on: boolean) {
+  setState((s) => ({ ...s, focus: { ...s.focus, enabled: on, pausedUntil: undefined } }));
 }
 
 export function dismissToast(id: number) {

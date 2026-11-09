@@ -55,6 +55,8 @@ export interface ChatItem {
   cardId?: string;
   /** Inline card referencing todos created by this turn. */
   todoIds?: string[];
+  /** Shown under the message on this Mac only: local detail the assistant never received. */
+  localNote?: string;
 }
 
 /**
@@ -187,6 +189,33 @@ export interface AppUsage {
   minutes: number;
 }
 
+/** What a window was, as the on-device model on this Mac judged it. */
+export type ActivityKind = 'study' | 'work' | 'life' | 'fun' | 'social' | 'other';
+
+/**
+ * One window that was in front on this Mac. Kept on the Mac only: 詩音 hears
+ * the verdict (on the plan or not, for how long, what kind), never the title.
+ */
+export interface FocusSample {
+  at: number;
+  app: string;
+  title: string;
+  kind: ActivityKind;
+  /** Against the plan at the time: the planned thing, related to it, unrelated, no plan, or away from the Mac. */
+  fit: 'same' | 'related' | 'unrelated' | 'none' | 'away';
+}
+
+/** The focus check: is what you are doing what you planned to be doing now? */
+export interface Focus {
+  enabled: boolean;
+  pausedUntil?: number;
+  /** What you planned to be doing now: a todo at its time, or a class or focus block. */
+  target?: { todoId?: string; title: string; from: number };
+  samples: FocusSample[];
+  /** What this Mac last told 詩音, word for word. */
+  sent?: { at: number; text: string; state: 'on' | 'off' };
+}
+
 /**
  * A bot's own cloud desktop (Hermes Bot Screen): an Xfce screen on the VPS
  * that the bot's computer_use and headed browser act on. You can watch it,
@@ -273,6 +302,7 @@ export interface AppState {
   news: NewsItem[];
   usage: UsageSlice[];
   apps: AppUsage[];
+  focus: Focus;
   asks: Ask[];
   screens: Record<string, Screen>;
   dispatch: DispatchConfig;
