@@ -107,17 +107,27 @@ struct MenuBarPanel: View {
         .frame(width: 330)
     }
 
+    /// Two lines: the plan, then how it is going, so neither gets cut off.
     private var focusRow: some View {
         let focus = store.focus
         let minutes = max(0, Int(store.now.timeIntervalSince(focus.plannedAt) / 60))
-        let text = focus.onTrack ? "在做「\(focus.planTitle)」" : "「\(focus.planTitle)」原定 \(Fmt.hm(focus.plannedAt))"
-        return PanelRow(systemImage: "scope", text: text) {
-            if focus.onTrack {
-                Text("对得上").font(.t12).foregroundStyle(Color.green)
-            } else {
-                Text("\(minutes) 分钟没在做").font(.t12).foregroundStyle(Palette.warm)
+        let plan: String = focus.onTrack ? "在做「\(focus.planTitle)」" : "「\(focus.planTitle)」原定 \(Fmt.hm(focus.plannedAt))"
+        let state: String = focus.onTrack ? "对得上" : "\(minutes) 分钟没在做"
+        return HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "scope")
+                .foregroundStyle(.secondary)
+                .frame(width: 16)
+                .padding(.top, 1)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(plan).font(.t13)
+                Text(state)
+                    .font(.t12)
+                    .foregroundStyle(focus.onTrack ? Color.green : Palette.warm)
             }
+            Spacer(minLength: 0)
         }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
     }
 
     private func untilText(_ date: Date) -> String {

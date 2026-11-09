@@ -13,8 +13,13 @@ struct RootView: View {
         } detail: {
             DetailView(route: store.route ?? .today)
         }
-        // keyboard focus starts in the sidebar, not in the first text field of the page
+        // keyboard focus starts in the sidebar, not in the first text field of the page; AppKit
+        // still hands the new window to that field, so take focus back once it is up
         .defaultFocus($sidebarFocused, true)
+        .task {
+            try? await Task.sleep(for: .milliseconds(200))
+            sidebarFocused = true
+        }
         .frame(minWidth: 960, minHeight: 620)
     }
 }
