@@ -75,51 +75,68 @@ jobs:
       # Real Cloudflare Access and a real Hermes are not on the runner: the stand-in plays both,
       # checks what Shion sends (Access headers, PKCE, the loopback redirect, the bearer) and logs
       # each request. A failure here warns, and the screenshots and the package still go out.
-      - name: Browser sign-in against a stand-in Hermes
+      - name: Sign-in and board against a stand-in Hermes
         continue-on-error: true
         run: |
           set -o pipefail
-          python3 -u ci/fake_hermes.py --port 8765 > build/fake_hermes.log 2>&1 &
-          for attempt in 1 2 3 4 5 6 7 8 9 10; do
-            curl -fsS -o /dev/null -H 'CF-Access-Client-Id: ci-client' -H 'CF-Access-Client-Secret: ci-secret' \
-              http://127.0.0.1:8765/api/status && break
-            sleep 1
+          # each test gets a fresh stand-in: its one-off events (课程's approval, the todo it adds)
+          # would otherwise go to whichever test connects first
+          failed=""
+          for test in SignInTests BoardTests; do
+            python3 -u ci/fake_hermes.py --port 8765 > "build/fake_hermes-$test.log" 2>&1 &
+            standin=$!
+            for attempt in 1 2 3 4 5 6 7 8 9 10; do
+              curl -fsS -o /dev/null -H 'CF-Access-Client-Id: ci-client' -H 'CF-Access-Client-Secret: ci-secret' \
+                http://127.0.0.1:8765/api/status && break
+              sleep 1
+            done
+            if xcodebuild test-without-building \
+                 -project Shion.xcodeproj \
+                 -scheme Shion \
+                 -destination 'platform=macOS' \
+                 -derivedDataPath build/DerivedData \
+                 -only-testing:ShionUITests/$test \
+                 -resultBundlePath "build/$test.xcresult" \
+                 -quiet 2>&1 | tee "build/$test.log"; then
+              echo "$test: passed"
+            else
+              failed="$failed $test"
+              grep -nE 'error:|failed|Failing' "build/$test.log" | head -40 || true
+            fi
+            kill "$standin" 2>/dev/null || true
+            wait "$standin" 2>/dev/null || true
           done
-          if xcodebuild test-without-building \
-               -project Shion.xcodeproj \
-               -scheme Shion \
-               -destination 'platform=macOS' \
-               -derivedDataPath build/DerivedData \
-               -only-testing:ShionUITests/SignInTests \
-               -resultBundlePath build/SignIn.xcresult \
-               -quiet 2>&1 | tee build/signin.log; then
-            echo "Browser sign-in: passed"
-          else
-            echo "::warning title=Browser sign-in::the end-to-end sign-in test failed; see the signin-* screenshots and fake_hermes.log in the shots artifact"
-            grep -nE 'error:|failed|Failing' build/signin.log | head -40 || true
+          if [ -n "$failed" ]; then
+            echo "::warning title=End to end::failed:$failed; see the signin-* and board-* screenshots and the fake_hermes-*.log files in the shots artifact"
             exit 1
           fi
 
-      - name: Stand-in Hermes log
+      - name: Stand-in Hermes logs
         if: always()
-        run: cat build/fake_hermes.log 2>/dev/null || echo "no stand-in log"
+        run: |
+          for log in build/fake_hermes-*.log; do
+            [ -f "$log" ] || { echo "no stand-in log"; continue; }
+            echo "::group::$log"
+            cat "$log"
+            echo "::endgroup::"
+          done
 
       - name: Export screenshots
         if: always()
         run: |
           mkdir -p build/shots
-          for bundle in Shots SignIn; do
+          for bundle in Shots SignInTests BoardTests; do
             if [ -d "build/$bundle.xcresult" ]; then
               mkdir -p "build/export-$bundle"
               xcrun xcresulttool export attachments --path "build/$bundle.xcresult" --output-path "build/export-$bundle" \
                 || echo "attachment export failed for $bundle"
             fi
           done
-          cp build/fake_hermes.log build/shots/ 2>/dev/null || true
+          cp build/fake_hermes-*.log build/shots/ 2>/dev/null || true
           python3 - <<'PY'
           import json, os, re, shutil
           out = 'build/shots'
-          for folder in ('build/export-Shots', 'build/export-SignIn'):
+          for folder in ('build/export-Shots', 'build/export-SignInTests', 'build/export-BoardTests'):
               manifest = os.path.join(folder, 'manifest.json')
               if not os.path.exists(manifest):
                   continue

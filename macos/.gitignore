@@ -3,3 +3,4 @@ Shion.xcodeproj/
 build/
 DerivedData/
 *.xcresult
+__pycache__/

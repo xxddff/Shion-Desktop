@@ -65,11 +65,29 @@ macOS 上的私人秘书。你主要和总秘书「詩音」打交道，她带�
 
 Shion 里的对应：
 - 詩音的对话里，每张卡显示成一个会实时更新状态的卡片；
-- 「看板」页分四列：排队、进行中、等你、完成。点开卡片可以看评论、运行记录和工作记录，也能解除阻塞；
-- 每个助手页顶部有标签：Bot Chat，加上它今天跑过的每张卡的工作记录；
-- 卡在要人做的步骤时（`kanban_block`，类型 `needs_input`，比如两步验证），会出现在「等你确认」。你在云桌面上处理完、交还后，Shion 自动留评论并解除阻塞，派发器重新运行这张卡。
+- 「看板」页（已接上服务器，没连上时是示例数据）把 Hermes 的八列归成四列：排队（待整理、待办、定时、就绪）、在做、等你（卡住、待检查）、完成。每张卡写着交给谁、做到哪、在等什么，有子卡的显示进度（2/3），有评论的显示条数；
+- 拖卡片换列，能拖到哪里以 `/workflow` 的 `manual` 为准（拖到「排队」是就绪，前面的卡没做完就退一步到待办；「在做」只能由派发器放进去，不能拖进）；右键菜单里的「移到」可以选到具体的列，也能归档。服务器不让移的（409），卡片退回原处，弹出它为什么不让，前面的卡没做完会写出是哪几张；
+- 工具栏的「＋」新建卡片：标题、内容、交给哪个助手；交给了助手又没有前置卡，就直接是就绪；
+- 点开卡片在右边看详情：内容、在等什么或交付了什么、评论（可以留言；卡住的卡留言后点「让它继续」，回到就绪）、前后置的卡（点了跳过去）、每次运行的起止和结果，最底下小字是编号、看板和 profile；
+- 服务器上有几块看板时，工具栏里能切换；
+- 每个助手页顶部有标签：Bot Chat，加上它今天跑过的每张卡的工作记录（还没做）；
+- 卡在要人做的步骤时（`kanban_block`，类型 `needs_input`，比如两步验证），会出现在「等你确认」。你在云桌面上处理完、交还后，Shion 自动留评论并解除阻塞，派发器重新运行这张卡（还没做）。
 
-看板接口：`/api/plugins/kanban/board`、`/tasks/:id`、`/tasks/:id/comments`、`PATCH /tasks/:id`，实时更新走 `/api/plugins/kanban/events?since=<id>`。都要带 Access 的头和 Hermes 的 token。
+看板接口（`/api/plugins/kanban`，认证和 `/api/*` 一样：会话令牌放 `X-Hermes-Session-Token`，浏览器登录的凭证是 bearer，再加 Access 的两个头；每个路由都可以带 `?board=<slug>`，不带是服务器当前的看板）。以下按 Hermes 代码（`plugins/kanban/dashboard/plugin_api.py`、`hermes_cli/kanban_workflow.py`、`hermes_cli/kanban_db.py`）核对过，它的文档有几处和代码不符：
+
+| 接口 | Shion 用来 |
+| --- | --- |
+| `GET /workflow` | 列（`key`、`label`、`drag_target`）和人能做的移动 `manual{src:[dst…]}`；归档总是可以 |
+| `GET /boards` | 每块看板的 `counts{status:n}` 和 `is_current`；所有看板的 `running` 加起来，就是 `max_in_progress` 数的那个数 |
+| `GET /board` | 卡片（按列）、`assignees`、`latest_event_id`（事件流从这里接着读）、服务器的 `now` |
+| `GET /assignees` | 每个助手在这块看板上各状态的数量，拿 `running` 和每个助手的上限比 |
+| `GET /tasks/{id}` | 详情：完整的 `latest_summary`、评论、`events`、`links` 和 `link_tasks`（前后置卡的标题和状态）、`runs`。**阻塞的原因只在 `blocked` 事件的 `payload.reason` 里**，卡片字段只有 `block_kind`（dependency、needs_input、capability、transient）。所以卡住的卡、在等前置卡的卡，Shion 都会读一次详情 |
+| `POST /tasks` | 新建：`title`、`body`、`assignee`（还可以 `parents`、`priority`） |
+| `PATCH /tasks/{id}` | 改状态：不能直接设成 `running`（400）；`manual` 里没有的、前置卡没做完的，返回 409，并写出卡在哪些前置卡上 |
+| `POST /tasks/{id}/comments` | 留言（不带 `author` 时记作 `dashboard`，Shion 显示成「你」） |
+| `WS /events?board=&since=&token=` | 实时更新。升级请求不看 `Authorization`，凭证放在 `?token=`，Access 的头照带；帧是 `{"events":[…],"cursor":N}`；凭证不对以 1008 关闭。不带 `since` 是从现在开始，`since=0` 会重放全部历史，所以带上 `/board` 给的 `latest_event_id` |
+
+Shion 收到事件就（合并 0.3 秒内的）重读一遍看板和有变化的卡的详情；断了从上次的 cursor 接着连，所以不会漏。别的看板上的卡不会出现在这块看板的事件流里，算整台服务器的上限要用 `/boards`，Shion 每分钟重读一次。
 
 ### 同时能做几件（Hermes 默认值，2026-11 的 main）
 
@@ -94,7 +112,19 @@ kanban:
   max_in_progress_per_profile: 1   # 每个助手一次只做一件
 ```
 
-每个助手只有一块云桌面、一个浏览器配置。同一个助手的两张卡要是同时跑，会抢同一块屏幕和同一套登录状态。所以建议每个助手一次一件，不同助手之间照样并行。Shion 不调 `/dispatch`（它会越过上限），等下一轮派发；`dispatch_interval_seconds` 可以调短。看板里排队的卡要写明在等什么：等前一张做完、这个助手手上还有一件、整台服务器满了，或者等下一轮派发。后两种 Hermes 不留记录，要拿 `/boards` 和 `/assignees` 里正在做的数量跟上限比出来。
+每个助手只有一块云桌面、一个浏览器配置。同一个助手的两张卡要是同时跑，会抢同一块屏幕和同一套登录状态。所以建议每个助手一次一件，不同助手之间照样并行。Shion 不调 `/dispatch`（它会越过上限），等下一轮派发；`dispatch_interval_seconds` 可以调短。
+
+看板里排队的卡写明在等什么（就绪的卡按这个顺序判断）：
+
+| 卡片上写的 | 怎么判断 |
+| --- | --- |
+| 等「…」做完 | 待办，详情的 `links.parents` 里有没做完（不是 done、archived）的卡 |
+| 「课程」手上还有一件，做完就开始 | 就绪；这个助手在这块看板上 `running` 的数量（`/assignees`）已经到了每个助手的上限 |
+| 服务器同时在做的满了（4 件），空出来就开始 | 就绪；所有看板 `running` 加起来（`/boards`）到了整台服务器的上限（设置里显示的那个，不设时按内存算） |
+| 等下一轮派发 | 就绪，上面都不是：等派发器下一轮（最多 `dispatch_interval_seconds`） |
+| 还没交给助手 | 就绪但没有 `assignee` |
+
+后两种上限 Hermes 不留记录，只能这样比出来；上限是 gateway 启动时读的，Shion 读的是配置里写的值（见上），两者不一致时以 gateway 为准。
 
 ## 场景由谁负责
 
@@ -387,7 +417,7 @@ open Shion.xcodeproj
 
   设置看 `hermes config show`（或 `~/.hermes/config.yaml` 里的 `dashboard:` 一节）。改了令牌要重启 gateway。
 - **开会话令牌登录**：在运行 `hermes gateway` 的环境里设 `HERMES_DASHBOARD_SESSION_TOKEN`（可以写进 `~/.hermes/.env`；也可以写成 `file:<路径>` 指向一个只放令牌的文件），确认 `dashboard.session_token_auth.enabled` 没设成 `false`，再重启 gateway。令牌用 `python3 -c "import secrets; print(secrets.token_urlsafe(32))"` 生成，至少 32 个字符。它能完全操作这台 Hermes，当密码保管；换了令牌，Shion 里也要换。
-- **现在能用的**：助手列表（每个 profile 一个助手）、每个助手的 Bot Chat（打开时先取最近 50 行，往上滑再一页一页取更早的；发消息、流式回复、工具调用；回复里的粗体、斜体、代码和链接按 Markdown 显示）、批准和提问（连上后在后台接上每个助手已有的 Bot Chat，不取历史，所以没打开过的对话里的批准和提问也会到「等你确认」，侧栏也能看到谁在忙），系统通知（批准可以直接在通知里点「允许这一次」或「拒绝」，提问和回复可以直接在通知里回；对话或「等你确认」正开在眼前时不发；Dock 图标上是等你确认的件数）、设置里的看板上限（取自服务器）。服务器装了 `shion` 插件（`hermes-plugin/`，装法见那里的 README）时，今天页顶部詩音写的那段话、待办（勾掉、确认日期、新加都写回插件）和日报也来自服务器；助手经插件改了数据，Shion 一秒左右就收到推送，断线时漏掉的推送在重连时和每 5 分钟补一次。没装插件时这几页照旧是示例数据。日程、看板和云桌面还是示例数据。
+- **现在能用的**：助手列表（每个 profile 一个助手）、每个助手的 Bot Chat（打开时先取最近 50 行，往上滑再一页一页取更早的；发消息、流式回复、工具调用；回复里的粗体、斜体、代码和链接按 Markdown 显示）、批准和提问（连上后在后台接上每个助手已有的 Bot Chat，不取历史，所以没打开过的对话里的批准和提问也会到「等你确认」，侧栏也能看到谁在忙），系统通知（批准可以直接在通知里点「允许这一次」或「拒绝」，提问和回复可以直接在通知里回；对话或「等你确认」正开在眼前时不发；Dock 图标上是等你确认的件数）、看板（服务器的卡片、实时更新、拖动换列、新建、详情、切换看板）、设置里的看板上限（取自服务器）。服务器装了 `shion` 插件（`hermes-plugin/`，装法见那里的 README）时，今天页顶部詩音写的那段话、待办（勾掉、确认日期、新加都写回插件）和日报也来自服务器；助手经插件改了数据，Shion 一秒左右就收到推送，断线时漏掉的推送在重连时和每 5 分钟补一次。没装插件时这几页照旧是示例数据。日程和云桌面还是示例数据；今天页「助手在做」和对话里的卡片也还是示例数据。
 - **连接方式**照官方桌面端连远端的做法：`wss://<地址>/api/ws?token=<登录凭证或会话令牌>`，不带子协议，每个请求带 Cloudflare Access 的两个头；连上后等 `gateway.ready`、发 `client.capabilities`，按服务器要求每 15 秒 `gateway.ping`；连上过又断了会自动重连，并重新打开刚才的对话。登录凭证被拒时先续一次再试，续不上才算登录过期。
 
 ### 原生 App 的界面检查
@@ -395,7 +425,7 @@ open Shion.xcodeproj
 界面靠 CI 截图来看，不在本地开模拟器：
 - **什么时候跑**：只有 `macos/` 或这个工作流改了才跑，也可以在 Actions 里手动触发；同一分支上新的提交会取消还没跑完的那次。
 - **跑什么**：在 `xcode-27` runner（macOS 27、Apple 芯片）上生成工程、编译，再跑 `ShionUITests`：每个页面用启动参数直接打开（`-ShionSnapshot YES -ShionRoute today -ShionAppearance dark`），等界面稳定后截窗口；另外点开菜单栏面板截整个屏幕，按 ⌘, 截设置窗口（还有已登录和会话令牌两种设置）。
-- **浏览器登录的端到端测试**：runner 上没有真的 Cloudflare 和 Hermes，`macos/ci/fake_hermes.py` 两个都演：Access 按严格 service token 认证来（带 token 的请求只看 token、不发 cookie，错的 token 直接 403；不带 token 的浏览器转去另一个域名上的 Access 登录页，登录后靠 cookie 放行）；登录页自己填用户名密码提交；检查 PKCE、回调地址和 state；发登录凭证；`/api/ws` 说 JSON-RPC。替身还照 Hermes 的接口检查参数：`session.resume`、`session.transcript`、`session.create` 不认识的键一律 `invalid_params`，`source` 和 `client` 也照规则查。`SignInTests` 在设置里填好地址，点「用浏览器登录…」，等登录完、连上、助手列表换成服务器的；先到「等你确认」：没打开过的课程的对话发来一个批准，点「允许这一次」，替身记下回答；再看今天、待办、日报是不是插件里的（替身里的插件在 `macos/ci/fake_shion.py`）：勾掉一条待办，等课程经插件加的那条推过来；再打开詩音的对话（132 行，先只来最近 50 行），发一句、等回复，往上滑到第一条；打开通勤的对话（新建）；最后看设置里的看板上限是不是服务器的值。每一步截一张（`signin-*.png`）。替身的请求记录 `fake_hermes.log` 也在附件里。这一步失败只报警告，截图和安装包照样出。
+- **浏览器登录和看板的端到端测试**：runner 上没有真的 Cloudflare 和 Hermes，`macos/ci/fake_hermes.py` 两个都演：Access 按严格 service token 认证来（带 token 的请求只看 token、不发 cookie，错的 token 直接 403；不带 token 的浏览器转去另一个域名上的 Access 登录页，登录后靠 cookie 放行）；登录页自己填用户名密码提交；检查 PKCE、回调地址和 state；发登录凭证；`/api/ws` 说 JSON-RPC。替身还照 Hermes 的接口检查参数：`session.resume`、`session.transcript`、`session.create` 不认识的键一律 `invalid_params`，`source` 和 `client` 也照规则查。`SignInTests` 在设置里填好地址，点「用浏览器登录…」，等登录完、连上、助手列表换成服务器的；先到「等你确认」：没打开过的课程的对话发来一个批准，点「允许这一次」，替身记下回答；再看今天、待办、日报是不是插件里的（替身里的插件在 `macos/ci/fake_shion.py`）：勾掉一条待办，等课程经插件加的那条推过来；再打开詩音的对话（132 行，先只来最近 50 行），发一句、等回复，往上滑到第一条；打开通勤的对话（新建）；最后看设置里的看板上限是不是服务器的值。每一步截一张（`signin-*.png`）。替身还演看板插件（`macos/ci/fake_kanban.py`：两块看板，`/workflow` 的移动规则、400 和 409 的拒绝、做完后把子卡升到就绪、`/events` 的 WebSocket，调了 `/dispatch` 会在记录里标出来）；`BoardTests` 登录后打开看板，看服务器的卡和每种「在等什么」，点开卡住的卡看评论和运行记录，把一张卡拖到「完成」（拖不动就用右键菜单），新建一张，再换到另一块看板（`board-*.png`）。两个测试各用一个新起的替身，课程的批准、它加的待办这类只发一次的事不会被前一个测试用掉。替身的请求记录（`fake_hermes-SignInTests.log`、`fake_hermes-BoardTests.log`）也在附件里。这一步失败只报警告，截图和安装包照样出。
 - **截图模式**：日期固定在 2026 年 11 月 9 日（周一）10:52，外观对整个 App 生效（菜单栏面板也跟着变），呼吸点不动。动画停下来 App 才算空闲，XCTest 不用干等，一次运行从 4.3 分钟降到 2.3 分钟。
 - **runner 的屏幕**：1024×768、1 倍，所以窗口截出来是 1024×674，比默认窗口小，正好看窄窗口下的布局。
 - **看哪里**：截图打包成这次运行的 `shots` 附件（保留 14 天），文件名是「页面-外观.png」。编译失败时，最后一步会列出错误。

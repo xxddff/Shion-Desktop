@@ -63,7 +63,7 @@ struct SettingsView: View {
             } header: {
                 Text("看板")
             } footer: {
-                Text("取自服务器 config.yaml 里的 kanban.max_in_progress 和 kanban.max_in_progress_per_profile，改了要重启 gateway 才生效。整台服务器那项不设时，Linux 上按内存算：每 512 MB 一件，最少 2 件、最多 8 件。每个助手那项在每块看板上分开算。")
+                Text("取自服务器 config.yaml 里的 kanban.max_in_progress 和 kanban.max_in_progress_per_profile，改了要重启 gateway 才生效。整台服务器那项不设时，Linux 上按内存算：每 512 MB 一件，最少 2 件、最多 8 件。每个助手那项在每块看板上分开算。Shion 不手动派发（不调 /dispatch，它会越过这两个上限），就绪的卡等派发器下一轮；看板上排队的卡写明在等什么：前面的卡、这个助手手上那件、整台服务器满了，或者下一轮派发。")
                     .font(.t12)
                     .foregroundStyle(.secondary)
             }
@@ -99,7 +99,7 @@ struct SettingsView: View {
         case .sessionToken:
             "会话令牌是服务器上的 HERMES_DASHBOARD_SESSION_TOKEN。"
         }
-        return login + "Access 两项填 Cloudflare Access 的 service token，没有就留空。这些都存在钥匙串里，只发给这个地址。连上后，助手和对话来自服务器；服务器装了 shion 插件时，今天、待办和日报也是。日程、看板和云桌面暂时还是示例数据。"
+        return login + "Access 两项填 Cloudflare Access 的 service token，没有就留空。这些都存在钥匙串里，只发给这个地址。连上后，助手、对话和看板来自服务器；服务器装了 shion 插件时，今天、待办和日报也是。日程和云桌面暂时还是示例数据。"
     }
 }
 

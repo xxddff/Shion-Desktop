@@ -43,6 +43,8 @@ final class AppStore {
     private(set) var olderErrors: [String: String] = [:]
     /// The server's board limits, read after connecting.
     private(set) var boardLimits: BoardLimits?
+    /// The server's kanban board, live while connected.
+    let board = BoardStore()
     /// What `runtime.describe` says the server can do (`session-transcript-v1`, …).
     @ObservationIgnored var serverCapabilities: Set<String> = []
     /// Today, todos and reports come from the server's `shion` plugin (AppStore+Plugin.swift).
@@ -209,6 +211,7 @@ extension AppStore {
         await loadProfiles()
         await loadPluginData()
         await loadBoardLimits()
+        board.start(serverSettings, credential: gateway.credential)
         await attachAll()
     }
 
@@ -376,6 +379,7 @@ extension AppStore {
     private func leaveLive() {
         boardLimits = nil
         stopPluginData()
+        board.stop()
         guard live else { return }
         live = false
         bots = demoBots
