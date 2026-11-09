@@ -185,16 +185,20 @@ final class BoardTests: XCTestCase {
         element.label == text || (element.value as? String) == text
     }
 
-    /// How many cards in the chat show `title` and say `status` (labels only: a value can be a
-    /// number, which a string predicate would throw on).
+    /// How many cards in the chat show `title` and say `status`. A text's string is its label or
+    /// its value; values are read on texts only (a control's can be a number, which a string
+    /// predicate throws on), and a label with an icon carries its title as its label.
     @MainActor
     private func chatCards(_ title: String, saying status: String, in app: XCUIApplication) -> Int {
         let chips = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "chat-card-"))
         var count = 0
         for index in 0..<chips.count {
-            let parts = chips.element(boundBy: index).descendants(matching: .any)
-            if parts.matching(NSPredicate(format: "label CONTAINS %@", title)).firstMatch.exists,
-               parts.matching(NSPredicate(format: "label == %@", status)).firstMatch.exists {
+            let chip = chips.element(boundBy: index)
+            let titled = chip.staticTexts.matching(NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", title, title))
+                .firstMatch.exists
+            let said = chip.staticTexts.matching(NSPredicate(format: "label == %@ OR value == %@", status, status)).firstMatch.exists
+                || chip.descendants(matching: .any).matching(NSPredicate(format: "label == %@", status)).firstMatch.exists
+            if titled && said {
                 count += 1
             }
         }
