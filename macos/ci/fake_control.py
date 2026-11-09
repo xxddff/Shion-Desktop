@@ -21,11 +21,17 @@ Shaped like Hermes main (2026-11-09):
 - `message.complete.persisted_turn`: the rows the turn stored, `user_row_id` the prompt's, and
   `submission_id` the submitter's own id for it (agent/persisted_turn_receipt.py,
   gateway/session_settlement_recovery.py).
+- A failed turn, as the session gateway ends one (completion_payload): status "error", outcome
+  "failed", `text` Hermes's own copy of the failure (agent/turn_failure_copy.py exhausted_copy), and
+  `error_surface` {layer, code, retryable, provider, model, provider_label} (agent/error_surface.py
+  _surface); no `error` key (only the TUI gateway's frames have one). The transcript closes it with
+  an assistant row: display_kind "failed_turn", the notice as its text, display_metadata {error,
+  error_surface} (agent/conversation_loop.py _close_durable_failed_turn).
 
-The scripted turn: 「讲一个长故事」 streams a sentence every 0.3 s for half a minute, so there is time
-to stop it; once that row has been rewound, the same words get a short reply (the retry). Which
-profiles have the shion plugin is fake_profiles.py's (詩音's only), so the server check has a
-failure to show.
+The scripted turns: 「讲一个长故事」 streams a sentence every 0.3 s for half a minute, so there is time
+to stop it; 「出个错看看」 fails as a provider's rate limit does after its retries. Once either's row
+has been rewound, the same words get a short reply (the retry). Which profiles have the shion
+plugin is fake_profiles.py's (詩音's only), so the server check has a failure to show.
 """
 import itertools
 import threading
@@ -34,6 +40,16 @@ import time
 STORY = "讲一个长故事"
 STORY_PARTS = ["从前有一座山，", "山里有座庙，", "庙里有个老和尚，", "在给小和尚讲故事。"] * 25
 RETRIED = "（重试）故事讲完了：山里有座庙。"
+FAIL = "出个错看看"
+FAIL_RETRIED = "（重试）这次没出错。"
+PROVIDER_SAID = "429 Too Many Requests: rate limit exceeded"
+# exhausted_copy("rate_limit", label="OpenRouter", attempts=3, summary=PROVIDER_SAID)
+FAIL_COPY = ("OpenRouter rate-limited every one of 3 attempts — it looks temporarily unavailable. Wait a minute "
+             "and send /retry, or switch models with /model. To avoid this in future, add a backup provider "
+             f"with `hermes fallback add`.\n\nProvider said: {PROVIDER_SAID}")
+FAILED_TURN_NOTICE = "Your request was not processed. Send it again if you still want me to carry it out."
+FAIL_SURFACE = {"layer": "provider", "code": "rate_limit", "retryable": True, "provider": "openrouter",
+                "model": "anthropic/claude-sonnet-4.5", "provider_label": "OpenRouter"}
 MUTATE_KEYS = {"session_id", "request_id", "expected_revision", "operation", "payload"}
 
 state = {"log": print, "transcripts": None, "lock": threading.Lock()}
@@ -61,7 +77,8 @@ def snapshot_fences(session_id):
 def handles(method, params):
     if method in ("session.interrupt", "session.mutate"):
         return True
-    return method == "prompt.submit" and STORY in str(params.get("text", ""))
+    text = str(params.get("text", ""))
+    return method == "prompt.submit" and (STORY in text or FAIL in text)
 
 
 def handle(conn, method, params, rid):
@@ -69,6 +86,8 @@ def handle(conn, method, params, rid):
         return interrupt(conn, params, rid)
     if method == "session.mutate":
         return mutate(conn, params, rid)
+    if FAIL in str(params.get("text", "")):
+        return fail(conn, params, rid)
     return story(conn, params, rid)
 
 
@@ -162,6 +181,60 @@ def run_story(conn, session_id, turn, short):
                                        "submission_id": turn["submission"]}}
         if not stopped:
             complete["persisted_turn"]["final_assistant_row_id"] = assistant_row
+        event(conn, "message.complete", session_id, complete, generation)
+        idle_info(conn, session_id)
+    except OSError:
+        running.pop(session_id, None)
+
+
+def fail(conn, params, rid):
+    session_id, text = params.get("session_id"), params.get("text", "")
+    conn.send_json({"jsonrpc": "2.0", "id": rid, "result": {"status": "queued", "admission_id": f"adm-{rid}"}})
+    with state["lock"]:
+        current = fence(session_id)
+        current["generation"] += 1
+        user_row = next(row_ids)
+        state["transcripts"].setdefault(session_id, []).append(
+            {"row_id": user_row, "row_kind": "message", "role": "user", "text": text, "timestamp": time.time()})
+        turn = {"generation": current["generation"], "stop": threading.Event(), "user_row": user_row,
+                "submission": params.get("submission_id")}
+        running[session_id] = turn
+        retried = text in rewound
+    threading.Thread(target=run_fail, args=(conn, session_id, turn, retried), daemon=True).start()
+
+
+def run_fail(conn, session_id, turn, retried):
+    """The provider's rate limit after its retries; asked again once rewound, a plain reply."""
+    generation = turn["generation"]
+    try:
+        event(conn, "session.info", session_id, {"running": True, "execution_generation": generation}, generation)
+        if retried:
+            event(conn, "message.start", session_id, {}, generation)
+            time.sleep(0.3)
+            event(conn, "message.delta", session_id, {"text": FAIL_RETRIED}, generation)
+        else:
+            time.sleep(1)
+        answer = next(row_ids)
+        with state["lock"]:
+            row = {"row_id": answer, "row_kind": "message", "role": "assistant", "timestamp": time.time()}
+            if retried:
+                row["text"] = FAIL_RETRIED
+            else:
+                row.update(text=FAILED_TURN_NOTICE, display_kind="failed_turn",
+                           display_metadata={"error": PROVIDER_SAID, "error_surface": FAIL_SURFACE})
+            state["transcripts"].setdefault(session_id, []).append(row)
+            running.pop(session_id, None)
+            fence(session_id)["revision"] += 1
+        state["log"](f"  -> {'retried turn done' if retried else 'turn failed: rate limit'} on {session_id}")
+        turned = {"row_ids": [turn["user_row"], answer], "complete": retried, "user_row_id": turn["user_row"],
+                  "user_row_ids": [turn["user_row"]], "submission_id": turn["submission"]}
+        if retried:
+            complete = {"text": FAIL_RETRIED, "content": FAIL_RETRIED, "outcome": "completed", "status": "complete"}
+            turned["final_assistant_row_id"] = answer
+        else:
+            complete = {"text": FAIL_COPY, "content": FAIL_COPY, "outcome": "failed", "status": "error",
+                        "error_surface": FAIL_SURFACE}
+        complete.update(admission_id=f"adm-{generation}", persisted_turn=turned)
         event(conn, "message.complete", session_id, complete, generation)
         idle_info(conn, session_id)
     except OSError:

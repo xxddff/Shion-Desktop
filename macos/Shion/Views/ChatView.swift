@@ -177,10 +177,7 @@ struct ChatRow: View {
     var body: some View {
         switch item.role {
         case .system:
-            FoundText(item.text)
-                .font(.t12)
-                .foregroundStyle(.tertiary)
-                .frame(maxWidth: .infinity)
+            TurnNote(item: item, botId: bot?.id ?? "")
         case .card:
             if let found = store.chatCard(item) {
                 CardChip(card: found.card, showsStatus: found.known)

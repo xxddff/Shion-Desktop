@@ -634,9 +634,13 @@ extension AppStore {
             return [ChatItem(id: id, role: .user, at: at, text: body)]
         case "assistant":
             let body = text(of: row)
+            // the row Hermes closes a failed turn with (AppStore+Control.swift)
+            if let failed = Self.failedTurn(row, id: id, at: at, body: body) { return [failed] }
             // a reply you stopped: Hermes marks the row it kept (an empty one when nothing had come)
             let stopped = row["display_metadata"]?["interrupted"]?.bool == true
-            guard !body.isEmpty else { return stopped ? [ChatItem(id: id, role: .system, at: at, text: "已停止")] : [] }
+            guard !body.isEmpty else {
+                return stopped ? [ChatItem(id: id, role: .system, at: at, text: "已停止", stopped: true)] : []
+            }
             return [ChatItem(id: id, role: .assistant, at: at, text: body, stopped: stopped)]
         case "tool":
             let name = row["name"]?.string ?? row["tool_name"]?.string ?? "tool"
@@ -750,7 +754,9 @@ extension AppStore {
                     text = chats[botId]?.last(where: { $0.role == .assistant })?.text ?? ""
                 }
             }
-            if payload["status"]?.string != "interrupted" {
+            if payload["status"]?.string == "error" {
+                notifyReply(botId, Self.failureLine(payload, streamed: ""))
+            } else if payload["status"]?.string != "interrupted" {
                 notifyReply(botId, text)
             }
         case "tool.start":
@@ -827,6 +833,10 @@ extension AppStore {
         if payload["status"]?.string == "interrupted" {
             return markStopped(botId, reply: streaming.removeValue(forKey: botId))
         }
+        // failed: a line says why (AppStore+Control.swift)
+        if payload["status"]?.string == "error" {
+            return failReply(botId, payload, reply: streaming.removeValue(forKey: botId))
+        }
         let final = payload["text"]?.string ?? ""
         if let id = streaming[botId], let index = chats[botId]?.firstIndex(where: { $0.id == id }) {
             if !final.isEmpty {
@@ -836,9 +846,6 @@ extension AppStore {
             append(ChatItem(id: UUID().uuidString, role: .assistant, at: Date(), text: final), to: botId)
         }
         endReply(botId)
-        if payload["status"]?.string == "error" {
-            note("这一轮出错了：\(payload["error_surface"]?.string ?? "没有说明")", in: botId)
-        }
     }
 
     private func append(_ item: ChatItem, to botId: String) {

@@ -149,31 +149,92 @@ extension AppStore {
             }
             chats[botId]?.remove(at: index)
         }
-        controlNote("已停止", in: botId)
+        chats[botId, default: []].append(ChatItem(id: UUID().uuidString, role: .system, at: Date(), text: "已停止",
+                                                  stopped: true))
     }
 
     private func controlNote(_ text: String, in botId: String) {
         chats[botId, default: []].append(ChatItem(id: UUID().uuidString, role: .system, at: Date(), text: text))
     }
 
+    // MARK: a failed turn
+
+    /// Hermes ended the turn with an error (`message.complete`, status error). What had come stays
+    /// as it came, and a line says why (failureLine); 重试 goes under it when Hermes says trying
+    /// again may help (`error_surface.retryable`).
+    func failReply(_ botId: String, _ payload: JSONValue, reply id: String?) {
+        var streamed = ""
+        if let id, let index = chats[botId]?.firstIndex(where: { $0.id == id }) {
+            chats[botId]?[index].streaming = false
+            streamed = chats[botId]?[index].text ?? ""
+            if streamed.isEmpty {
+                chats[botId]?.remove(at: index)
+            }
+        }
+        chats[botId, default: []].append(ChatItem(
+            id: UUID().uuidString, role: .system, at: Date(), text: Self.failureLine(payload, streamed: streamed),
+            failed: true, retryable: payload["error_surface"]?["retryable"]?.bool == true))
+    }
+
+    /// Why a turn failed, in Hermes's words. `error_surface` is a descriptor ({layer, code,
+    /// retryable}), not words. The TUI gateway's frames carry the message in `error`; the session
+    /// gateway Shion talks to sends none, and its `text` is then Hermes's own copy of the failure
+    /// (what it would have replied), unless `partial` says it is the reply's streamed part. Last
+    /// comes `failure_reason`, a code such as rate_limit.
+    nonisolated static func failureLine(_ payload: JSONValue, streamed: String) -> String {
+        func said(_ value: JSONValue?) -> String? {
+            let text = value?.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return text.isEmpty ? nil : text
+        }
+        let copy = said(payload["text"]).flatMap { text in
+            payload["partial"]?.bool == true || text == streamed.trimmingCharacters(in: .whitespacesAndNewlines)
+                ? nil : text
+        }
+        return "这一轮出错了：\(said(payload["error"]) ?? copy ?? said(payload["failure_reason"]) ?? "没有说明")"
+    }
+
+    /// The row Hermes closes a failed turn with in the transcript (`display_kind` failed_turn: its
+    /// notice as the text, the error and `error_surface` in `display_metadata`), as the line a
+    /// live failure gets.
+    static func failedTurn(_ row: JSONValue, id: String, at: Date, body: String) -> ChatItem? {
+        guard row["display_kind"]?.string == "failed_turn" else { return nil }
+        let metadata = row["display_metadata"]
+        let error = metadata?["error"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let why = error.isEmpty ? body.trimmingCharacters(in: .whitespacesAndNewlines) : error
+        return ChatItem(id: id, role: .system, at: at, text: "这一轮出错了：\(why.isEmpty ? "没有说明" : why)",
+                        failed: true, retryable: metadata?["error_surface"]?["retryable"]?.bool == true)
+    }
+
     // MARK: retry
 
-    /// The reply 重试 goes under: the chat's last one, when it answers a message you typed (not the
-    /// board's notice), nothing runs, and nothing you said came after it.
+    /// The line 重试 goes under: how the chat's last turn ended (its reply, the line a stop or an
+    /// error left), when that turn answers a message you typed (not the board's notice), nothing
+    /// runs, and nothing you said came after it. Not after an error Hermes says trying again will
+    /// not mend (`error_surface.retryable` false).
     func retryTarget(_ botId: String) -> String? {
         guard live, !readOnly, sessions[botId] != nil, !turnRunning(botId), !control.retrying.contains(botId),
               let items = chats[botId],
-              let reply = items.lastIndex(where: { $0.role == .assistant && !$0.streaming }),
-              let prompt = items[..<reply].lastIndex(where: { Self.startsTurn($0) }),
+              let end = items.lastIndex(where: { Self.endsTurn($0) }),
+              !items[end].failed || items[end].retryable,
+              let prompt = items[..<end].lastIndex(where: { Self.startsTurn($0) }),
               items[prompt].role == .user,
-              !items[(reply + 1)...].contains(where: { Self.startsTurn($0) })
+              !items[(end + 1)...].contains(where: { Self.startsTurn($0) })
         else { return nil }
-        return items[reply].id
+        return items[end].id
     }
 
     /// What starts a turn: a message you typed, or the board's notice Hermes sends in your name.
     private static func startsTurn(_ item: ChatItem) -> Bool {
         item.role == .user || (item.role == .card && !item.text.isEmpty)
+    }
+
+    /// What ends one: a reply, or the line a stop before any words, or an error, leaves.
+    private static func endsTurn(_ item: ChatItem) -> Bool {
+        switch item.role {
+        case .assistant: !item.streaming
+        case .system: item.stopped || item.failed
+        default: false
+        }
     }
 
     /// Asks the last prompt again, as Hermes's `/retry` does: the prompt's row and everything after

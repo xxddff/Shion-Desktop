@@ -1,13 +1,14 @@
 import AppKit
 import XCTest
 
-/// Stop, retry, find, the server check and the last data, end to end against ci/fake_hermes.py
-/// (fake_control.py plays the parts Hermes has for them). Signs in as SignInTests does, then:
-/// Settings' 服务器体检 against the stand-in (only 詩音's profile has the shion plugin); in 詩音's chat a
-/// long reply stopped with ⌘. (session.interrupt for the turn's run) and kept as 已停止; 重试 on
-/// it (a fenced rewind, then the same words again); ⌘F over the loaded rows, and back into older
-/// pages for a hit not loaded yet; then 断开, and the window keeps the server's data, read-only.
-/// A picture at each step (chatctl-*.png).
+/// Stop, retry, a failed turn, find, the server check and the last data, end to end against
+/// ci/fake_hermes.py (fake_control.py plays the parts Hermes has for them). Signs in as SignInTests
+/// does, then: Settings' 服务器体检 against the stand-in (only 詩音's profile has the shion plugin); in
+/// 詩音's chat a long reply stopped with ⌘. (session.interrupt for the turn's run) and kept as
+/// 已停止; 重试 on it (a fenced rewind, then the same words again); a turn the stand-in fails as a
+/// provider's rate limit does, explained in Hermes's words and retried; ⌘F over the loaded rows,
+/// and back into older pages for a hit not loaded yet; then 断开, and the window keeps the server's
+/// data, read-only. A picture at each step (chatctl-*.png).
 final class ChatControlTests: XCTestCase {
     private let server = "http://127.0.0.1:8765"
 
@@ -102,6 +103,29 @@ final class ChatControlTests: XCTestCase {
         let prompts = max(app.staticTexts.matching(NSPredicate(format: "label == %@", "讲一个长故事")).count,
                           app.textViews.matching(NSPredicate(format: "value == %@", "讲一个长故事")).count)
         XCTAssertLessThanOrEqual(prompts, 1, "the prompt shows \(prompts) times after 重试")
+
+        // a turn Hermes ends with an error (a provider's rate limit): the line says why in Hermes's
+        // words, and 重试 is under it because Hermes says trying again may help
+        composer.click()
+        composer.typeText("出个错看看")
+        element("send", in: app).click()
+        let failure = element("turn-failed", in: app)
+        let explained = failure.waitForExistence(timeout: 15)
+            && waitForText("这一轮出错了：OpenRouter rate-limited every one of 3 attempts", in: app, timeout: 5)
+        keep(app.windows.firstMatch.screenshot(), "chatctl-4b-failed")
+        XCTAssertTrue(explained, "the failed turn does not say why")
+        XCTAssertFalse(waitForText("没有说明", in: app, timeout: 1), "the failed turn says 没有说明")
+        let again = element("retry", in: app)
+        if again.waitForExistence(timeout: 5) {
+            again.click()
+            XCTAssertTrue(waitForText("（重试）这次没出错。", in: app, timeout: 15), "重试 on the failed turn did not reply")
+            XCTAssertFalse(element("turn-failed", in: app).exists, "the error is still there after 重试")
+            let asked = max(app.staticTexts.matching(NSPredicate(format: "label == %@", "出个错看看")).count,
+                            app.textViews.matching(NSPredicate(format: "value == %@", "出个错看看")).count)
+            XCTAssertLessThanOrEqual(asked, 1, "the failed prompt shows \(asked) times after 重试")
+        } else {
+            XCTFail("no 重试 under a failure Hermes says can be retried")
+        }
 
         // ⌘F over the rows loaded: 第 120 to 129 条 are on the newest page
         app.typeKey("f", modifierFlags: .command)

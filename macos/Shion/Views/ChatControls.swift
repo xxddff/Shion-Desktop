@@ -32,9 +32,11 @@ struct ReplyFooter: View {
 
     var body: some View {
         let retry = !item.streaming && store.retryTarget(botId) == item.id
-        if item.stopped || retry {
+        // a line (a stop before any words) says 已停止 itself
+        let marked = item.stopped && item.role == .assistant
+        if marked || retry {
             HStack(spacing: 12) {
-                if item.stopped {
+                if marked {
                     Text("已停止")
                         .accessibilityIdentifier("stopped")
                 }
@@ -50,6 +52,45 @@ struct ReplyFooter: View {
             }
             .font(.t12)
             .foregroundStyle(.secondary)
+        }
+    }
+}
+
+/// A line in a chat that is no one's message: Shion's note, a stop before any words, or why Hermes
+/// ended a turn with an error, set apart. 重试 goes under the line that ends the last turn.
+struct TurnNote: View {
+    let item: ChatItem
+    let botId: String
+
+    var body: some View {
+        if item.failed {
+            VStack(alignment: .leading, spacing: 6) {
+                Label {
+                    FoundText(item.text)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(Palette.alert)
+                }
+                .font(.t12)
+                ReplyFooter(item: item, botId: botId)
+                    .padding(.leading, 22)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Palette.fill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("turn-failed")
+        } else {
+            VStack(spacing: 4) {
+                FoundText(item.text)
+                    .font(.t12)
+                    .foregroundStyle(.tertiary)
+                ReplyFooter(item: item, botId: botId)
+            }
+            .frame(maxWidth: .infinity)
         }
     }
 }
