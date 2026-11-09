@@ -206,6 +206,8 @@ export interface Screen {
   needsHuman?: string;
   /** Set when you hand control back after a takeover. */
   handedBackAt?: number;
+  /** Text you typed into fields on the screen while you held it (prototype only; the app sends keys or a paste). */
+  typed?: Record<string, string>;
 }
 
 export interface Ask {

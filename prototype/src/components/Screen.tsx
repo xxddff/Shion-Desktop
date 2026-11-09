@@ -2,12 +2,29 @@ import { Download, FileText, Lock, MonitorOff, Smartphone } from 'lucide-react';
 import type { Screen } from '../data/model';
 import { hm, useNow } from '../ui/format';
 
+/** Where your typing lands on the remote screen: the field you last clicked. */
+export interface ScreenCaret {
+  field: string;
+  /** A click into the address bar selects all of it, as browsers do; the first key replaces it. */
+  selectAll: boolean;
+}
+
+/** A field's text on the mock screen: what you typed, or what the page started with. */
+export function fieldText(screen: Screen | undefined, field: string): string {
+  const typed = screen?.typed?.[field];
+  if (typed !== undefined) return typed;
+  if (field === 'url') return screen?.url ?? '';
+  if (field === 'from') return '吉祥寺';
+  return '';
+}
+
 /**
  * A stand-in for the bot's cloud desktop (an Xfce screen streamed over RFB).
  * Drawn with HTML and sized in container units so the same mock works as a
- * thumbnail and as the full viewer. Example content only.
+ * thumbnail and as the full viewer. Example content only. Fields carry
+ * `data-field` so the viewer knows which one a click landed in.
  */
-export function ScreenMock({ screen, live = false }: { screen: Screen; live?: boolean }) {
+export function ScreenMock({ screen, live = false, caret }: { screen: Screen; live?: boolean; caret?: ScreenCaret }) {
   const now = useNow(30_000);
   if (!screen.running) {
     return (
@@ -32,17 +49,31 @@ export function ScreenMock({ screen, live = false }: { screen: Screen; live?: bo
             <i />
             <i />
           </span>
-          <span className="scr-url">{screen.url}</span>
+          <span className="scr-url" data-field="url">
+            <Field screen={screen} id="url" caret={caret} />
+          </span>
         </div>
         <div className="scr-page">
           {screen.app === 'sso' && <SsoPage />}
           {screen.app === 'moodle' && <CoursePage />}
           {screen.app === 'news' && <NewsPage />}
-          {screen.app === 'transit' && <TransitPage />}
+          {screen.app === 'transit' && <TransitPage screen={screen} caret={caret} />}
         </div>
       </div>
       {live && !human && <span className={`scr-cursor app-${screen.app}`} aria-hidden="true" />}
     </div>
+  );
+}
+
+function Field({ screen, id, caret, placeholder }: { screen: Screen; id: string; caret?: ScreenCaret; placeholder?: string }) {
+  const text = fieldText(screen, id);
+  const on = caret?.field === id;
+  if (on && caret.selectAll && text) return <span className="scr-sel">{text}</span>;
+  return (
+    <>
+      {text ? <span className="scr-text">{text}</span> : !on && placeholder ? <span className="scr-ph">{placeholder}</span> : null}
+      {on && <span className="scr-caret" />}
+    </>
   );
 }
 
@@ -105,10 +136,22 @@ function NewsPage() {
   );
 }
 
-function TransitPage() {
+function TransitPage({ screen, caret }: { screen: Screen; caret?: ScreenCaret }) {
   return (
     <div className="pg-course">
       <div className="pg-bar green">运行信息 · 东京近郊</div>
+      <div className="pg-search">
+        <span className="pg-input" data-field="from">
+          <em>出发</em>
+          <Field screen={screen} id="from" caret={caret} placeholder="车站名" />
+        </span>
+        <span className="pg-to">→</span>
+        <span className="pg-input" data-field="to">
+          <em>到达</em>
+          <Field screen={screen} id="to" caret={caret} placeholder="车站名" />
+        </span>
+        <span className="pg-go">搜索路线</span>
+      </div>
       {[
         ['中央線快速', '平常运行'],
         ['京王線', '平常运行'],

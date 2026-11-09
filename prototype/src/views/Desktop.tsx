@@ -1,9 +1,9 @@
 import { Hand, Play } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import { ScreenMock } from '../components/Screen';
+import { ScreenMock, fieldText, type ScreenCaret } from '../components/Screen';
 import { Toolbar } from '../components/Shell';
 import type { AppState, Bot, Screen } from '../data/model';
-import { getState, handBack, startScreen, takeOver } from '../data/store';
+import { getState, handBack, startScreen, takeOver, typeOnScreen } from '../data/store';
 import { go } from '../route';
 import { Avatar } from '../ui/bits';
 
@@ -93,20 +93,38 @@ const RELEASE_MS = 3000;
 /** How many live viewers are mounted per bot. */
 const openViewers = new Map<string, number>();
 
+/** Where you last clicked on the screen you hold, in viewer pixels, and the field under it. */
+type Spot = { x: number; y: number; caret: ScreenCaret | null };
+
 /**
  * The full-size screen. Click it to take over (`display.lease.acquire`); click
  * anywhere else in Shion to hand back (`display.lease.release`) after a short
  * grace period, so a stray click mid-login can be undone by clicking back in.
  * Leaving the page hands back at once, like closing the pane in Hermes Desktop.
  * Switching to another app does not hand back.
+ *
+ * While you hold it, typing goes to the remote field you last clicked, and the
+ * Mac's input method composes right at that spot: the native app sends plain
+ * keys as key events and a committed Chinese or Japanese string as a paste, so
+ * the remote desktop needs no input method of its own.
  */
 function LiveScreen({ bot, screen }: { bot: Bot; screen: Screen }) {
   const hitRef = useRef<HTMLDivElement>(null);
+  const imeRef = useRef<HTMLInputElement>(null);
   const [armed, setArmed] = useState(false);
   const [releasing, setReleasing] = useState(false);
+  const [spot, setSpotState] = useState<Spot | null>(null);
+  const spotRef = useRef<Spot | null>(null);
+  const [marked, setMarked] = useState('');
+  const composingRef = useRef(false);
   const held = screen.control === 'you';
   // a bot in the middle of its own work needs a second click, so a glance never interrupts it
   const busy = bot.status === 'working' && !screen.needsHuman;
+
+  const setSpot = (next: Spot | null) => {
+    spotRef.current = next;
+    setSpotState(next);
+  };
 
   useEffect(() => {
     if (!armed) return;
@@ -114,9 +132,17 @@ function LiveScreen({ bot, screen }: { bot: Bot; screen: Screen }) {
     return () => window.clearTimeout(t);
   }, [armed]);
 
+  // each click on the screen you hold moves the typing spot there
+  useEffect(() => {
+    if (spot) imeRef.current?.focus({ preventScroll: true });
+  }, [spot]);
+
   useEffect(() => {
     if (!held) {
       setReleasing(false);
+      setSpot(null);
+      setMarked('');
+      composingRef.current = false;
       return;
     }
     const down = (e: MouseEvent) => {
@@ -124,8 +150,10 @@ function LiveScreen({ bot, screen }: { bot: Bot; screen: Screen }) {
       if (hitRef.current?.contains(target) || target.closest('[data-keeps-control]')) return;
       setReleasing(true);
     };
-    document.addEventListener('mousedown', down);
-    return () => document.removeEventListener('mousedown', down);
+    // capture phase: decide before React re-renders the screen, which can detach the clicked node
+    // (a field's placeholder disappears as soon as the caret lands in it)
+    document.addEventListener('mousedown', down, true);
+    return () => document.removeEventListener('mousedown', down, true);
   }, [held]);
 
   useEffect(() => {
@@ -147,36 +175,109 @@ function LiveScreen({ bot, screen }: { bot: Bot; screen: Screen }) {
     };
   }, [bot.id]);
 
-  const onClick = () => {
-    if (!screen.running) return;
-    if (held) {
-      setReleasing(false);
-      return;
-    }
+  const tryTakeOver = () => {
+    if (!screen.running || held) return;
     if (busy && !armed) {
       setArmed(true);
       return;
     }
     setArmed(false);
+    // the click that takes over is not passed on, so it can never press 「登录」 or 「付款」 by accident
     takeOver(bot.id);
+  };
+
+  const onPress = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!held) return tryTakeOver();
+    setReleasing(false);
+    // a click on the screen you hold is a click on the remote desktop: the remote focus moves
+    // there, and so does the spot where the Mac's input method composes
+    e.preventDefault();
+    const box = e.currentTarget.getBoundingClientRect();
+    const field = (e.target as HTMLElement).closest<HTMLElement>('[data-field]')?.dataset.field;
+    setSpot({ x: e.clientX - box.left, y: e.clientY - box.top, caret: field ? { field, selectAll: field === 'url' } : null });
+  };
+
+  /** Apply an edit to the field you last clicked, the way the remote page would. */
+  const write = (edit: (text: string) => string) => {
+    const at = spotRef.current;
+    if (!at?.caret) return;
+    const { field, selectAll } = at.caret;
+    typeOnScreen(bot.id, field, edit(selectAll ? '' : fieldText(getState().screens[bot.id], field)));
+    if (selectAll) setSpot({ ...at, caret: { field, selectAll: false } });
+  };
+  const commit = (text: string) => {
+    if (text) write((t) => t + text);
   };
 
   return (
     <div
       ref={hitRef}
       className={`screen-hit${held ? ' held' : ''}${screen.running ? '' : ' off'}`}
-      onMouseDown={onClick}
+      onMouseDown={onPress}
       role={held ? undefined : 'button'}
       tabIndex={held || !screen.running ? -1 : 0}
       aria-label={held ? `${bot.name}的桌面（你在操作）` : `点击接管${bot.name}的桌面`}
       onKeyDown={(e) => {
         if (!held && (e.key === 'Enter' || e.key === ' ')) {
           e.preventDefault();
-          onClick();
+          tryTakeOver();
         }
       }}
     >
-      <ScreenMock screen={screen} live />
+      <ScreenMock screen={screen} live caret={held ? spot?.caret ?? undefined : undefined} />
+      {held && spot && (
+        <>
+          {/* catches keys and the input method's composition; invisible, so the candidate window
+              opens at the spot you clicked */}
+          <input
+            ref={imeRef}
+            className="ime-catch"
+            style={{ left: spot.x, top: spot.y }}
+            aria-label={`在${bot.name}的桌面上打字`}
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="off"
+            spellCheck={false}
+            onCompositionStart={() => {
+              composingRef.current = true;
+              setMarked('');
+            }}
+            onCompositionUpdate={(e) => setMarked(e.data)}
+            onCompositionEnd={(e) => {
+              composingRef.current = false;
+              setMarked('');
+              e.currentTarget.value = '';
+              commit(e.data); // the app pastes this: ClientCutText, then Ctrl+V
+            }}
+            onInput={(e) => {
+              const el = e.currentTarget;
+              if (composingRef.current || (e.nativeEvent as InputEvent).isComposing || !el.value) return;
+              commit(el.value); // the app sends these as key events
+              el.value = '';
+            }}
+            onKeyDown={(e) => {
+              // ⌘ and Ctrl shortcuts belong to the remote desktop while you hold it, not to Shion
+              if (e.metaKey || e.ctrlKey) e.stopPropagation();
+              if (composingRef.current || e.nativeEvent.isComposing || e.key === 'Process') return;
+              if (e.key === 'Backspace') {
+                e.preventDefault();
+                write((t) => Array.from(t).slice(0, -1).join(''));
+              } else if (e.key === 'Enter' || e.key === 'Tab' || e.key === 'Escape' || e.key.startsWith('Arrow')) {
+                e.preventDefault();
+              }
+            }}
+            onPaste={(e) => {
+              e.preventDefault();
+              commit(e.clipboardData.getData('text/plain'));
+            }}
+          />
+          {marked && (
+            <span className="ime-marked" style={{ left: spot.x, top: spot.y }} aria-hidden="true">
+              {marked}
+            </span>
+          )}
+        </>
+      )}
       {screen.running && !held && (
         <div className={`hit-hint${armed || screen.needsHuman ? ' show' : ''}`}>
           <Hand size={15} />

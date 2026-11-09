@@ -68,6 +68,7 @@
   --scr-hl: #fff6e0;
   --scr-cursor: #111111;
   --scr-on-color: #ffffff;
+  --scr-sel: #b6d4fe;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -2098,6 +2099,31 @@ a.row:hover {
     transform: scaleX(0);
   }
 }
+/* the Mac's input method composing at the spot you clicked on the remote screen */
+.ime-catch {
+  position: absolute;
+  width: 2px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+.ime-marked {
+  position: absolute;
+  transform: translate(-4px, -50%);
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--canvas);
+  color: var(--text);
+  box-shadow: var(--shadow-pop);
+  font-size: var(--t-lg);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  white-space: pre;
+  pointer-events: none;
+}
 
 /* the remote screen itself, sized in container units so one mock serves as thumbnail and viewer */
 .scr {
@@ -2285,6 +2311,65 @@ a.row:hover {
 .pg-ok {
   color: var(--scr-green);
   font-weight: 700;
+}
+.scr.human [data-field] {
+  cursor: text;
+}
+.scr-text,
+.scr-sel {
+  white-space: pre;
+}
+.scr-sel {
+  background: var(--scr-sel);
+  border-radius: 0.2cqw;
+}
+.scr-ph {
+  color: var(--scr-ink-2);
+  opacity: 0.6;
+}
+.scr-caret {
+  display: inline-block;
+  width: 1.5px;
+  height: 1.2em;
+  margin-left: 1px;
+  background: var(--scr-ink);
+  vertical-align: -0.25em;
+}
+.pg-search {
+  display: flex;
+  align-items: center;
+  gap: 1.2cqw;
+  padding: 1.4cqw 2cqw;
+  border-bottom: 1px solid var(--scr-line);
+}
+.pg-input {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 1cqw;
+  padding: 0.9cqw 1.2cqw;
+  border: 1px solid var(--scr-line);
+  border-radius: 0.6cqw;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.pg-input em {
+  flex-shrink: 0;
+  font-style: normal;
+  font-size: 1.5cqw;
+  color: var(--scr-ink-2);
+}
+.pg-to {
+  color: var(--scr-ink-2);
+}
+.pg-go {
+  flex-shrink: 0;
+  padding: 0.9cqw 1.6cqw;
+  border-radius: 0.6cqw;
+  background: var(--scr-green);
+  color: var(--scr-on-color);
+  font-weight: 600;
 }
 .pg-h {
   font-weight: 700;

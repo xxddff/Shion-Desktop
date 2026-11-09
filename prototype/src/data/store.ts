@@ -179,6 +179,11 @@ export function startScreen(botId: string) {
   setState((s) => withScreen(s, botId, { running: true, activity: '桌面已启动，空闲中' }));
 }
 
+/** What a field on the cloud desktop now holds after you typed or pasted into it. */
+export function typeOnScreen(botId: string, field: string, value: string) {
+  setState((s) => withScreen(s, botId, { typed: { ...s.screens[botId]?.typed, [field]: value } }));
+}
+
 export function answerAsk(ask: Ask, value: string) {
   if (ask.kind === 'takeover') {
     if (value === 'go') takeOver(ask.botId);
