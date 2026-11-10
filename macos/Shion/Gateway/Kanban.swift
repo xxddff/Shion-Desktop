@@ -42,16 +42,18 @@ final class KanbanClient {
         self.credential = credential
     }
 
-    func get(_ path: String, board: String? = nil) async throws -> JSONValue {
-        try await request("GET", path, board: board)
+    /// `query`: more parameters than the board, as `include_archived`.
+    func get(_ path: String, board: String? = nil, query: [(String, String)] = []) async throws -> JSONValue {
+        try await request("GET", path, board: board, query: query)
     }
 
     /// One call; a 401 renews the credential once and tries again.
     @discardableResult
-    func request(_ method: String, _ path: String, board: String? = nil, body: JSONValue = .null) async throws -> JSONValue {
+    func request(_ method: String, _ path: String, board: String? = nil, query: [(String, String)] = [],
+                 body: JSONValue = .null) async throws -> JSONValue {
         var renew = false
         while true {
-            guard let url = url(path, board: board) else { throw GatewayError.notConfigured }
+            guard let url = url(path, board: board, query: query) else { throw GatewayError.notConfigured }
             let signed = try await credential(settings, renew)
             var request = URLRequest(url: url)
             request.httpMethod = method
@@ -104,8 +106,8 @@ final class KanbanClient {
         return socket
     }
 
-    private func url(_ path: String, board: String?) -> URL? {
-        let query = board.map { Self.query([("board", $0)]) } ?? ""
+    private func url(_ path: String, board: String?, query more: [(String, String)] = []) -> URL? {
+        let query = Self.query((board.map { [("board", $0)] } ?? []) + more)
         return settings.httpURL(Self.prefix + path + (query.isEmpty ? "" : "?" + query))
     }
 
@@ -233,8 +235,14 @@ struct KanbanTask: Identifiable, Hashable {
     /// The current run's start (`startedAt` is the first run's).
     var runStartedAt: Date?
     var result: String?
-    /// dependency, needs_input, capability or transient; nil on old cards.
+    /// dependency, needs_input, capability or transient; nil on old cards and on blocks that did
+    /// not say. Hermes keeps it (and `blockRecurrences`) across an unblock; only done clears it.
     var blockKind: String?
+    /// How many times in a row the card stopped for `blockKind`: the same kind again after an
+    /// unblock, at BLOCK_RECURRENCE_LIMIT, sends the card to triage instead of blocked.
+    var blockRecurrences = 0
+    /// The worker's last heartbeat in the current run.
+    var lastHeartbeatAt: Date?
     /// The newest run's handoff, cut to 200 characters on the board.
     var latestSummary: String?
     var parents = 0
@@ -258,6 +266,8 @@ struct KanbanTask: Identifiable, Hashable {
         runStartedAt = Self.date(row["current_run_started_at"])
         result = Self.text(row["result"])
         blockKind = Self.text(row["block_kind"])
+        blockRecurrences = row["block_recurrences"]?.int ?? 0
+        lastHeartbeatAt = Self.date(row["last_heartbeat_at"])
         latestSummary = Self.text(row["latest_summary"])
         parents = row["link_counts"]?["parents"]?.int ?? 0
         children = row["link_counts"]?["children"]?.int ?? 0
@@ -270,7 +280,9 @@ struct KanbanTask: Identifiable, Hashable {
     static func == (a: KanbanTask, b: KanbanTask) -> Bool {
         a.id == b.id && a.title == b.title && a.body == b.body && a.assignee == b.assignee && a.status == b.status
             && a.priority == b.priority && a.runStartedAt == b.runStartedAt && a.result == b.result
-            && a.blockKind == b.blockKind && a.latestSummary == b.latestSummary && a.parents == b.parents
+            && a.blockKind == b.blockKind && a.blockRecurrences == b.blockRecurrences
+            && a.startedAt == b.startedAt && a.completedAt == b.completedAt && a.lastHeartbeatAt == b.lastHeartbeatAt
+            && a.latestSummary == b.latestSummary && a.parents == b.parents
             && a.children == b.children && a.comments == b.comments
             && a.progress?.done == b.progress?.done && a.progress?.total == b.progress?.total
     }
@@ -318,6 +330,22 @@ struct KanbanLink: Identifiable, Equatable {
     let status: String
 }
 
+/// The newest event that stopped a card for someone: a block (`blocked`), the loop breaker's
+/// move to triage after the same block came back (`block_loop_detected`), or the failure
+/// breaker's after the worker kept failing (`gave_up`, with its error for a reason).
+struct KanbanStop: Equatable {
+    let id: Int
+    /// The event's kind.
+    let event: String
+    /// The block's kind as the worker gave it (needs_input, capability, transient), nil when it
+    /// gave none; nil for gave_up.
+    let blockKind: String?
+    let reason: String?
+    let at: Date?
+
+    static let events: Set<String> = ["blocked", "block_loop_detected", "gave_up"]
+}
+
 /// `GET /tasks/{id}`: what the board leaves out. A block's reason lives only in its event.
 struct KanbanDetail: Equatable {
     var body: String?
@@ -329,6 +357,8 @@ struct KanbanDetail: Equatable {
     var children: [KanbanLink] = []
     var blockReason: String?
     var scheduleReason: String?
+    /// What stopped the card last; the card's own `block_kind` may be left from an earlier block.
+    var stop: KanbanStop?
 
     init(_ reply: JSONValue) {
         let task = reply["task"]
@@ -368,5 +398,15 @@ struct KanbanDetail: Equatable {
         let events = reply["events"]?.array ?? []
         blockReason = events.last { $0["kind"]?.string == "blocked" }.flatMap { KanbanTask.text($0["payload"]?["reason"]) }
         scheduleReason = events.last { $0["kind"]?.string == "scheduled" }.flatMap { KanbanTask.text($0["payload"]?["reason"]) }
+        stop = events.last { KanbanStop.events.contains($0["kind"]?.string ?? "") }.map { row in
+            let event = row["kind"]?.string ?? ""
+            return KanbanStop(
+                id: row["id"]?.int ?? 0,
+                event: event,
+                blockKind: event == "gave_up" ? nil : KanbanTask.text(row["payload"]?["kind"]),
+                reason: KanbanTask.text(row["payload"]?["reason"]) ?? KanbanTask.text(row["payload"]?["error"]),
+                at: KanbanTask.date(row["created_at"])
+            )
+        }
     }
 }
