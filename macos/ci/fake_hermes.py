@@ -508,14 +508,61 @@ class Handler(BaseHTTPRequestHandler):
         except OSError:
             pass
 
+    LATER_NOW = "好，过一会儿再说一句（CI）。"
+    LATER_REPLY = "又想起一件事（CI）：周四的实验课改到下午 3 点。"
+
+    def later(self, session_id, text):
+        """A reply now, and 8 seconds on another one nobody asked for, as when an assistant comes
+        back to a chat by itself (a cron job's delivery, a card done). BoardTests reads further up
+        the chat meanwhile, and the new message must not pull it down to the end."""
+        with lock:
+            rows = transcripts.setdefault(session_id, [])
+            rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "user", "text": text,
+                         "timestamp": time.time()})
+            rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "assistant",
+                         "text": self.LATER_NOW, "timestamp": time.time()})
+        self.event("message.start", session_id, {})
+        self.event("message.delta", session_id, {"text": self.LATER_NOW})
+        self.event("message.complete", session_id, {"text": self.LATER_NOW, "status": "complete"})
+        threading.Timer(8.0, self.later_turn, args=(session_id,)).start()
+
+    def later_turn(self, session_id):
+        with lock:
+            rows = transcripts.setdefault(session_id, [])
+            rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "assistant",
+                         "text": self.LATER_REPLY, "timestamp": time.time()})
+        log(f"  -> a message nobody asked for on {session_id}")
+        half = len(self.LATER_REPLY) // 2
+        try:
+            self.event("message.start", session_id, {})
+            self.event("message.delta", session_id, {"text": self.LATER_REPLY[:half]})
+            time.sleep(0.3)
+            self.event("message.delta", session_id, {"text": self.LATER_REPLY[half:]})
+            self.event("message.complete", session_id, {"text": self.LATER_REPLY, "status": "complete"})
+        except OSError:
+            pass
+
     HOMEWORK_CALLS = (("call-ci-hw-1", "web_search", "这周的作业（CI）"),
                       ("call-ci-hw-2", "read_file", "syllabus（CI）"),
                       ("call-ci-hw-3", "web_extract", "moodle.example（CI）"))
+    # a table that fits, then one wider than the reply, which scrolls on its own
     HOMEWORK_REPLY = ("这周要交的有两项：\n\n"
                       "| 作业 | 截止 | 进度 |\n"
                       "| :-- | :-: | --: |\n"
                       "| 实验报告（CI） | 周三 17:00（CI） | 50% |\n"
                       "| 作业5（CI） | 周五 23:59 | 0% |\n\n"
+                      "各门课这周的情况：\n\n"
+                      "| 课 | 这周讲了什么 | 要交的 | 要读的 | 下次课前 | 备注（CI） |\n"
+                      "| --- | --- | --- | --- | --- | --- |\n"
+                      "| 数据结构与算法 | 堆和优先队列：插入时上浮，删除最小值时下沉，建堆是 O(n) | 作业4：实现二叉堆，周五 23:59 前交 "
+                      "| 教科书第 6 章，重点是建堆那一节 | 把 push 和 pop 写完，先测空堆 | 最右这列的格子（CI） |\n"
+                      "| 机器学习基础 | 线性回归和梯度下降，学习率太大会发散 | 课前小测，今天 12:50 截止 | 讲义第 3 章 "
+                      "| 复习矩阵求导 | 小测可以带一张手写笔记 |\n\n"
+                      "作业4 先把这一行跑通：\n\n"
+                      "```python\n"
+                      "heap = BinaryHeap(key=lambda task: (task.due, -task.priority))  "
+                      "# 先比截止时间，同一时间再比优先级，都一样时按加进来的先后（CI）\n"
+                      "```\n\n"
                       "先写**实验报告**，周三前交。")
 
     def homework(self, session_id, text):
@@ -575,6 +622,12 @@ class Handler(BaseHTTPRequestHandler):
         with self.write_lock:
             self.wfile.write(bytes(head) + data)
             self.wfile.flush()
+
+    def send_late(self, value):
+        try:
+            self.send_json(value)
+        except OSError:
+            pass
 
     def send_json(self, value):
         self.send_frame(1, json.dumps(value, ensure_ascii=False).encode())
@@ -704,6 +757,12 @@ class Handler(BaseHTTPRequestHandler):
             result, bad = self.transcript(params)
             if bad:
                 return self.refuse(rid, bad)
+            if params.get("cursor") is not None:
+                # an older page comes a moment after it is asked for, as over a real network: SignInTests
+                # reads where the rows in view are before it lands, and again after
+                reply = {"jsonrpc": "2.0", "id": rid, "result": result}
+                threading.Timer(1.5, self.send_late, args=(reply,)).start()
+                return
         elif method in ("approval.respond", "clarify.respond"):
             unknown = sorted(set(params) - RESPOND_KEYS)
             if unknown:
@@ -729,6 +788,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.hand_over(session_id, text)
             if "这周的作业" in text:
                 return self.homework(session_id, text)
+            if "等一会儿再说" in text:
+                return self.later(session_id, text)
             with lock:
                 rows = transcripts.setdefault(session_id, [])
                 rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "user", "text": text,

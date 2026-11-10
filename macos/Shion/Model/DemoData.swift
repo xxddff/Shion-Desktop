@@ -133,9 +133,28 @@ struct DemoData {
                        - 重复的元素
 
                     ```python
+                    heap = BinaryHeap(key=lambda todo: (todo.due, -todo.priority))  # 先比截止时间，同一时间再比优先级，都一样时按加进来的先后
                     heap.push(3)
                     assert heap.pop() == 3
                     ```
+                    """),
+            ],
+            // 资讯's sources side by side: a table wider than the reply, which scrolls on its own
+            "news": [
+                ChatItem(id: "n1", role: .user, at: at(0, 10, 38), text: "电费涨 30% 那个说法，查得怎么样了？"),
+                ChatItem(id: "n2", role: .tool, at: at(0, 10, 38), text: "web_search · 东京电力 12月 电费 上涨"),
+                ChatItem(id: "n3", role: .tool, at: at(0, 10, 39), text: "web_extract · tepco.example/press/2026"),
+                ChatItem(id: "n4", role: .tool, at: at(0, 10, 39), text: "web_extract · meti.example/energy/winter"),
+                ChatItem(id: "n5", role: .assistant, at: at(0, 10, 40), text: """
+                    找到三处说法，先列在这里，数字还在比对：
+
+                    | 来源 | 发布 | 原话 | 涨幅 | 说的是哪种合同 | 和传言的出入 |
+                    | --- | :-: | --- | --: | --- | --- |
+                    | 东京电力 官方公告 | 11 月 1 日 | 「12 月起，标准家庭的月电费比 11 月增加约 312 日元」 | 约 3.6% | 从量电灯 B，30A，每月用电 260 kWh | 只有传言的八分之一左右 |
+                    | 经济产业省 说明资料 | 10 月 28 日 | 「冬季补贴结束后，电价恢复到补贴前的水平」 | 没写 | 所有低压合同 | 没有提到 30% |
+                    | 社交网络上的帖子 | 11 月 7 日 | 「东京今冬电费上涨 30%」 | 30% | 没说 | 像是把燃料调整费的涨幅当成了电费总额的涨幅 |
+
+                    30% 这个数字目前只在帖子里出现，两份官方资料都对不上，确认完再告诉你结论。
                     """),
             ],
             // 课程's notes on the lecture: headings, lists in lists, a quote, task boxes, a rule
