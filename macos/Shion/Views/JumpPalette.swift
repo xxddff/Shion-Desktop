@@ -182,7 +182,7 @@ struct JumpPalette: View {
         var found = JumpSearch.results(candidates, query: query).compactMap { all[$0.id] }
         let words = query.trimmingCharacters(in: .whitespacesAndNewlines)
         if !words.isEmpty {
-            let chief = store.bot(store.chiefId)?.name ?? "詩音"
+            let chief = store.chiefName
             found.append(JumpHit(id: "jump-ask", group: .ask, title: "跟\(chief)说「\(words)」", icon: .mark, target: .ask(words)))
         }
         return found

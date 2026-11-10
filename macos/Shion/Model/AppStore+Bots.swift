@@ -11,8 +11,17 @@ extension AppStore {
     /// less the ones hidden in Settings.
     func assistants(from rows: [JSONValue]) -> [Bot] {
         roster.load(rows, server: serverSettings.signInServer)
+        // once connected: the pictures, and Hermes's own clean-up of names deleted earlier
+        Task {
+            loadPictures()
+            settle()
+        }
         return rosterBots()
     }
+
+    /// The assistant that is 总秘书: its name and avatar go wherever you talk to 总秘书.
+    var chief: Bot? { bot(chiefId) }
+    var chiefName: String { chief?.name ?? "总秘书" }
 
     private func rosterBots() -> [Bot] {
         let chief = roster.chiefName
@@ -20,14 +29,18 @@ extension AppStore {
         var hidden: [Bot] = []
         for (index, profile) in roster.profiles.enumerated() {
             let leads = profile.name == chief
+            let usual = leads ? Palette.accent : Palette.hues[index % Palette.hues.count]
             let bot = Bot(
                 id: profile.name,
                 name: profile.shownName,
                 title: leads ? "总秘书" : (profile.description.isEmpty ? profile.name : profile.description),
                 chief: leads,
-                hue: leads ? Palette.accent : Palette.hues[index % Palette.hues.count],
+                // Bot Mode's colour and shape, where it set them
+                hue: BotLook.color(profile.color) ?? usual,
                 status: .idle,
-                statusNote: ""
+                statusNote: "",
+                shape: profile.shape.isEmpty ? nil : profile.shape,
+                hasPicture: profile.hasAvatar
             )
             if roster.isHidden(profile.name) {
                 hidden.append(bot)
@@ -58,7 +71,7 @@ extension AppStore {
         }
     }
 
-    /// Settings: 总秘书. The shion plugin is called in her profile, so today, todos and reports
+    /// Settings: 总秘书. The shion plugin is called in that profile, so today, todos and reports
     /// load again from there, or go back to the demo where the plugin is not installed. One that
     /// was hidden is shown again, and its Bot Chat attached.
     func chooseChief(_ name: String) {
@@ -105,6 +118,7 @@ extension AppStore {
         guard live, !rows.isEmpty else { return }
         roster.load(rows, server: serverSettings.signInServer)
         applyRoster()
+        loadPictures()
     }
 
     /// `profiles.create` over the socket, as Bot Mode makes one: a fresh profile gets the
@@ -150,13 +164,31 @@ extension AppStore {
     /// A section changed meanwhile is read again and written once more. A profile the list has not
     /// shown yet (just made) has no section: revision 0.
     func setTitle(_ title: String, of name: String) async throws {
+        try await setBotsMeta(["title": title.isEmpty ? nil : .string(title)], of: name, what: "显示名")
+    }
+
+    /// Bot Mode's colour and avatar shape (nil goes back to its default), marked as chosen
+    /// (`custom`), as Bot Mode marks an avatar you picked.
+    func setLook(color: String?, shape: String?, of name: String) async throws {
+        let chosen: JSONValue? = color == nil && shape == nil ? nil : .bool(true)
+        try await setBotsMeta([
+            "color": color.map { JSONValue.string($0) },
+            "shape": shape.map { JSONValue.string($0) },
+            "custom": chosen,
+        ], of: name, what: "头像")
+    }
+
+    /// Keys of Bot Mode's section changed (nil removes one), the rest sent back as it is.
+    func setBotsMeta(_ changes: [String: JSONValue?], of name: String, what: String) async throws {
         for attempt in 0..<2 {
             let profile = roster.profile(name)
             var section = profile?.botsMeta ?? [:]
-            if title.isEmpty {
-                section.removeValue(forKey: "title")
-            } else {
-                section["title"] = .string(title)
+            for (key, value) in changes {
+                if let value {
+                    section[key] = value
+                } else {
+                    section.removeValue(forKey: key)
+                }
             }
             let written: JSONValue = section.isEmpty ? .null : .object(section)
             let revision: JSONValue = .number(Double(profile?.botsRevision ?? 0))
@@ -175,16 +207,57 @@ extension AppStore {
             }
             guard attempt == 0, conflicted else { break }
         }
-        throw AssistantError.notSaved("显示名")
+        throw AssistantError.notSaved(what)
+    }
+
+    /// Bot Mode's avatar pictures (`profiles.get_asset`) for the profiles that have one, each
+    /// read once while connected.
+    func loadPictures() {
+        for profile in roster.profiles where profile.hasAvatar && AvatarPictures.shared.images[profile.name] == nil {
+            let name = profile.name
+            Task { await loadPicture(name) }
+        }
+    }
+
+    private func loadPicture(_ name: String) async {
+        guard live, let reply = try? await gateway.call("profiles.get_asset", [
+            "name": .string(name), "asset": "avatar",
+        ], timeout: 60) else { return }
+        guard reply["found"]?.bool == true, let data = reply["data"]?.string else {
+            AvatarPictures.shared.set(nil, for: name)
+            return
+        }
+        AvatarPictures.shared.set(AvatarPictures.image(data), for: name)
+    }
+
+    /// A picture for the avatar (`profiles.set_asset`, a PNG data URL), or none (`clear`).
+    func setPicture(_ dataURL: String?, of name: String) async throws {
+        guard live else { throw AssistantError.offline }
+        var params: [String: JSONValue] = ["name": .string(name), "asset": "avatar"]
+        if let dataURL {
+            params["data"] = .string(dataURL)
+        } else {
+            params["clear"] = true
+        }
+        let reply = try await gateway.call("profiles.set_asset", .object(params), timeout: 60)
+        guard reply["ok"]?.bool != false else { throw AssistantError.notSaved("图片") }
+        AvatarPictures.shared.set(nil, for: name)
+        await refreshProfiles()
     }
 
     /// `DELETE /api/profiles/{name}`: the profile and everything in it, on the server. Hermes
-    /// keeps the default profile (400); Shion offers neither it nor 总秘书.
+    /// keeps the default profile (400); Shion offers neither it nor 总秘书. When Hermes could not
+    /// clean up the name's session and routing records (`settlement_pending`), the name is kept
+    /// back until it has: a profile made under it meanwhile would take the old records over.
     func deleteAssistant(_ name: String) async throws {
         guard let api else { throw AssistantError.offline }
         // the server stops the profile's gateway first, waiting up to ten seconds
-        try await api.request("DELETE", HermesAPI.profilePath(name), timeout: 90)
+        let reply = try await api.request("DELETE", HermesAPI.profilePath(name), timeout: 90)
         roster.forget(name)
+        if reply["settlement_pending"]?.bool == true {
+            roster.setCleaning(name, command: reply["retry_command"]?.string ?? "hermes profile purge-identity \(name)")
+            settle()
+        }
         forgetChat(name)
         if case .chat(let id)? = route, id == name {
             route = .today
@@ -193,6 +266,48 @@ extension AppStore {
             route = .today
         }
         await refreshProfiles()
+    }
+
+    /// Names still being cleaned up: Shion runs the retry Hermes asks for (`hermes profile
+    /// purge-identity`, over `cli.exec`) while connected, sooner at first, until it goes through.
+    func settle() {
+        guard live, roster.settler == nil, !roster.cleaning.isEmpty else { return }
+        roster.settler = Task { [weak self] in
+            var wait = 5.0
+            while let self, self.live, !self.roster.cleaning.isEmpty, !Task.isCancelled {
+                for name in self.roster.cleaning.keys.sorted() {
+                    await self.purge(name)
+                }
+                if self.roster.cleaning.isEmpty {
+                    break
+                }
+                try? await Task.sleep(for: .seconds(wait))
+                wait = min(wait * 2, 120)
+            }
+            // a loop stopped for another server leaves the new one's in place
+            if !Task.isCancelled {
+                self?.roster.settler = nil
+            }
+        }
+    }
+
+    private func purge(_ name: String) async {
+        // the name is a profile again (made elsewhere): there is nothing left to keep it from
+        guard roster.profile(name) == nil else {
+            roster.setCleaning(name, command: nil)
+            return
+        }
+        guard let reply = try? await gateway.call("cli.exec", [
+            "argv": ["profile", "purge-identity", .string(name)], "timeout": 120,
+        ], timeout: 150), reply["blocked"]?.bool != true else { return }
+        if reply["code"]?.int == 0 {
+            roster.setCleaning(name, command: nil)
+        }
+    }
+
+    /// Settings: the name is clean on the server, by your word (Shion could not get there itself).
+    func cleaned(_ name: String) {
+        roster.setCleaning(name, command: nil)
     }
 
     /// The models a new assistant can start on: those of the profile it copies, or the server's.

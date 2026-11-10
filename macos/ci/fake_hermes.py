@@ -682,7 +682,7 @@ class Handler(BaseHTTPRequestHandler):
     def rpc(self, request):
         method, params, rid = request.get("method", ""), request.get("params") or {}, request.get("id")
         if method != "gateway.ping":
-            log(f"  rpc {method} {json.dumps(params, ensure_ascii=False)[:160]}")
+            log(f"  rpc {method} {json.dumps(fake_profiles.loggable(method, params), ensure_ascii=False)[:160]}")
         if method.startswith("plugin.shion."):
             if params.get("profile") and not fake_profiles.has_plugin(params["profile"], "shion"):
                 # the plugin is installed in 詩音's profile only: elsewhere Hermes knows no such method
