@@ -199,13 +199,33 @@ final class ChatControlTests: XCTestCase {
             field.typeText("\r")
             XCTAssertTrue(waitUntil(timeout: 3) { self.position(count)?.0 == first.0 - 1 }, "Return did not go to the older hit")
         }
-        // 第 3 条 is pages back: ↑ reads older pages until it turns up
+        // 第 3 条 is pages back: ↑ reads older pages until it turns up. Each comes 1.5 s after it
+        // is asked for (the stand-in's network): the second (no hit) lands with what shows staying
+        // where it was, and with the third the chat goes to the hit, which is then in view, not
+        // only laid out
         field.typeKey("a", modifierFlags: .command)
         field.typeText("第 3 条")
+        let transcript = element("transcript", in: app)
+        var places: [String] = []
+        let before = topRow(of: transcript)
         element("find-older", in: app).click()
+        Thread.sleep(forTimeInterval: 2.3)
+        let reading = before.flatMap { row in rows(of: transcript)[row.label] }
+        places.append("finding: \(before?.label ?? "no row") at the top at \(before.map { "\($0.y)" } ?? "-") before 上一个, "
+                      + "\(reading.map { "\($0)" } ?? "gone") with the second page in")
+        if let before {
+            XCTAssertEqual(reading ?? .nan, before.y, accuracy: 4, "what shows moved as finding read the second page. \(places.last ?? "")")
+        }
         let dug = waitForText("第 3 条（你）", in: app, timeout: 30)
+        Thread.sleep(forTimeInterval: 0.5)
         keep(app.windows.firstMatch.screenshot(), "chatctl-6-find-older")
         XCTAssertTrue(dug, "older pages were not read for the hit")
+        let found = rows(of: transcript)["第 3 条（你）"]
+        let area = transcript.frame
+        places.append("the hit: 第 3 条 at \(found.map { "\($0)" } ?? "not laid out") in \(area)")
+        XCTAssertTrue(found.map { $0 >= area.minY - 2 && $0 <= area.maxY - 10 } ?? false,
+                      "the chat did not go to the hit. \(places.last ?? "")")
+        note(places.joined(separator: "\n"), "chatctl-positions")
         app.typeKey(.escape, modifierFlags: [])
 
         // 断开: the window keeps the server's data, read-only, and says from when
@@ -337,6 +357,34 @@ final class ChatControlTests: XCTestCase {
     }
 
     /// Text worth reading after the run, beside the pictures (`name.txt`).
+    /// Where each 第 N 条 row the transcript has laid out starts on the screen, by its text, from
+    /// one snapshot of it (quick enough to read between two pages landing).
+    @MainActor
+    private func rows(of transcript: XCUIElement) -> [String: CGFloat] {
+        guard let root = try? transcript.snapshot() else { return [:] }
+        var rows: [String: CGFloat] = [:]
+        func visit(_ node: XCUIElementSnapshot) {
+            if node.elementType == .staticText || node.elementType == .textView,
+               let text = [node.label, node.value as? String ?? ""].first(where: { $0.hasPrefix("第 ") && $0.contains(" 条（") }),
+               rows[text] == nil {
+                rows[text] = node.frame.minY
+            }
+            node.children.forEach(visit)
+        }
+        visit(root)
+        return rows
+    }
+
+    /// The topmost 第 N 条 row wholly in what shows of the transcript, and where it starts.
+    @MainActor
+    private func topRow(of transcript: XCUIElement) -> (label: String, y: CGFloat)? {
+        let area = transcript.frame
+        return rows(of: transcript)
+            .filter { $0.value >= area.minY - 1 && $0.value <= area.maxY - 20 }
+            .min { $0.value < $1.value }
+            .map { (label: $0.key, y: $0.value) }
+    }
+
     private func note(_ text: String, _ name: String) {
         let attachment = XCTAttachment(string: text)
         attachment.name = name
