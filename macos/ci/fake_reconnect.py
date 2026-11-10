@@ -34,11 +34,12 @@ Shaped like Hermes main at b3746e35 (2026-11-09):
   (gateway/session_controls.py respond, gateway/session_authority.py respond).
 
 The scripted turns, in 詩音's chat, are sentences that start 「断线：」. Each drops Shion's socket at
-one moment, as a network does (no close frame); then for OUTAGE seconds the tunnel is down and every
-request gets Cloudflare's 502:
+one moment, as a network does (no close frame); then for a few seconds (OUTAGE, unless said) the
+tunnel is down and every request gets Cloudflare's 502:
 
-  讲到一半   40 parts 0.3 s apart; the socket drops after the 5th, and the reply is still going when
-             Shion is back, so the rest streams into the same bubble
+  讲到一半   80 parts 0.3 s apart; the socket drops after the 5th and the tunnel stays down 8 s (time
+             to say something meanwhile); the reply is still going when Shion is back, so the rest
+             streams into the same bubble
   讲完了     10 parts 0.2 s apart, dropped after the 3rd: the reply ends while the tunnel is down
   还没回执   admitted, then dropped before its receipt went out; the frames that follow are kept
   没收到     dropped before it was admitted, the first time its submission id comes; sent again with
@@ -121,13 +122,13 @@ def tunnel_down(handler):
     return True
 
 
-def drop(handler, why):
+def drop(handler, why, outage=OUTAGE):
     """Shion's socket goes as it does when the network goes, without a close frame; the tunnel
     then stays down a while. The sessions it had attached lose it, as Hermes detaches an orphan."""
-    down["until"] = time.time() + OUTAGE
+    down["until"] = time.time() + outage
     with bus:
         forget(handler)
-    log(f"  -> dropped the socket {why}; the tunnel is down for {OUTAGE:.0f} s")
+    log(f"  -> dropped the socket {why}; the tunnel is down for {outage:.0f} s")
     try:
         handler.connection.shutdown(socket.SHUT_RDWR)
     except OSError:
@@ -172,6 +173,11 @@ def publish(session_id, kind, payload, generation=None, admission_id=None):
         found["kept"].append(params)
         while len(found["kept"]) > KEPT:
             found["evicted"] = found["kept"].popleft()["seq"]
+        # what still waits for an answer, for the snapshot (the session's PendingControls)
+        if kind in ("approval.request", "clarify.request") and isinstance(payload, dict) and payload.get("prompt_id"):
+            prompts.setdefault(session_id, {})[payload["prompt_id"]] = {"kind": kind.split(".")[0], **payload}
+        elif kind in ("approval.settled", "clarify.settled") and isinstance(payload, dict):
+            prompts.get(session_id, {}).pop(payload.get("prompt_id"), None)
         for handler in list(watchers.get(session_id, {})):
             try:
                 handler.send_json({"jsonrpc": "2.0", "method": "event", "params": params})
@@ -275,9 +281,11 @@ def publish_pending(session_id, generation=None):
 
 def receipt(params):
     """The receipt of a sentence the stand-in answers itself (fake_hermes.py): admitted here, so an
-    exact retry is known. Its turn runs at once and is over before anything else comes."""
+    exact retry is known, and published as pending first, as every admission is. Its turn runs at
+    once and is over before anything else comes."""
     admission = admit(params.get("session_id"), params.get("submission_id") or params.get("input_id"),
                       params.get("text", ""), params.get("profile"))
+    publish_pending(admission["session_id"])
     answer = receipt_of(admission)
     admission.update(status="terminal", outcome="completed")
     return answer
@@ -426,11 +434,11 @@ def plain(turn):
 
 def halfway(turn):
     begin(turn)
-    for n in range(1, 41):
+    for n in range(1, 81):
         time.sleep(0.3)
         say(turn, f"第{n}段。")
         if n == 5:
-            drop(turn["handler"], "half way through a reply")
+            drop(turn["handler"], "half way through a reply", outage=8.0)
     end(turn)
 
 
@@ -461,8 +469,6 @@ def approval(turn):
     time.sleep(0.5)
     session_id, generation = turn["session_id"], turn["generation"]
     prompt = {**APPROVAL, "execution_generation": generation}
-    with bus:
-        prompts.setdefault(session_id, {})[prompt["prompt_id"]] = prompt
     log(f"  -> approval.request {prompt['prompt_id']} on {session_id}")
     publish(session_id, "approval.request", prompt, generation, turn["admission"]["admission_id"])
     time.sleep(1.5)
