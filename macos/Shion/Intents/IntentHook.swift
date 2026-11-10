@@ -1,28 +1,24 @@
 import Foundation
 
 /// Test runs call the App Intents' perform() themselves, as Shortcuts or Siri would once they
-/// have the parameters: a line of JSON each in `-ShionIntentRequests <file>`
-/// (`{"id": "1", "intent": "tell", "text": "…"}`; `todos`; `open-assistant` with `query`, found
-/// as Shortcuts finds it; `open-confirm`), what each said or why it did nothing in
+/// have the parameters. A request is a distributed notification (`IntentHook.request`, its object
+/// JSON: `{"id": "1", "intent": "tell", "text": "…"}`; `todos`; `open-assistant` with `query`,
+/// found the way Shortcuts finds it; `open-confirm`), since the test runner may not write files
+/// the app can see; what each said, or why it did nothing, is a line of JSON in
 /// `-ShionIntentResults <file>`. Only in screenshot and test runs.
 enum IntentHook {
+    static let request = Notification.Name("dev.shion.test.intent")
+    private static var observer: (any NSObjectProtocol)?
+
     static func start() {
-        let defaults = UserDefaults.standard
         guard LaunchOptions.current.snapshot,
-              let requests = defaults.string(forKey: "ShionIntentRequests"),
-              let results = defaults.string(forKey: "ShionIntentResults")
+              let results = UserDefaults.standard.string(forKey: "ShionIntentResults"), observer == nil
         else { return }
-        Task {
-            var read = 0
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(400))
-                guard let text = try? String(contentsOfFile: requests, encoding: .utf8) else { continue }
-                let lines = text.split(separator: "\n")
-                guard lines.count > read else { continue }
-                let fresh = lines[read...].map(String.init)
-                read = lines.count
-                for line in fresh {
-                    guard let request = try? JSONValue.parse(line) else { continue }
+        observer = DistributedNotificationCenter.default().addObserver(forName: request, object: nil, queue: .main) { note in
+            guard let json = note.object as? String else { return }
+            MainActor.assumeIsolated {
+                guard let request = try? JSONValue.parse(json) else { return }
+                Task {
                     write(await run(request), to: results)
                 }
             }

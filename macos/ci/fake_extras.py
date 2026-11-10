@@ -7,9 +7,11 @@ Shortcuts actions' sentences. Shaped like Hermes and the shion plugin:
                                   (agent/persisted_turn_receipt.py): the rows the turn was stored
                                   as, `final_assistant_row_id` among them. The transcript keeps the
                                   rows under those ids, so a fresh read finds the reply again.
-  prompt.submit "通知：问我"       詩音 asks a question (clarify.request). It stays pending until
-                                  clarify.respond, and session.resume's `prompts` brings it back to
-                                  a client that attaches again, as Hermes's snapshot does.
+  prompt.submit "通知：问我"       詩音 asks a question (clarify.request); "通知：要批准", she asks
+                                  for an approval (approval.request). Each stays pending until it
+                                  is answered, and session.resume's `prompts` brings it back to a
+                                  client that attaches again, as Hermes's snapshot does
+                                  (gateway/session_pending_controls.py).
   prompt.submit "通知：写日报"     课程 writes today's life report through the plugin: yesterday's
                                   moves to the archive (reports.get still finds it, as the plugin
                                   keeps every day), and the revision bumps and is pushed.
@@ -27,6 +29,8 @@ PARAGRAPHS = 30
 LONG_FIRST = "（CI 长回复）第 1 段：这是一条很长的回复，点通知时要从这里开始看。"
 QUESTION = {"prompt_id": "cl-ci-dinner", "execution_generation": 1, "kind": "clarify",
             "question": "晚饭想在家吃还是出去吃？（CI）", "choices": [], "multi_select": False}
+APPROVAL = {"prompt_id": "ap-ci-print", "execution_generation": 1, "kind": "approval",
+            "command": "lpr 作业4.pdf", "description": "要打印作业4吗？（CI）", "choices": ["once", "deny"]}
 SLOW = "捷径慢："
 SLOW_DELAY = 8.0
 
@@ -55,7 +59,9 @@ def answer(handler, log, transcripts_lock, transcripts, session_id, text, submis
         return threading.Thread(target=long_reply, daemon=True,
                                 args=(handler, log, transcripts_lock, transcripts, session_id, text, submission_id)).start()
     if "问我" in text:
-        return ask(handler, log, transcripts_lock, transcripts, session_id, text)
+        return ask(handler, log, transcripts_lock, transcripts, session_id, text, QUESTION, "clarify.request")
+    if "要批准" in text:
+        return ask(handler, log, transcripts_lock, transcripts, session_id, text, APPROVAL, "approval.request")
     if "写日报" in text:
         return write_report(handler, log, transcripts_lock, transcripts, session_id, text)
     reply(handler, transcripts_lock, transcripts, session_id, text, "（CI）不认识这句：" + text)
@@ -105,16 +111,16 @@ def slow(handler, log, transcripts_lock, transcripts, session_id, text):
         pass
 
 
-def ask(handler, log, transcripts_lock, transcripts, session_id, text):
+def ask(handler, log, transcripts_lock, transcripts, session_id, text, prompt, kind):
     with transcripts_lock:
         transcripts.setdefault(session_id, []).append(
             {"row_id": next_row(), "row_kind": "message", "role": "user", "text": text, "timestamp": time.time()})
     with lock:
-        pending.setdefault(session_id, []).append(QUESTION)
-    log(f"  -> clarify.request {QUESTION['prompt_id']} on {session_id}")
+        pending.setdefault(session_id, []).append(prompt)
+    log(f"  -> {kind} {prompt['prompt_id']} on {session_id}")
     handler.event("message.start", session_id, {})
     handler.event("session.info", session_id, {"running": True})
-    handler.event("clarify.request", session_id, QUESTION)
+    handler.event(kind, session_id, prompt)
 
 
 def answered(session_id, prompt_id):

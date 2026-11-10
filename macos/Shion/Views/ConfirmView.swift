@@ -21,6 +21,8 @@ struct ConfirmView: View {
                                 AskCard(ask: ask)
                                     .landed(selected == ask.id)
                                     .accessibilityElement(children: .contain)
+                                    .accessibilityAddTraits(selected == ask.id ? .isSelected : [])
+                                    .accessibilityValue(selected == ask.id ? "已选中" : "")
                                     .accessibilityIdentifier("ask-\(ask.id)")
                                     .id(ask.id)
                             }

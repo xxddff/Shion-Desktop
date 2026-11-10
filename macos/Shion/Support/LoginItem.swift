@@ -24,8 +24,8 @@ final class LoginItem {
     /// Why the last change did not go through, in the system's words.
     private(set) var failure: String?
 
-    @ObservationIgnored private let demo = LaunchOptions.current.snapshot
-    @ObservationIgnored private var observer: NSObjectProtocol?
+    private let demo = LaunchOptions.current.snapshot
+    @ObservationIgnored private var observer: (any NSObjectProtocol)?
 
     private init() {
         guard !demo else {

@@ -342,7 +342,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         let info = fields.compactMapValues { $0.string }
         Task {
             try? await Task.sleep(for: .milliseconds(500))
-            land(info)
+            self.land(info)
         }
     }
 }

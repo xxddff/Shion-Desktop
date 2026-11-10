@@ -138,6 +138,7 @@ nonisolated struct TodoQuery: EntityQuery {
 /// The phrases Siri knows Shion's actions by, in Chinese; Shortcuts and Spotlight list the same
 /// four. Each phrase names the app (`applicationName`); 打开助手 can name the assistant too.
 nonisolated struct ShionAppShortcuts: AppShortcutsProvider {
+    @AppShortcutsBuilder
     static var appShortcuts: [AppShortcut] {
         AppShortcut(
             intent: TellChiefIntent(),

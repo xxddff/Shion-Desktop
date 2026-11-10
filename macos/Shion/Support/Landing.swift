@@ -36,7 +36,7 @@ enum Landing: Equatable {
     /// A reply's userInfo: what finds it in the chat again, even after the chat was read anew.
     static func replyInfo(botId: String, text: String, row: Int?, item: String?, at: Date) -> [String: String] {
         var info = ["bot": botId, "words": String(text.prefix(40)), "at": String(Int(at.timeIntervalSince1970))]
-        info["row"] = row.map(String.init)
+        info["row"] = row.map { String($0) }
         info["item"] = item
         return info
     }
@@ -183,6 +183,5 @@ extension View {
                     .strokeBorder(Palette.accent, lineWidth: 2)
             }
         }
-        .accessibilityAddTraits(on ? .isSelected : [])
     }
 }

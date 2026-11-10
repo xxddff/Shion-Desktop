@@ -25,7 +25,7 @@ final class DockMode {
     /// The Dock icon is away: the menu bar shows the count instead.
     private(set) var hidden = false
 
-    @ObservationIgnored private var observers: [NSObjectProtocol] = []
+    @ObservationIgnored private var observers: [any NSObjectProtocol] = []
     private static let key = "MenuBarOnly"
 
     private init() {
