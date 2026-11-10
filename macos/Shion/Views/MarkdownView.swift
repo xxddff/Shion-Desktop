@@ -113,7 +113,8 @@ struct MarkdownCode: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 9)
         }
-        // not the transcript's bottom anchor: a block starts at its first column
+        // a block starts at its first column, whatever a scroll view around it anchors (the ⌥Space
+        // window's answer anchors its bottom)
         .defaultScrollAnchor(.leading)
         .frame(maxWidth: .infinity, alignment: .leading)
         .fixedSize(horizontal: false, vertical: true)
@@ -138,7 +139,8 @@ struct MarkdownTableView: View {
             ScrollView(.horizontal) {
                 grid
             }
-            // not the transcript's bottom anchor: a table starts at its first column
+            // a table starts at its first column, whatever a scroll view around it anchors (the
+            // ⌥Space window's answer anchors its bottom)
             .defaultScrollAnchor(.leading)
             .fixedSize(horizontal: false, vertical: true)
             .accessibilityIdentifier("markdown-table-scroll")

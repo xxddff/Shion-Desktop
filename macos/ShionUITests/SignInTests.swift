@@ -185,13 +185,16 @@ final class SignInTests: XCTestCase {
                            "the row at the top of what shows moved. \(positions.last ?? "")")
         }
         positions.append("older pages seen from steps \(landings) on; 第 1 条 \(reachedTop ? "reached" : "not reached")")
+        // on to the very top, for the picture: 第 1 条 is read a little before it comes into view
+        if reachedTop {
+            for _ in 0..<2 {
+                wheel.scroll(byDeltaX: 0, deltaY: direction * 1200)
+                Thread.sleep(forTimeInterval: 0.5)
+            }
+        }
         // the oldest page opens with a compaction that has the row_id of 第 1 条, the ask it was
         // stored on, as Hermes sends it: both rows show, with the tool calls after it in one line
-        var summarized = waitForText("更早的对话压缩成了摘要", in: app, timeout: 2)
-        if reachedTop && !summarized {
-            wheel.scroll(byDeltaX: 0, deltaY: direction * 1200)
-            summarized = waitForText("更早的对话压缩成了摘要", in: app, timeout: 3)
-        }
+        let summarized = waitForText("更早的对话压缩成了摘要", in: app, timeout: 3)
         keep(window.screenshot(), "signin-6-oldest")
         XCTAssertTrue(reachedTop, "older pages did not load on scrolling up")
         XCTAssertTrue(summarized, "the compaction above 第 1 条 is not shown")
@@ -229,9 +232,9 @@ final class SignInTests: XCTestCase {
     }
 
     /// Which sign of a wheel delta at `wheel` scrolls the chat back, from nudges each way watching
-    /// the row `label`; nil when none moves it. The pointer goes there first: the first wheel turn
-    /// as it arrives does not reach the transcript (the CI recording shows it, and BoardTests'
-    /// first nudge of 40 did nothing where the second, of 80, moved). The numbers go in `positions`.
+    /// the row `label`; nil when none moves it. The pointer rests there first, and the nudges grow
+    /// from 40 to 80: on the runner a first nudge of 40 sometimes moves nothing, the pointer
+    /// resting there or not, where 80 then moves. The numbers go in `positions`.
     @MainActor
     private func upward(_ wheel: XCUICoordinate, watching label: String, in app: XCUIApplication,
                         positions: inout [String]) -> CGFloat? {
