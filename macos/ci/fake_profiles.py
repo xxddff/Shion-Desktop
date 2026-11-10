@@ -116,7 +116,9 @@ def seed():
                       ui_meta={"hermes-bots": {"title": "归档（CI）", "hidden": True, "color": "#8b5cf6", "shape": "hexagon"}},
                       revisions={"hermes-bots": 1})
     # Hermes's own default profile (~/.hermes): it cannot be deleted
-    default = profile("default", "Hermes（CI）", default=True)
+    # Hermes's default profile has the shion plugin too, so LocalDataTests can make it 总秘书; 课程 and
+    # 通勤 have none (BotsTests makes 课程 总秘书 for the demo's 今天, ChatControlTests checks 通勤)
+    default = profile("default", "Hermes（CI）", default=True, plugins={"shion"})
     for p in (shion, study, commute, archive, default):
         profiles[p["name"]] = p
     assets["commute"] = "data:image/png;base64," + base64.b64encode(tile((79, 138, 91))).decode()

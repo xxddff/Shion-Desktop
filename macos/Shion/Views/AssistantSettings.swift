@@ -1,8 +1,9 @@
 import SwiftUI
 
 /// The Settings window: the server, the assistants on it, the server check (ServerCheckView.swift),
-/// the keys (ShortcutSettings.swift), and how Shion starts and stays around (GeneralSettings.swift).
-/// It opens on the tab it was left on; screenshot and test runs always open on 服务器 and leave the
+/// the keys (ShortcutSettings.swift), and this Mac: what it knows itself (LocalSettings.swift), how
+/// Shion starts and stays around on it and the ways into it (StartSettings.swift). It opens
+/// on the tab it was left on; screenshot and test runs always open on 服务器 and leave the
 /// remembered tab alone.
 struct SettingsTabs: View {
     @State private var tab = SettingsTabs.firstTab
@@ -21,8 +22,8 @@ struct SettingsTabs: View {
             Tab("快捷键", systemImage: "keyboard", value: "keys") {
                 ShortcutSettings()
             }
-            Tab("通用", systemImage: "gearshape", value: "general") {
-                GeneralSettings()
+            Tab("这台 Mac", systemImage: "laptopcomputer", value: "mac") {
+                LocalSettingsView()
             }
         }
         .onChange(of: tab) { _, tab in
@@ -36,7 +37,7 @@ struct SettingsTabs: View {
     private static var firstTab: String {
         guard !LaunchOptions.current.snapshot,
               let stored = UserDefaults.standard.string(forKey: tabKey),
-              ["server", "assistants", "check", "keys", "general"].contains(stored)
+              ["server", "assistants", "check", "keys", "mac"].contains(stored)
         else { return "server" }
         return stored
     }

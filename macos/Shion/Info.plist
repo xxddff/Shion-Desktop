@@ -2,9 +2,12 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- Only what build settings cannot say; Xcode adds the rest (GENERATE_INFOPLIST_FILE).
      Plain HTTP stays allowed for local addresses: a Hermes on this Mac or the LAN, and the
-     stand-in server the sign-in test runs on 127.0.0.1. -->
+     stand-in server the sign-in test runs on 127.0.0.1. The calendar line is what macOS shows
+     when Shion first asks to read this Mac's calendars (EventKit refuses without it). -->
 <plist version="1.0">
 <dict>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Shion 在「今天」「日程」和菜单栏里显示你勾选的日历，专注检查用其中的课和专注时段做计划。日历只在这台 Mac 上读，不经过服务器。</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>

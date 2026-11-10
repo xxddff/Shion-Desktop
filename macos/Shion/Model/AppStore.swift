@@ -7,9 +7,12 @@ import SwiftUI
 /// `shion` plugin exists).
 @Observable
 final class AppStore {
-    /// The demo's pinned moment; with the server's own data, `now` is the real time.
+    /// The demo's pinned moment; with the server's own data, the last of it, or this Mac's
+    /// calendars, `now` is the real time, ticking every 30 seconds.
     let demoClock: Date
-    var now: Date { pluginData || lastData.shown ? Date() : demoClock }
+    var now: Date { pluginData || lastData.shown || local.realTime ? local.clock : demoClock }
+    /// This Mac's calendars, the focus check and the app usage record (AppStore+Local.swift).
+    let local = LocalData.forLaunch()
     var route: Route? = LaunchOptions.current.route
     var bots: [Bot]
     var todos: [Todo]
@@ -19,9 +22,6 @@ final class AppStore {
     var chats: [String: [ChatItem]]
     var reports: [Report]
     var screens: [BotScreen]
-    var focus: FocusStatus
-    var activityLog = true
-    var focusCheck = true
 
     // the Hermes server
     let gateway = Gateway()
@@ -94,7 +94,6 @@ final class AppStore {
         chats = demo.chats
         reports = demo.reports
         screens = demo.screens
-        focus = FocusStatus(planTitle: "机器学习 课前小测", plannedAt: demo.at(0, 10, 45), onTrack: false)
         gateway.onEvent = { [weak self] type, sessionId, payload in
             self?.apply(type, sessionId: sessionId, payload: payload)
         }
@@ -114,6 +113,7 @@ final class AppStore {
         if canConnect(serverSettings) && !LaunchOptions.current.snapshot {
             Task { await connect() }
         }
+        startLocal()
     }
 
     /// An assistant by id; one hidden in Settings too, for the name on what it left behind.
@@ -136,8 +136,18 @@ final class AppStore {
             .sorted { ($0.dueAt ?? $0.doAt ?? .distantFuture) < ($1.dueAt ?? $1.doAt ?? .distantFuture) }
     }
 
+    /// Events on that day, including ones that began the day before and run into it.
     func events(on day: Date) -> [CalEvent] {
-        events.filter { Fmt.dayDiff($0.start, day) == 0 }.sorted { $0.start < $1.start }
+        let start = Fmt.calendar.startOfDay(for: day)
+        let end = Fmt.calendar.date(byAdding: .day, value: 1, to: start) ?? start
+        return events
+            .filter { $0.start < end && ($0.end > start || $0.start >= start) }
+            .sorted { $0.start < $1.start }
+    }
+
+    /// The session id of an assistant's Bot Chat, once this connection is attached to it.
+    func botChatSession(_ botId: String) -> String? {
+        sessions[botId]
     }
 
     /// The next thing on today's calendar that is not a commute.
@@ -237,6 +247,8 @@ extension AppStore {
         await loadBoardLimits()
         board.start(serverSettings, credential: gateway.credential, author: signedInName)
         settleLastData()
+        // the plugin wakes the 总秘书 chosen on this Mac (AppStore+Local.swift)
+        await local.syncChief()
         await attachAll()
         await loadAttachedChats()
     }
@@ -609,6 +621,7 @@ extension AppStore {
             }
             // the plugin's pushes are not replayed: catch up on what changed while away
             await syncPluginData()
+            await local.syncChief()
         }
     }
 

@@ -187,13 +187,13 @@ struct AgendaRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            Text(Fmt.hm(event.start))
+            Text(event.allDay ? "全天" : Fmt.hm(event.start))
                 .font(.t12)
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
                 .frame(width: 44, alignment: .leading)
             RoundedRectangle(cornerRadius: 1.5)
-                .fill(event.area.color)
+                .fill(event.color)
                 .frame(width: 3, height: 32)
             VStack(alignment: .leading, spacing: 2) {
                 Text(event.title).font(.t13)
@@ -206,6 +206,7 @@ struct AgendaRow: View {
     }
 
     private var subtitle: String {
-        ["\(Fmt.hm(event.start))–\(Fmt.hm(event.end))", event.place].compactMap { $0 }.joined(separator: " · ")
+        let time: String? = event.allDay ? nil : "\(Fmt.hm(event.start))–\(Fmt.hm(event.end))"
+        return [time, event.place].compactMap { $0 }.joined(separator: " · ")
     }
 }
