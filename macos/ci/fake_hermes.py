@@ -28,6 +28,10 @@ hermes_cli/dashboard_auth and the Canonical Gateway Protocol:
   /api/chat/*-upload, /api/fs/*  pictures and files: uploads, file.attach, read-data-url,
                                download, and the turns that hand them over (fake_media.py)
   prompt.submit "小窗：…"       詩音's answer to the ⌥Space window, streamed slowly (fake_quick.py)
+  prompt.submit "通知：…"       turns for ExtrasTests to be notified of: a long reply with its
+                               persisted_turn, a question left pending, a daily report written
+                               (fake_extras.py, also "捷径慢：…", a reply slower than a Shortcuts
+                               action waits)
   prompt.submit "断线：…"       the socket drops at a chosen moment and the tunnel is down until the
                                test says POST /ci/tunnel/up; session.events.since replays what was
                                missed (fake_reconnect.py, which also stamps, keeps and sends every
@@ -66,6 +70,7 @@ import fake_profiles  # noqa: E402  the profiles' routes and RPCs (BotsTests)
 import fake_media  # noqa: E402  pictures and files (MediaTests)
 import fake_shion  # noqa: E402  the shion plugin's RPCs
 import fake_quick  # noqa: E402  詩音's answers to the ⌥Space window (QuickAskTests)
+import fake_extras  # noqa: E402  notifications to click and slow replies (ExtrasTests)
 import fake_reconnect  # noqa: E402  frames, replay and dropped sockets (ReconnectTests)
 import fake_words  # noqa: E402  a prompt's words as the scripts read them, and as sent
 import fake_secrets  # noqa: E402  sudo and secret requests (SecretsTests)
@@ -777,6 +782,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if fake_control.handles(method, params):
             return fake_control.handle(self, method, params, rid)
+        if fake_extras.handles_rpc(method, params):
+            return fake_extras.rpc(self, log, method, params, rid)
         if method.startswith("plugin.shion."):
             if params.get("profile") and not fake_profiles.has_plugin(params["profile"], "shion"):
                 # the plugin is installed in 詩音's and the default profile only: elsewhere Hermes knows no such method
@@ -818,6 +825,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.refuse(rid, unknown)
             result = self.snapshot(params.get("session_id", ""), params)
             self.subscribed.add(params.get("session_id", ""))
+            fake_extras.on_resume(params.get("session_id", ""), result)
             if params.get("session_id") == "sess-study" and "sess-study" not in approvals_raised:
                 # 课程 wants a login on its cloud desktop, a moment after Shion attaches
                 approvals_raised.add("sess-study")
@@ -861,6 +869,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.refuse(rid, unknown)
             log(f"    answered {params.get('prompt_id')} for {params.get('profile')}: "
                 f"{params.get('choice', params.get('answer'))!r}")
+            fake_extras.answered(params.get("session_id"), params.get("prompt_id"))
             self.send_json({"jsonrpc": "2.0", "id": rid, "result": {"accepted": True}})
             kind = "approval.settled" if method == "approval.respond" else "clarify.settled"
             self.event(kind, params.get("session_id"), {"prompt_id": params.get("prompt_id")})
@@ -880,6 +889,8 @@ class Handler(BaseHTTPRequestHandler):
             session_id, text = params.get("session_id"), params.get("text", "")
             if fake_quick.handles(text):
                 return fake_quick.answer(self, log, lock, transcripts, session_id, text)
+            if fake_extras.handles(text):
+                return fake_extras.answer(self, log, lock, transcripts, session_id, text, params.get("submission_id"))
             if fake_secrets.handles(text):
                 return fake_secrets.answer(self, log, lock, transcripts, session_id, text)
             if "派一张卡" in text:

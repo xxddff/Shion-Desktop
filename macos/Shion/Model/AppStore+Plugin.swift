@@ -4,7 +4,7 @@ import Foundation
 /// socket, as hermes-plugin/README.md describes. Without the plugin these pages keep their demo
 /// data. The assistants read and write the same store through the plugin's tools.
 extension AppStore {
-    private static let allTopics = ["todos", "today", "reports"]
+    private static let allTopics = ["todos", "today", "reports", "usage"]
 
     /// Asks the plugin for its state; when it answers, today, todos and reports come from it.
     /// `sync.state` also starts the plugin's pushes (`plugin.shion.changed`).
@@ -37,6 +37,8 @@ extension AppStore {
         pluginData = false
         todos = demoTodos
         reports = demoReports
+        forgetReports()
+        ScreenTime.shared.forget()
         todaySummary = nil
         pluginRevision = 0
     }
@@ -78,6 +80,8 @@ extension AppStore {
         if topics.contains("todos") { await reloadTodos() }
         if topics.contains("today") { await reloadToday() }
         if topics.contains("reports") { await reloadReports() }
+        // the days of screen time on screen are read again (ScreenTime.swift)
+        if topics.contains("usage") { ScreenTime.shared.changed() }
     }
 
     /// Everything open, and the latest done ones.
@@ -111,7 +115,25 @@ extension AppStore {
             loaded.append(report)
         }
         guard pluginData else { return }
+        // one written since Shion connected is a notification (AppStore+Notices.swift)
+        noticeReports(loaded)
         reports = loaded.sorted { $0.date > $1.date }
+    }
+
+    /// One report by its day and kind: a notification's, when it is no longer the newest of its
+    /// kind (Landing.swift).
+    func fetchReport(day: String, kind: ReportKind) async -> Report? {
+        guard pluginData,
+              let reply = try? await pluginCall("reports.get", ["date": .string(day), "kind": .string(kind.rawValue)])
+        else { return nil }
+        return pluginReport(from: reply["report"])
+    }
+
+    /// One day's app use as the plugin adds it up, for the screen time under a report
+    /// (ScreenTime.swift). Nil without the plugin, or where it has no `usage.day`.
+    func fetchUsage(day: String) async -> UsageDay? {
+        guard pluginData, let reply = try? await pluginCall("usage.day", ["date": .string(day)]), pluginData else { return nil }
+        return UsageDay(reply, day: day)
     }
 
     // MARK: writes, shown at once and confirmed by the push that follows

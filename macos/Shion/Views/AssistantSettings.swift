@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// The Settings window: the server, the assistants on it, the server check (ServerCheckView.swift),
-/// the keys (ShortcutSettings.swift) and what this Mac knows itself (LocalSettings.swift). It opens
+/// the keys (ShortcutSettings.swift), and this Mac: what it knows itself (LocalSettings.swift), how
+/// Shion starts and stays around on it and the ways into it (StartSettings.swift). It opens
 /// on the tab it was left on; screenshot and test runs always open on 服务器 and leave the
 /// remembered tab alone.
 struct SettingsTabs: View {

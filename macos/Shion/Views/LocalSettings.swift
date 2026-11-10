@@ -10,6 +10,9 @@ struct LocalSettingsView: View {
             CalendarSettings()
             FocusSettings()
             UsageSettings()
+            // how Shion starts and stays around on this Mac, and the ways into it (StartSettings.swift)
+            StartSettings()
+            WaysInSettings()
         }
         .formStyle(.grouped)
         .frame(width: 520, height: 640)

@@ -2,8 +2,10 @@
 """Checks that the stand-in (fake_shion.py) takes and refuses what the shion plugin does.
 
 Runs the plugin itself (hermes-plugin/shion, without Hermes, as its own tests do) and the
-stand-in on the same usage.upload, focus.report and settings calls, and compares their answers:
-both take it, or both refuse it with the same message. A focus report also has to wake the same
+stand-in on the same usage.upload, usage.day, focus.report and settings calls, and compares their
+answers: both take it, or both refuse it with the same message. A day's usage has to come back
+the same, number for number: apps in several kinds, one app's overlapping stretches, a second
+device, a stretch across Tokyo's midnight. A focus report also has to wake the same
 way (or say the same reason it did not), and the settings have to come back the same. The plugin
 runs in two profiles over one store, as on a server: 詩音's and 通勤's, so a report in the profile
 that is not `chief_profile` is `wrong_profile` on both sides. Run it after changing either; no CI
@@ -81,6 +83,8 @@ def summary(method, result):
         return f"ok woke={result.get('woke')} reason={result.get('reason')}"
     if method.startswith("settings."):
         return "ok " + json.dumps(result.get("settings"), sort_keys=True)
+    if method == "usage.day":
+        return "ok " + json.dumps(result, sort_keys=True, ensure_ascii=False, default=str)
     return "ok"
 
 
@@ -112,6 +116,15 @@ def main():
         seg.update(changes)
         return {key: value for key, value in seg.items() if value is not None}
 
+    # a day of the plugin's (its time zone is Tokyo's): today, yesterday, and a stretch across midnight
+    tokyo_now = now.astimezone(fake_shion.TOKYO)
+    today = tokyo_now.date().isoformat()
+    yesterday = (tokyo_now - timedelta(days=1)).date().isoformat()
+    midnight = tokyo_now.replace(hour=0, minute=0, second=0)
+
+    def app(bundle, name, start, end, **changes):
+        return segment(bundle_id=bundle, app_name=name, start=start, end=end, **changes)
+
     focus = {"plan": "机器学习 课前小测", "off_minutes": 7, "activity": "fun", "on_track": False}
     cases = [
         ("usage.upload", {"segments": [segment()]}),
@@ -137,6 +150,26 @@ def main():
         ("usage.upload", {"segments": [segment()], "device": 1}),
         ("usage.upload", {"segments": [segment()], "window_titles": ["x"]}),
         ("usage.upload", {}),
+        # apps of several kinds; LINE over Safari; Safari again over itself (once); Notion on an iPad too
+        ("usage.upload", {"segments": [app("notion.id", "Notion", at(-90), at(-60)),
+                                       app("com.apple.Safari", "Safari", at(-60), at(-45)),
+                                       app("jp.naver.line.mac", "LINE", at(-50), at(-41)),
+                                       app("com.example.unknown", "Some App", at(-41), at(-40))]}),
+        ("usage.upload", {"segments": [app("com.apple.Safari", "Safari", at(-55), at(-50))]}),
+        ("usage.upload", {"segments": [app("notion.id", "Notion", at(-80), at(-70))], "device": "ipad"}),
+        ("usage.upload", {"segments": [app("com.spotify.client", "Spotify",
+                                           (midnight - timedelta(minutes=20)).isoformat(),
+                                           min(midnight + timedelta(minutes=20), tokyo_now).isoformat())]}),
+        ("usage.day", {}),
+        ("usage.day", {"date": today}),
+        ("usage.day", {"date": f" {today} "}),
+        ("usage.day", {"date": yesterday}),
+        ("usage.day", {"date": None}),
+        ("usage.day", {"date": "2026-02-30"}),
+        ("usage.day", {"date": "2026/11/09"}),
+        ("usage.day", {"date": "2026-11-09T09:00"}),
+        ("usage.day", {"date": 20261109}),
+        ("usage.day", {"day": today}),
         ("focus.report", focus),
         ("focus.report", dict(focus, on_track=True, off_minutes=0, activity="study")),
         ("focus.report", dict(focus, off_minutes=1440)),

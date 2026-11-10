@@ -11,6 +11,8 @@ struct ShionApp: App {
         _store = State(initialValue: store)
         // the ⌥Space window sends through the same store as the main window
         QuickAsk.shared.attach(store)
+        // and so do Shortcuts, Spotlight and Siri (Intents/)
+        ShionShortcuts.attach(store)
         // back from sleep or on another network, the connection is tried again at once
         store.startReconnect()
     }
@@ -18,6 +20,8 @@ struct ShionApp: App {
     var body: some Scene {
         WindowGroup("Shion", id: "main") {
             RootView()
+                // a notification's click lands here (Landing.swift)
+                .modifier(LandingRoot())
                 .environment(store)
                 .environment(jump)
                 .preferredColorScheme(LaunchOptions.current.colorScheme)
@@ -54,5 +58,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // the global shortcut goes live
         QuickAsk.shared.launched()
+        // the Dock icon follows the main window when Settings say so (DockMode.swift)
+        DockMode.shared.start()
+        // test runs call the App Intents themselves (IntentHook.swift)
+        IntentHook.start()
     }
 }

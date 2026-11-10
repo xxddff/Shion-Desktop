@@ -762,9 +762,9 @@ extension AppStore {
                 }
             }
             if payload["status"]?.string == "error" {
-                notifyReply(botId, Self.failureLine(payload, streamed: ""))
+                notifyReply(botId, Self.failureLine(payload, streamed: ""), payload)
             } else if payload["status"]?.string != "interrupted" {
-                notifyReply(botId, text)
+                notifyReply(botId, text, payload)
             }
         case "tool.start":
             guard shown else { break }
@@ -929,12 +929,16 @@ extension AppStore {
         Notifier.shared.ask(ask, from: bot(ask.botId)?.name ?? ask.botId)
     }
 
-    /// Unless the assistant's chat is in front of you, or the ⌥Space window shows the reply.
-    private func notifyReply(_ botId: String, _ text: String) {
+    /// Unless the assistant's chat is in front of you, or the ⌥Space window shows the reply, or a
+    /// Shortcuts action is waiting to hand it back (ShionShortcuts.swift). A click finds the reply
+    /// by the row Hermes stored it as (`persisted_turn`), or by the row it streamed into.
+    private func notifyReply(_ botId: String, _ text: String, _ payload: JSONValue) {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !(NSApp.isActive && route == .chat(botId)),
-              !QuickAsk.shared.showsAnswer(from: botId) else { return }
-        Notifier.shared.reply(text, from: bot(botId)?.name ?? botId, botId: botId)
+              !QuickAsk.shared.showsAnswer(from: botId), !ShionShortcuts.awaitsReply(from: botId) else { return }
+        Notifier.shared.reply(text, from: bot(botId)?.name ?? botId, botId: botId,
+                              row: payload["persisted_turn"]?["final_assistant_row_id"]?.int,
+                              item: chats[botId]?.last(where: { $0.role == .assistant })?.id)
     }
 
     private func approvalLabel(_ choice: String) -> String {
