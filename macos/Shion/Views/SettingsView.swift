@@ -71,17 +71,6 @@ struct SettingsView: View {
 
             MediaSettings()
 
-            Section("这台 Mac 发出去的") {
-                Toggle(isOn: $store.activityLog) {
-                    Text("记录应用使用情况")
-                    Text("发给「回顾」：应用名、使用时长。不发：窗口标题、窗口里的内容。")
-                }
-                Toggle(isOn: $store.focusCheck) {
-                    Text("专注检查")
-                    Text("发给\(store.chiefName)：此刻的计划、偏离了几分钟、在做哪类事。不发：窗口标题、应用名、本机的窗口记录。在本机读窗口标题，需要辅助功能权限。")
-                }
-            }
-
             LastDataSection()
         }
         .formStyle(.grouped)
@@ -104,7 +93,7 @@ struct SettingsView: View {
         case .sessionToken:
             "会话令牌是服务器上的 HERMES_DASHBOARD_SESSION_TOKEN。"
         }
-        return login + "Access 两项填 Cloudflare Access 的 service token，没有就留空。这些都存在钥匙串里，只发给这个地址。连上后，助手、对话和看板来自服务器；服务器装了 shion 插件时，今天、待办和日报也是。日程和云桌面暂时还是示例数据。"
+        return login + "Access 两项填 Cloudflare Access 的 service token，没有就留空。这些都存在钥匙串里，只发给这个地址。连上后，助手、对话和看板来自服务器；服务器装了 shion 插件时，今天、待办和日报也是。日程来自这台 Mac 的日历（见「这台 Mac」），和服务器无关；云桌面暂时还是示例数据。"
     }
 }
 
