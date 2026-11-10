@@ -28,9 +28,10 @@ hermes_cli/dashboard_auth and the Canonical Gateway Protocol:
   /api/chat/*-upload, /api/fs/*  pictures and files: uploads, file.attach, read-data-url,
                                download, and the turns that hand them over (fake_media.py)
   prompt.submit "小窗：…"       詩音's answer to the ⌥Space window, streamed slowly (fake_quick.py)
-  prompt.submit "断线：…"       the socket drops at a chosen moment and the tunnel is down a few seconds;
-                               session.events.since replays what was missed (fake_reconnect.py, which
-                               also stamps, keeps and sends every session's frames)
+  prompt.submit "断线：…"       the socket drops at a chosen moment and the tunnel is down until the
+                               test says POST /ci/tunnel/up; session.events.since replays what was
+                               missed (fake_reconnect.py, which also stamps, keeps and sends every
+                               session's frames)
   prompt.submit "装 ffmpeg（CI）" sudo and secret server requests, answered with a response frame
                                (fake_secrets.py; the values are checked, never logged)
 

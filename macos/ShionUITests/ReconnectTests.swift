@@ -4,13 +4,13 @@ import XCTest
 /// Dropped connections, end to end against ci/fake_hermes.py (fake_reconnect.py plays Hermes's side:
 /// each session's frames numbered and kept, session.events.since, a resume that catches up what came
 /// in between, a prompt admitted once per submission id). Signs in as SignInTests does, then in
-/// 詩音's chat has the stand-in drop the socket at each moment that matters, and keep the tunnel
-/// down a few seconds after:
-/// 1. half way through a reply that goes on past the outage (12 s, so the tries at 1, 3 and 7 s
-///    fail): the sidebar says 重新连接中… and when it tries again; two sentences said meanwhile wait
-///    under the chat, saying when they were written;
-///    once back, the rest of the reply streams into the same bubble, then the two go out, in order,
-///    saying when they were written (the run counts them as written two hours before);
+/// 詩音's chat has the stand-in drop the socket at each moment that matters. The tunnel stays down
+/// until the test has seen what it looks for while Shion is away and tells the stand-in so
+/// (StandIn.tunnelUp); Shion is back at its next try:
+/// 1. half way through a reply that goes on until Shion is back: the sidebar says 重新连接中… and
+///    when it tries again; two sentences said meanwhile wait under the chat, saying when they were
+///    written; once back, the rest of the reply streams into the same bubble, then the two go out,
+///    in order, saying when they were written (the run counts them as written two hours before);
 /// 2. into a reply that ends while the tunnel is down: once back, the bubble has all of it, and
 ///    nothing is still replying;
 /// 3. after a sentence was admitted, before its receipt: 等连上后确认 while down, then an ordinary
@@ -77,6 +77,7 @@ final class ReconnectTests: XCTestCase {
         keep(app.windows.firstMatch.screenshot(), "reconnect-2-waiting")
         XCTAssertTrue(waits, "what was said while not connected does not wait under the chat")
         XCTAssertEqual(app.descendants(matching: .any).matching(identifier: "waiting").count, 2, "not two sentences waiting")
+        StandIn.tunnelUp("1. half way through a reply")
         XCTAssertTrue(waitUntil(timeout: 40) { !self.hasText("重新连接中…", in: app) }, "the connection did not come back")
         let rest = waitForText("第80段。", in: app, timeout: 40)
         keep(app.windows.firstMatch.screenshot(), "reconnect-3-back")
@@ -99,6 +100,7 @@ final class ReconnectTests: XCTestCase {
         say("断线：讲完了", in: app)
         XCTAssertTrue(waitForText("第2句。", in: app, timeout: 10), "the short reply did not start")
         XCTAssertTrue(waitForText("重新连接中…", in: app, timeout: 10), "the socket did not drop")
+        StandIn.tunnelUp("2. a reply that ends while the tunnel is down")
         XCTAssertTrue(waitUntil(timeout: 40) { !self.hasText("重新连接中…", in: app) }, "the connection did not come back")
         let ended = waitForText("第10句。", in: app, timeout: 15)
         keep(app.windows.firstMatch.screenshot(), "reconnect-4-ended-while-away")
@@ -111,6 +113,7 @@ final class ReconnectTests: XCTestCase {
         let unsure = element("unsure", in: app).waitForExistence(timeout: 10)
         keep(app.windows.firstMatch.screenshot(), "reconnect-5-unsure")
         XCTAssertTrue(unsure, "the sentence whose receipt the connection took does not say 等连上后确认")
+        StandIn.tunnelUp("3. admitted, and the receipt lost")
         XCTAssertTrue(waitForText("收到：断线：还没回执", in: app, timeout: 40), "its answer did not come")
         XCTAssertTrue(waitUntil(timeout: 10) { !self.element("unsure", in: app).exists }, "it still says 等连上后确认")
         XCTAssertFalse(element("unsent", in: app).exists, "it says 没发出去, though Hermes had it")
@@ -119,6 +122,7 @@ final class ReconnectTests: XCTestCase {
         // 4. never admitted: 没发出去, and 重发
         say("断线：没收到", in: app)
         XCTAssertTrue(waitForText("重新连接中…", in: app, timeout: 10), "the socket did not drop")
+        StandIn.tunnelUp("4. never admitted")
         let unsent = element("unsent", in: app).waitForExistence(timeout: 40)
         keep(app.windows.firstMatch.screenshot(), "reconnect-6-unsent")
         XCTAssertTrue(unsent, "the sentence Hermes never got does not say 没发出去")
@@ -137,6 +141,7 @@ final class ReconnectTests: XCTestCase {
         say("断线：等你批准", in: app)
         XCTAssertTrue(waitForText("要先在服务器上跑一条命令。", in: app, timeout: 10), "the turn did not start")
         XCTAssertTrue(waitForText("重新连接中…", in: app, timeout: 10), "the socket did not drop")
+        StandIn.tunnelUp("5. while an approval waits")
         XCTAssertTrue(waitUntil(timeout: 40) { !self.hasText("重新连接中…", in: app) }, "the connection did not come back")
         element("nav-confirm", in: app).click()
         let asked = waitForText("要看一下服务器的磁盘还剩多少吗？", in: app, timeout: 10)
@@ -158,6 +163,7 @@ final class ReconnectTests: XCTestCase {
         XCTAssertTrue(element("send", in: app).waitForExistence(timeout: 10), "the approved turn is still replying")
         say("断线：说很多", in: app)
         XCTAssertTrue(waitForText("重新连接中…", in: app, timeout: 10), "the socket did not drop")
+        StandIn.tunnelUp("6. more than the session keeps")
         XCTAssertTrue(waitUntil(timeout: 40) { !self.hasText("重新连接中…", in: app) }, "the connection did not come back")
         let page = waitForText("长长的回复。长长的回复。", in: app, timeout: 20)
         keep(app.windows.firstMatch.screenshot(), "reconnect-10-page")
@@ -195,6 +201,7 @@ final class ReconnectTests: XCTestCase {
         XCTAssertTrue(waitUntil(timeout: 30) { send.isEnabled }, "the picture and the file did not go up")
         say("断线：图和文件", in: app)
         XCTAssertTrue(waitForText("重新连接中…", in: app, timeout: 10), "the socket did not drop")
+        StandIn.tunnelUp("8. a picture and a file")
         let notSent = element("unsent", in: app).waitForExistence(timeout: 40)
         keep(app.windows.firstMatch.screenshot(), "reconnect-12-media-unsent")
         XCTAssertTrue(notSent, "the picture and the file Hermes never got do not say 没发出去")
