@@ -75,7 +75,7 @@ final class ReconnectTests: XCTestCase {
         let rest = waitForText("第80段。", in: app, timeout: 40)
         keep(app.windows.firstMatch.screenshot(), "reconnect-3-back")
         XCTAssertTrue(rest, "the rest of the reply did not come")
-        XCTAssertEqual(holding("第1段。", in: app), 1, "the reply is not in one bubble")
+        once("第1段。", whole: false, "the reply is not in one bubble", "reconnect-count-1", in: app)
         XCTAssertTrue(holds(["第1段。", "第6段。", "第80段。"], in: app), "the bubble does not have the whole reply")
         let first = waitForText("写的）排队的第一句", in: app, timeout: 20)
         let second = waitForText("写的）排队的第二句", in: app, timeout: 20)
@@ -97,7 +97,7 @@ final class ReconnectTests: XCTestCase {
         let ended = waitForText("第10句。", in: app, timeout: 15)
         keep(app.windows.firstMatch.screenshot(), "reconnect-4-ended-while-away")
         XCTAssertTrue(ended, "the end of a reply that ended while away did not come")
-        XCTAssertEqual(holding("第1句。", in: app), 1, "the short reply is not in one bubble")
+        once("第1句。", whole: false, "the short reply is not in one bubble", "reconnect-count-2", in: app)
         XCTAssertTrue(element("send", in: app).waitForExistence(timeout: 5), "a bubble is still replying")
 
         // 3. admitted, and the receipt lost with the connection
@@ -108,7 +108,7 @@ final class ReconnectTests: XCTestCase {
         XCTAssertTrue(waitForText("收到：断线：还没回执", in: app, timeout: 40), "its answer did not come")
         XCTAssertTrue(waitUntil(timeout: 10) { !self.element("unsure", in: app).exists }, "it still says 等连上后确认")
         XCTAssertFalse(element("unsent", in: app).exists, "it says 没发出去, though Hermes had it")
-        XCTAssertEqual(shown("断线：还没回执", in: app), 1, "the sentence is not there once")
+        once("断线：还没回执", whole: true, "the sentence is not there once", "reconnect-count-3", in: app)
 
         // 4. never admitted: 没发出去, and 重发
         say("断线：没收到", in: app)
@@ -121,7 +121,7 @@ final class ReconnectTests: XCTestCase {
             resend.click()
             XCTAssertTrue(waitForText("收到：断线：没收到", in: app, timeout: 15), "重发 got no answer")
             XCTAssertTrue(waitUntil(timeout: 5) { !self.element("unsent", in: app).exists }, "it still says 没发出去")
-            XCTAssertEqual(shown("断线：没收到", in: app), 1, "the sentence is not there once after 重发")
+            once("断线：没收到", whole: true, "the sentence is not there once after 重发", "reconnect-count-4", in: app)
         } else {
             XCTFail("no 重发 to press")
         }
@@ -156,7 +156,7 @@ final class ReconnectTests: XCTestCase {
         let page = waitForText("长长的回复。长长的回复。", in: app, timeout: 20)
         keep(app.windows.firstMatch.screenshot(), "reconnect-10-page")
         XCTAssertTrue(page, "the reply longer than the session keeps did not come from the page")
-        XCTAssertEqual(holding("长长的回复。长长的回复。", in: app), 1, "the long reply is not there once")
+        once("长长的回复。长长的回复。", whole: false, "the long reply is not there once", "reconnect-count-6", in: app)
         XCTAssertTrue(element("send", in: app).waitForExistence(timeout: 5), "a bubble is still replying after the page")
         app.terminate()
     }
@@ -246,10 +246,34 @@ final class ReconnectTests: XCTestCase {
         return nil
     }
 
-    /// How many messages hold `text` (a selectable reply is a text view; a plain one static text).
+    /// Texts holding `text`, or (`whole`) just it: a message's words are a static text's value
+    /// (or label), a selectable text view's value.
     @MainActor
-    private func holding(_ text: String, in app: XCUIApplication) -> Int {
-        max(app.staticTexts.matching(matching(text)).count, app.textViews.matching(matching(text)).count)
+    private func texts(_ text: String, whole: Bool, in app: XCUIApplication) -> [XCUIElement] {
+        let predicate = whole ? NSPredicate(format: "label == %@ OR value == %@", text, text) : matching(text)
+        return app.staticTexts.matching(predicate).allElementsBoundByIndex
+            + app.textViews.matching(predicate).allElementsBoundByIndex
+    }
+
+    /// One message holds `text` (or, `whole`, is just it), within a few seconds: a reply that has
+    /// just ended can show to accessibility for a moment both as it streamed and as laid out. When
+    /// not, what holds it is noted (`name.txt`) beside the pictures.
+    @MainActor
+    private func once(_ text: String, whole: Bool, _ message: String, _ name: String, in app: XCUIApplication) {
+        var found: [XCUIElement] = []
+        // a text and a text view are the same message where they are in the same place
+        func messages() -> Int {
+            found = texts(text, whole: whole, in: app)
+            var places: [CGRect] = []
+            for frame in found.map({ $0.frame }) where !places.contains(where: { $0.intersects(frame) }) {
+                places.append(frame)
+            }
+            return places.count
+        }
+        guard !waitUntil(timeout: 5, { messages() == 1 }) else { return }
+        let lines = found.map { "\($0.elementType.rawValue) \($0.frame) label: \($0.label.prefix(40)) value: \(String(describing: $0.value).prefix(60))" }
+        note("\(text): \(found.count) texts\n" + lines.joined(separator: "\n"), name)
+        XCTFail("\(message): \(messages()) messages, \(found.count) texts")
     }
 
     /// One message holds all of them.
@@ -257,13 +281,6 @@ final class ReconnectTests: XCTestCase {
     private func holds(_ texts: [String], in app: XCUIApplication) -> Bool {
         let all = NSCompoundPredicate(andPredicateWithSubpredicates: texts.map { matching($0) })
         return app.textViews.matching(all).firstMatch.exists || app.staticTexts.matching(all).firstMatch.exists
-    }
-
-    /// How many messages are exactly `text`.
-    @MainActor
-    private func shown(_ text: String, in app: XCUIApplication) -> Int {
-        max(app.staticTexts.matching(NSPredicate(format: "label == %@", text)).count,
-            app.textViews.matching(NSPredicate(format: "value == %@", text)).count)
     }
 
     @MainActor
@@ -279,6 +296,14 @@ final class ReconnectTests: XCTestCase {
     @MainActor
     private func waitForText(_ text: String, in app: XCUIApplication, timeout: TimeInterval) -> Bool {
         waitUntil(timeout: timeout) { hasText(text, in: app) }
+    }
+
+    /// Numbers worth reading after the run, kept as a text beside the pictures (`name.txt`).
+    private func note(_ text: String, _ name: String) {
+        let attachment = XCTAttachment(string: text)
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
     }
 
     private func keep(_ screenshot: XCUIScreenshot, _ name: String) {
