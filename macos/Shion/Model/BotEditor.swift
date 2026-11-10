@@ -66,38 +66,56 @@ struct McpServer: Identifiable, Equatable {
     let name: String
     /// `http` or `stdio`.
     let transport: String
-    /// The URL, or the command and its arguments.
-    let target: String
+    /// An HTTP server's URL; empty for a command.
+    let url: String
+    /// A command and its arguments; empty for a URL.
+    let command: String
+    let args: [String]
     /// `oauth`, `header` (a bearer token), or empty.
     let auth: String
     let envNames: [String]
     var enabled: Bool
     /// Brought by a plugin: Hermes does not let it be changed or removed.
     let fromPlugin: Bool
+    /// The tools it is limited to (null: all), carried over when the entry is written again.
+    let tools: JSONValue
 
     var id: String { name }
+
+    /// The URL, or the command line.
+    var target: String { url.isEmpty ? Self.line(command, args) : url }
+
+    /// The way it signs in, as the page offers it.
+    var signIn: String { auth.isEmpty ? "none" : auth }
 
     init(name: String, transport: String, target: String, auth: String = "", envNames: [String] = [],
          enabled: Bool = true, fromPlugin: Bool = false) {
         self.name = name
         self.transport = transport
-        self.target = target
+        if transport == "http" {
+            url = target
+            command = ""
+            args = []
+        } else {
+            let words = BotEditor.words(target)
+            url = ""
+            command = words.first ?? ""
+            args = Array(words.dropFirst())
+        }
         self.auth = auth
         self.envNames = envNames
         self.enabled = enabled
         self.fromPlugin = fromPlugin
+        tools = .null
     }
 
     init?(row: JSONValue) {
         guard let name = row["name"]?.string else { return nil }
         self.name = name
         transport = row["transport"]?.string ?? ""
-        let args = (row["args"]?.array ?? []).compactMap { $0.string }
-        if let url = row["url"]?.string, !url.isEmpty {
-            target = url
-        } else {
-            target = ([row["command"]?.string ?? ""] + args).joined(separator: " ")
-        }
+        url = row["url"]?.string ?? ""
+        command = row["command"]?.string ?? ""
+        args = (row["args"]?.array ?? []).compactMap { $0.string }
         auth = row["auth"]?.string ?? ""
         if case .object(let env)? = row["env"] {
             envNames = env.keys.sorted()
@@ -106,7 +124,43 @@ struct McpServer: Identifiable, Equatable {
         }
         enabled = row["enabled"]?.bool ?? true
         fromPlugin = row["source"]?.string == "plugin"
+        tools = row["tools"] ?? .null
     }
+
+    /// A command line as you would type it again: words with spaces in quotes.
+    static func line(_ command: String, _ args: [String]) -> String {
+        ([command] + args).filter { !$0.isEmpty }
+            .map { $0.contains(where: \.isWhitespace) ? "\"\($0)\"" : $0 }
+            .joined(separator: " ")
+    }
+}
+
+/// What the edit sheet changes on a server that is there: its URL or command line, and how an
+/// HTTP one signs in. A token or a value is typed into a secure field and sent once; empty
+/// leaves what the server has.
+struct McpEdit {
+    var url = ""
+    var command = ""
+    /// `none`, `oauth` or `header`.
+    var auth = "none"
+    var token = ""
+    /// New values for the variables it has, or new variables.
+    var env: [EnvPair] = []
+
+    init() {}
+
+    init(_ server: McpServer) {
+        url = server.url
+        command = McpServer.line(server.command, server.args)
+        auth = server.signIn
+        env = server.envNames.map { EnvPair(key: $0) }
+    }
+}
+
+/// A catalog entry installing in the background (its git clone), until it ends.
+enum McpInstall: Equatable {
+    case running
+    case failed(String)
 }
 
 /// What testing an MCP server found.
@@ -184,7 +238,7 @@ struct SkillRow: Identifiable, Equatable {
     let name: String
     let description: String
     var enabled: Bool
-    let locked: Bool
+    var locked: Bool
 
     var id: String { name }
 
@@ -284,7 +338,7 @@ struct AgentSettings: Equatable {
 
 /// The parts of an assistant's page, each read and written on its own.
 enum EditorPart: Hashable {
-    case basics, soul, model, mcp, catalog, skills, toolsets, settings, delete
+    case basics, look, soul, model, mcp, catalog, skills, toolsets, settings, delete
 }
 
 /// One assistant's settings page: what its profile says, read and written part by part, every
@@ -310,6 +364,12 @@ final class BotEditor {
     private(set) var probes: [String: McpProbe] = [:]
     private(set) var signIns: [String: McpSignIn] = [:]
     private(set) var catalog: [McpCatalogEntry] = []
+    /// Catalog entries installing in the background, by name.
+    private(set) var installs: [String: McpInstall] = [:]
+    /// Bot Mode's avatar colour and shape (empty: its default), and whether it has a picture.
+    private(set) var color = ""
+    private(set) var shape = ""
+    private(set) var hasPicture = false
     private(set) var skills: [SkillRow] = []
     private(set) var toolsets: [ToolsetRow] = []
     private(set) var settings = AgentSettings()
@@ -327,6 +387,9 @@ final class BotEditor {
         if let profile = store.roster.profile(name) {
             savedTitle = profile.title.isEmpty ? profile.displayName : profile.title
             savedDescription = profile.description
+            color = profile.color
+            shape = profile.shape
+            hasPicture = profile.hasAvatar
         }
         title = savedTitle
         description = savedDescription
@@ -592,6 +655,61 @@ final class BotEditor {
         }
     }
 
+    // MARK: the avatar
+
+    /// One of Bot Mode's swatches, or "" for its default colour.
+    func chooseColor(_ swatch: String) {
+        writeLook(color: swatch, shape: shape)
+    }
+
+    /// One of the shapes Shion draws, or "" for Bot Mode's default.
+    func chooseShape(_ kind: String) {
+        writeLook(color: color, shape: kind)
+    }
+
+    /// Bot Mode's section of ui_meta, compared by revision as the title is.
+    private func writeLook(color newColor: String, shape newShape: String) {
+        guard newColor != color || newShape != shape else { return }
+        if demo {
+            color = newColor
+            shape = newShape
+            return
+        }
+        guard let store else { return }
+        run(.look, "look") {
+            try await store.setLook(color: newColor.isEmpty ? nil : newColor, shape: newShape.isEmpty ? nil : newShape,
+                                    of: self.name)
+            self.color = newColor
+            self.shape = newShape
+        }
+    }
+
+    /// A picture from this Mac for the avatar, sent as Hermes keeps one (PNG, ≤ 512 px).
+    func choosePicture(_ url: URL) {
+        guard !demo, let store else { return }
+        let reading = url.startAccessingSecurityScopedResource()
+        let data = AvatarPictures.avatarData(url)
+        if reading {
+            url.stopAccessingSecurityScopedResource()
+        }
+        guard let data else {
+            errors[.look] = "读不了这张图片"
+            return
+        }
+        run(.look, "picture") {
+            try await store.setPicture(data, of: self.name)
+            self.hasPicture = true
+        }
+    }
+
+    func clearPicture() {
+        guard !demo, let store else { return }
+        run(.look, "picture") {
+            try await store.setPicture(nil, of: self.name)
+            self.hasPicture = false
+        }
+    }
+
     // MARK: MCP servers
 
     func setServer(_ server: String, enabled: Bool) {
@@ -745,11 +863,178 @@ final class BotEditor {
         }
         guard let api else { throw AssistantError.offline }
         let values = env.filter { !$0.value.isEmpty }.mapValues { JSONValue.string($0) }
-        try await api.request("POST", "/api/mcp/catalog/install", HermesAPI.scope(name), body: [
+        let reply = try await api.request("POST", "/api/mcp/catalog/install", HermesAPI.scope(name), body: [
             "name": .string(entry.name), "env": .object(values), "enable": true,
         ], timeout: 90)
+        // an entry with a git step installs in the background: followed until it ends
+        if reply["background"]?.bool == true, let action = reply["action"]?.string {
+            installs[entry.name] = .running
+            Task { await self.follow(action, entry: entry.name) }
+        }
         await loadServers()
         await loadCatalog()
+    }
+
+    /// A background install (`GET /api/actions/{action}/status`), every two seconds for up to ten
+    /// minutes; the servers and the catalog are read again when it ends.
+    private func follow(_ action: String, entry: String) async {
+        guard let api else { return }
+        for _ in 0..<300 {
+            try? await Task.sleep(for: .seconds(2))
+            guard let status = try? await api.get("/api/actions/" + KanbanClient.encode(action) + "/status",
+                                                  [("lines", "20")]) else { continue }
+            guard status["running"]?.bool != true else { continue }
+            let code = status["exit_code"]?.int ?? 0
+            await loadServers()
+            await loadCatalog()
+            // the row goes once the server's own is listed
+            if code != 0 {
+                let last = status["lines"]?.array.compactMap { $0.string }
+                    .last { !$0.trimmingCharacters(in: .whitespaces).isEmpty } ?? ""
+                installs[entry] = .failed(last.isEmpty ? "没装上（退出码 \(code)）" : String(last.prefix(160)))
+            } else {
+                installs[entry] = nil
+            }
+            return
+        }
+        installs[entry] = .failed("十分钟了还没装完")
+    }
+
+    /// The edit sheet's changes, made so that no secret has to come back from the server:
+    /// - a new URL, command or arguments are merged into the server's entry (`PUT /api/config`),
+    ///   which leaves its env and headers as they are;
+    /// - a token or an env value goes to `mcp.servers.set_api_key`: Hermes keeps it in the
+    ///   profile's .env and only a `${…}` reference in config.yaml;
+    /// - a sign-in change that has to drop what the entry had (its token header, its OAuth) writes
+    ///   the entry again (`mcp.servers.remove`, then `mcp.servers.add` with the URL, whether it is
+    ///   on, its tools, and the new way in), putting the old one back if the new one is refused.
+    func editServer(_ server: McpServer, _ edit: McpEdit) async throws {
+        let url = edit.url.trimmingCharacters(in: .whitespacesAndNewlines)
+        let token = edit.token.trimmingCharacters(in: .whitespacesAndNewlines)
+        let words = Self.words(edit.command)
+        let values = edit.env.compactMap { pair -> (String, String)? in
+            let key = pair.key.trimmingCharacters(in: .whitespacesAndNewlines)
+            return key.isEmpty || pair.value.isEmpty ? nil : (key, pair.value)
+        }
+        if demo {
+            let names = Array(Set(server.envNames + values.map { $0.0 })).sorted()
+            let target = server.transport == "http" ? url : words.joined(separator: " ")
+            servers = servers.map { item in
+                item.name == server.name
+                    ? McpServer(name: item.name, transport: item.transport, target: target,
+                                auth: edit.auth == "none" ? "" : edit.auth, envNames: names, enabled: item.enabled)
+                    : item
+            }
+            return
+        }
+        guard let api, let store else { throw AssistantError.offline }
+        func merge(_ entry: [String: JSONValue]) async throws {
+            try await api.request("PUT", "/api/config", HermesAPI.scope(self.name),
+                                  body: ["config": ["mcp_servers": .object([server.name: .object(entry)])]])
+        }
+        func secret(_ value: String, as variable: String? = nil) async throws {
+            var params: [String: JSONValue] = [
+                "profile": .string(self.name), "name": .string(server.name), "value": .string(value),
+            ]
+            if let variable {
+                params["env_var"] = .string(variable)
+            }
+            try await store.gateway.call("mcp.servers.set_api_key", .object(params), timeout: 60)
+        }
+        if server.transport == "http" {
+            guard !url.isEmpty else { throw AssistantError.notSaved("网址") }
+            let before = server.signIn
+            if edit.auth == "header" && before != "header" && token.isEmpty {
+                throw AssistantError.notSaved("令牌")
+            }
+            let drops = (before == "header" && edit.auth != "header") || (before == "oauth" && edit.auth != "oauth")
+            if drops {
+                try await rewrite(server, url: url, auth: edit.auth, token: token)
+            } else {
+                var entry: [String: JSONValue] = [:]
+                if url != server.url {
+                    entry["url"] = .string(url)
+                }
+                if edit.auth == "oauth" && before != "oauth" {
+                    entry["auth"] = "oauth"
+                }
+                if !entry.isEmpty {
+                    try await merge(entry)
+                }
+                if edit.auth == "header" && !token.isEmpty {
+                    try await secret(token)
+                }
+            }
+        } else {
+            guard let first = words.first else { throw AssistantError.notSaved("命令") }
+            let args = Array(words.dropFirst())
+            if first != server.command || args != server.args {
+                try await merge(["command": .string(first), "args": .array(args.map { JSONValue.string($0) })])
+            }
+            for (key, value) in values {
+                try await secret(value, as: key)
+            }
+        }
+        probes.removeValue(forKey: server.name)
+        await loadServers()
+    }
+
+    /// The entry written again with a different sign-in (see `editServer`).
+    private func rewrite(_ server: McpServer, url: String, auth: String, token: String) async throws {
+        guard let store else { throw AssistantError.offline }
+        func add(_ auth: String, token: String?) async throws {
+            var config: [String: JSONValue] = ["url": .string(url)]
+            if auth == "oauth" {
+                config["auth"] = "oauth"
+            }
+            if !server.enabled {
+                config["enabled"] = false
+            }
+            if server.tools != .null {
+                config["tools"] = server.tools
+            }
+            var params: [String: JSONValue] = [
+                "profile": .string(self.name), "name": .string(server.name), "config": .object(config),
+            ]
+            if let token {
+                params["bearer_token"] = .string(token)
+            }
+            try await store.gateway.call("mcp.servers.add", .object(params), timeout: 60)
+        }
+        try await store.gateway.call("mcp.servers.remove", [
+            "profile": .string(self.name), "name": .string(server.name),
+        ], timeout: 60)
+        do {
+            try await add(auth, token: auth == "header" ? token : nil)
+        } catch {
+            // put it back as it was: its token stayed in .env, under the name Hermes gave it
+            var config: [String: JSONValue] = ["url": .string(server.url)]
+            if server.signIn == "oauth" {
+                config["auth"] = "oauth"
+            }
+            if server.signIn == "header" {
+                config["headers"] = ["Authorization": .string("Bearer ${\(Self.tokenVariable(server.name))}")]
+            }
+            if !server.enabled {
+                config["enabled"] = false
+            }
+            if server.tools != .null {
+                config["tools"] = server.tools
+            }
+            _ = try? await store.gateway.call("mcp.servers.add", [
+                "profile": .string(self.name), "name": .string(server.name), "config": .object(config),
+            ], timeout: 60)
+            throw error
+        }
+    }
+
+    /// Where Hermes keeps an HTTP server's token in the profile's .env (`_env_key_for_server`).
+    static func tokenVariable(_ server: String) -> String {
+        let upper = server.uppercased().map { character -> Character in
+            character.isASCII && (character.isLetter || character.isNumber || character == "_") ? character : "_"
+        }
+        let trimmed = String(upper).trimmingCharacters(in: CharacterSet(charactersIn: "_"))
+        return "MCP_\(trimmed)_API_KEY"
     }
 
     /// A command line as you would type it: words apart by spaces, kept together in quotes.
@@ -799,6 +1084,25 @@ final class BotEditor {
                                   body: ["name": .string(skill), "enabled": .bool(enabled)])
             if let index = self.skills.firstIndex(where: { $0.name == skill }) {
                 self.skills[index].enabled = enabled
+            }
+        }
+    }
+
+    /// `PUT /api/skills/lock`: locked, the assistant cannot change the skill itself (Hermes's
+    /// curator leaves it alone); you still can.
+    func setSkillLock(_ skill: String, locked: Bool) {
+        if demo {
+            if let index = skills.firstIndex(where: { $0.name == skill }) {
+                skills[index].locked = locked
+            }
+            return
+        }
+        guard let api else { return }
+        run(.skills, "lock-\(skill)") {
+            try await api.request("PUT", "/api/skills/lock", HermesAPI.scope(self.name),
+                                  body: ["name": .string(skill), "locked": .bool(locked)])
+            if let index = self.skills.firstIndex(where: { $0.name == skill }) {
+                self.skills[index].locked = locked
             }
         }
     }
