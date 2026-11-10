@@ -35,6 +35,14 @@ final class ExtrasScreenshotTests: XCTestCase {
             }
             Thread.sleep(forTimeInterval: 0.8)
             keep(settings.screenshot(), run.name)
+            if run.name == "settings-general-light" {
+                // the rest of the tab: where clicks land, and the Shortcuts actions
+                let form = settings.scrollViews.firstMatch
+                form.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.6)).hover()
+                form.scroll(byDeltaX: 0, deltaY: -1200)
+                Thread.sleep(forTimeInterval: 0.8)
+                keep(settings.screenshot(), "settings-general-2-light")
+            }
             // Settings opens on the tab it was left on, next launch too: back to 服务器
             selectTab("服务器", in: settings)
             XCTAssertTrue(settings.textFields["server-address"].waitForExistence(timeout: 5), "Settings not back on 服务器")
