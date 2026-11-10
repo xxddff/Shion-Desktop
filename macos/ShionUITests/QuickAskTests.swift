@@ -6,8 +6,8 @@ import XCTest
 /// ci/fake_quick.py): a sentence typed before signing in waits, counted as written two hours
 /// earlier, and goes out once connected with the time it was written; the
 /// global shortcut over another app; 詩音's reply streaming into the window; an approval and a
-/// question to answer in words, both handled in the window; the whole chat; and the window
-/// starting afresh. Then the shortcut held by another app, as Settings → 快捷键 shows it. A
+/// question to answer in words, both handled in the window; the whole chat; the window starting
+/// afresh; and a sentence that waits through 断开 and goes out by itself after 连接. Then the shortcut held by another app, as Settings → 快捷键 shows it. A
 /// picture at each step (`quick-*.png`).
 final class QuickAskTests: XCTestCase {
     private let server = "http://127.0.0.1:8765"
@@ -16,6 +16,8 @@ final class QuickAskTests: XCTestCase {
     private let sentence = "小窗：明天几点出门？"
     /// …and asks on the way for this one: an approval, then 「交给哪位老师？」 with no choices.
     private let asking = "小窗：帮我把实验报告交了"
+    /// Said while the connection is down.
+    private let dropped = "小窗：信号不好，晚点到"
 
     @MainActor
     func testQuickAsk() throws {
@@ -167,6 +169,39 @@ final class QuickAskTests: XCTestCase {
         keep(XCUIScreen.main.screenshot(), "quick-9-again")
         app.typeKey(.escape, modifierFlags: [])
         XCTAssertEqual(XCTWaiter().wait(for: [gone(field)], timeout: 5), .completed, "Esc did not put the window away")
+
+        // 7. 断开: the main window keeps the last data, read-only, and a sentence waits again. 连接:
+        // once the first reads are in it goes out by itself, with the window left closed (opening
+        // it tries again on its own, which would hide a sentence left waiting)
+        app.typeKey(",", modifierFlags: .command)
+        XCTAssertTrue(settings.waitForExistence(timeout: 5), "no Settings window")
+        if !settings.buttons["断开"].waitForExistence(timeout: 2) {
+            selectTab("服务器", in: settings)
+        }
+        settings.buttons["断开"].click()
+        let offline = NSPredicate(format: "label BEGINSWITH %@ OR value BEGINSWITH %@", "未连接", "未连接")
+        XCTAssertEqual(XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: offline, object: state)], timeout: 10), .completed,
+                       "did not disconnect: \(state.label)")
+        app.typeKey("w", modifierFlags: .command)
+        open(app, field)
+        field.click()
+        field.typeText(dropped)
+        app.typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(waiting.waitForExistence(timeout: 5), "a sentence sent while disconnected did not wait")
+        Thread.sleep(forTimeInterval: 0.5)
+        keep(XCUIScreen.main.screenshot(), "quick-10-waiting-disconnected")
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertEqual(XCTWaiter().wait(for: [gone(field)], timeout: 5), .completed, "Esc did not put the window away")
+        app.typeKey(",", modifierFlags: .command)
+        XCTAssertTrue(settings.waitForExistence(timeout: 5), "no Settings window")
+        settings.buttons["连接"].click()
+        XCTAssertEqual(XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: online, object: state)], timeout: 30), .completed,
+                       "did not connect again: \(state.label)")
+        app.typeKey("w", modifierFlags: .command)
+        // the stand-in echoes it, with the time it was written, into 詩音's chat in the main window
+        let resent = waitForAll(["收到：（", dropped], in: element("transcript", in: app), timeout: 30)
+        keep(window.screenshot(), "quick-11-sent-on-reconnect")
+        XCTAssertTrue(resent, "the sentence that waited through 断开 did not go out once connected again")
         app.terminate()
     }
 
@@ -297,6 +332,26 @@ final class QuickAskTests: XCTestCase {
             if timeout > 0 {
                 Thread.sleep(forTimeInterval: 0.3)
             }
+        } while Date() < deadline
+        return false
+    }
+
+    /// One text under `root` holding all of `parts`, plain or selectable, as waitForText reads it.
+    @MainActor
+    private func waitForAll(_ parts: [String], in root: XCUIElement, timeout: TimeInterval) -> Bool {
+        func holding(_ key: String) -> NSPredicate {
+            NSCompoundPredicate(andPredicateWithSubpredicates: parts.map { NSPredicate(format: "\(key) CONTAINS %@", $0) })
+        }
+        let either = NSCompoundPredicate(orPredicateWithSubpredicates: [holding("label"), holding("value")])
+        let queries = [
+            root.staticTexts.matching(either),
+            root.textViews.matching(either),
+            root.descendants(matching: .any).matching(holding("label")),
+        ]
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            if queries.contains(where: { $0.firstMatch.exists }) { return true }
+            Thread.sleep(forTimeInterval: 0.3)
         } while Date() < deadline
         return false
     }

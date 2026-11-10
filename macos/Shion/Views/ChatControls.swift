@@ -261,11 +261,11 @@ nonisolated struct FindMarks: Equatable, Sendable {
         var start = marked.startIndex
         while start < marked.endIndex, let range = marked[start...].range(of: needle, options: Self.options) {
             guard range.upperBound > start else { break }
-            marked[range].backgroundColor = strong ? Self.color : Self.color.opacity(0.35)
-            if strong {
-                // the highlight is light in both appearances
-                marked[range].foregroundColor = Color.black
-            }
+            // opaque, with dark text, so a hit reads on the purple of your own messages as on the
+            // page, in both appearances: the one in view in the system's find yellow, the others
+            // in a paler one
+            marked[range].backgroundColor = strong ? Self.color : Self.pale
+            marked[range].foregroundColor = Color.black
             start = range.upperBound
         }
         return marked
@@ -276,6 +276,8 @@ nonisolated struct FindMarks: Equatable, Sendable {
     }
 
     private static let color = Color(nsColor: .findHighlightColor)
+    private static let pale = Color(nsColor: NSColor.findHighlightColor.usingColorSpace(.sRGB)?
+        .blended(withFraction: 0.55, of: .white) ?? NSColor(srgbRed: 1, green: 0.95, blue: 0.62, alpha: 1))
 }
 
 extension Optional where Wrapped == FindMarks {
