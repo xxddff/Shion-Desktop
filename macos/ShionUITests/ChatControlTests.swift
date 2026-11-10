@@ -55,7 +55,7 @@ final class ChatControlTests: XCTestCase {
         expect("check-login", in: settings, startsWith: "有效 · ci-user · ")
         expect("check-protocol", in: settings, "hermes gateway")
         expect("check-capabilities", in: settings, "Shion 用到的都有")
-        // the stand-in has the plugin in 詩音's profile only (fake_profiles.py)
+        // the stand-in has the plugin in 詩音's profile and the default one only (fake_profiles.py)
         expect("check-plugin", in: settings, endsWith: "个助手没有")
         expect("check-plugin-commute", in: settings, "没装或没启用")
         expect("check-plugin-shion", in: settings, startsWith: "ci · 今天是 ")

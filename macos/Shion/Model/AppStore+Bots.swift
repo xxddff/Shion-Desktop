@@ -81,6 +81,8 @@ extension AppStore {
         stopPluginData()
         Task {
             await loadPluginData()
+            // the focus check wakes the new 总秘书: the plugin's chief_profile follows (AppStore+Local.swift)
+            await local.syncChief()
             await attachAll()
         }
     }

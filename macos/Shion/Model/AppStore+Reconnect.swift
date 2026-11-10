@@ -186,6 +186,8 @@ extension AppStore {
         guard gateway.connection == socket, live, gateway.phase == .online else { return }
         // the plugin's pushes are not replayed: catch up on what changed while away
         await syncPluginData()
+        // the 总秘书 chosen on this Mac, where the plugin's setting differs (LocalData.swift)
+        await local.syncChief()
     }
 
     private func rank(_ botId: String) -> Int {

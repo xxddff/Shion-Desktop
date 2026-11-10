@@ -720,7 +720,7 @@ class Handler(BaseHTTPRequestHandler):
             return fake_control.handle(self, method, params, rid)
         if method.startswith("plugin.shion."):
             if params.get("profile") and not fake_profiles.has_plugin(params["profile"], "shion"):
-                # the plugin is installed in 詩音's profile only: elsewhere Hermes knows no such method
+                # the plugin is installed in 詩音's and the default profile only: elsewhere Hermes knows no such method
                 log(f"    no shion plugin in profile {params['profile']}")
                 return self.send_json({"jsonrpc": "2.0", "id": rid,
                                        "error": {"code": -32601, "message": f"no method {method}"}})
