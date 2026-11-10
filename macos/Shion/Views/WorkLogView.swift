@@ -13,14 +13,14 @@ enum AssistantTab: Hashable {
 /// An assistant's page: its Bot Chat, and 工作记录, the cards it ran today on every board, as two
 /// tabs at the top of the page; the toolbar keeps its buttons (跟詩音说, 助手设置) to itself. The
 /// chat stays underneath while the log is up, so a draft and where the chat was scrolled to
-/// survive a look at the log. A card of the log opens on the side.
+/// survive a look at the log. A card of the log opens on its right.
 struct AssistantView: View {
     @Environment(AppStore.self) private var store
     let botId: String
     @State private var tab = AssistantTab.launch
-    /// The log's card open in the inspector.
+    /// The log's card open on its right.
     @State private var selection: String?
-    @State private var showInspector = false
+    @State private var showDetail = false
 
     var body: some View {
         let entries = tab == .work ? store.workLog(for: botId) : []
@@ -29,8 +29,7 @@ struct AssistantView: View {
             .accessibilityHidden(tab == .work)
             .overlay {
                 if tab == .work {
-                    WorkLogView(entries: entries, selection: selection) { open($0) }
-                        .background(.background)
+                    workLog(entries)
                 }
             }
             // over the top of the page, which runs under them as it runs under the toolbar: the
@@ -44,13 +43,6 @@ struct AssistantView: View {
                 guard tab == .work, store.board.active else { return }
                 await store.board.followArchived()
             }
-            .inspector(isPresented: $showInspector) {
-                if let entry = entries.first(where: { $0.id == selection }) {
-                    BoardInspector(item: store.workItem(entry)) { id in
-                        store.openCard(id, board: entry.board)
-                    }
-                }
-            }
             .alert("没能完成", isPresented: actionFailed) {
                 Button("好") {}
             } message: {
@@ -58,9 +50,38 @@ struct AssistantView: View {
             }
             .onChange(of: tab) { _, now in
                 if now == .chat {
-                    showInspector = false
+                    showDetail = false
                 }
             }
+    }
+
+    /// The log, and the card open from it on its right: a panel of the page, not the window's
+    /// inspector. With an inspector on it, the page was taken in again by the window's split view
+    /// when you went to it, after the chat had put its new transcript at the newest message, and
+    /// the chat showed its top instead.
+    private func workLog(_ entries: [WorkLogEntry]) -> some View {
+        HStack(spacing: 0) {
+            WorkLogView(entries: entries, selection: selection) { open($0) }
+            if showDetail, let entry = entries.first(where: { $0.id == selection }) {
+                Divider()
+                BoardInspector(item: store.workItem(entry)) { id in
+                    store.openCard(id, board: entry.board)
+                }
+                .frame(width: 280)
+                .overlay(alignment: .topTrailing) {
+                    Button {
+                        showDetail = false
+                    } label: {
+                        Image(systemName: "xmark")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("关闭")
+                    .padding(12)
+                    .accessibilityIdentifier("work-detail-close")
+                }
+            }
+        }
+        .background(.background)
     }
 
     private var tabs: some View {
@@ -81,7 +102,7 @@ struct AssistantView: View {
 
     private func open(_ entry: WorkLogEntry) {
         selection = entry.id
-        showInspector = true
+        showDetail = true
         store.board.select(entry.cardId, on: entry.board)
     }
 
