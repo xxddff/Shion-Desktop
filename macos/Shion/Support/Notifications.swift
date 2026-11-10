@@ -9,8 +9,9 @@ import UserNotifications
 /// reply in its chat, the approval or question selected in 等你确认, the card on its board, the
 /// report; a click that started Shion lands there once it has connected. Screenshot and test runs
 /// post nothing and ask for no permission; a test can have them written down instead
-/// (`-ShionNotificationLog <file>`), answer or click them (`-ShionNotificationAnswers <file>`), and
-/// start Shion as a click would (`-ShionLaunchNotification <its userInfo as JSON>`).
+/// (`-ShionNotificationLog <file>`), answer or click them with a distributed notification
+/// (`Notifier.testAnswer`, action `click` for a click), and start Shion as a click would
+/// (`-ShionLaunchNotification <its userInfo as JSON>`).
 final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     static let shared = Notifier()
 
@@ -42,18 +43,17 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     private static let testLog: String? = LaunchOptions.current.snapshot
         ? UserDefaults.standard.string(forKey: "ShionNotificationLog")
         : nil
-    /// A test run's answers to its notifications, a line of JSON each: the notification's id, the
-    /// action, the text typed. Each is handled as that answer from the notification would be.
-    private static let testAnswers: String? = LaunchOptions.current.snapshot
-        ? UserDefaults.standard.string(forKey: "ShionNotificationAnswers")
-        : nil
+    /// A test run's answer to one of its notifications: a distributed notification whose object
+    /// is JSON with the notification's id, the action and the text typed (a test cannot type into
+    /// a real notification, and its runner may not write files the app can see).
+    static let testAnswer = Notification.Name("dev.shion.test.answer")
     /// A test run started as a click on a notification would start Shion: what it carried.
     private static let testLaunch: String? = LaunchOptions.current.snapshot
         ? UserDefaults.standard.string(forKey: "ShionLaunchNotification")
         : nil
-    /// What a test run's notifications carried, by id, for its answers; how many answers were read.
+    /// What a test run's notifications carried, by id, for its answers.
     private var written: [String: [String: String]] = [:]
-    private var answersRead = 0
+    private var testAnswers: (any NSObjectProtocol)?
 
     func start(_ store: AppStore) {
         guard self.store == nil else { return }
@@ -62,8 +62,14 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             self?.card(moment)
         }
         guard !LaunchOptions.current.snapshot else {
-            if let path = Self.testAnswers {
-                readAnswers(path)
+            if Self.testLog != nil {
+                testAnswers = DistributedNotificationCenter.default().addObserver(forName: Self.testAnswer, object: nil,
+                                                                                   queue: .main) { [weak self] note in
+                    guard let json = note.object as? String else { return }
+                    MainActor.assumeIsolated {
+                        self?.answerForTest(json)
+                    }
+                }
             }
             if let launch = Self.testLaunch {
                 clickedAtLaunch(launch)
@@ -215,14 +221,18 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     /// A test run's notification, as a line of JSON in its file: id, title, body, what can be
     /// answered in it (its category), and where a click would go.
     private func writeDown(_ id: String, _ content: UNMutableNotificationContent) {
-        guard let path = Self.testLog else { return }
+        guard Self.testLog != nil else { return }
         let strings = Self.strings(content.userInfo)
         written[id] = strings
-        let line: JSONValue = [
+        append([
             "id": .string(id), "title": .string(content.title), "body": .string(content.body),
             "category": .string(content.categoryIdentifier), "info": .object(strings.mapValues { .string($0) }),
-        ]
-        guard let text = try? line.serialized() else { return }
+        ])
+    }
+
+    /// A line of JSON at the end of a test run's notification log.
+    private func append(_ line: [String: JSONValue]) {
+        guard let path = Self.testLog, let text = try? JSONValue.object(line).serialized() else { return }
         let data = Data((text + "\n").utf8)
         guard let handle = FileHandle(forWritingAtPath: path) else {
             _ = FileManager.default.createFile(atPath: path, contents: data)
@@ -244,25 +254,14 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         return out
     }
 
-    /// A test run's answers, read from their file as they come (a test cannot type into a real
-    /// notification); each goes where the same answer from the notification goes.
-    private func readAnswers(_ path: String) {
-        Task { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(500))
-                guard let self else { return }
-                guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { continue }
-                let lines = text.split(separator: "\n")
-                guard lines.count > self.answersRead else { continue }
-                for line in lines[self.answersRead...] {
-                    guard let row = try? JSONValue.parse(String(line)), let id = row["id"]?.string,
-                          let action = row["action"]?.string, let info = self.written[id]
-                    else { continue }
-                    self.respond(action: action, info: info, text: row["text"]?.string ?? "")
-                }
-                self.answersRead = lines.count
-            }
-        }
+    /// A test run's answer to one of its notifications: it goes where the same answer from the
+    /// notification goes, and the log notes that it was taken.
+    func answerForTest(_ json: String) {
+        guard let row = try? JSONValue.parse(json), let id = row["id"]?.string, let action = row["action"]?.string,
+              let info = written[id]
+        else { return }
+        append(["answered": .string(id), "action": .string(action)])
+        respond(action: action, info: info, text: row["text"]?.string ?? "")
     }
 
     // MARK: answers from the notification
