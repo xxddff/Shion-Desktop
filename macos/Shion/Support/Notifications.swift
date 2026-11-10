@@ -114,6 +114,10 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             if choices.isEmpty {
                 content.categoryIdentifier = Category.question
             }
+        case .secret:
+            // who wants a password or a key, and nothing else: no actions, nothing typed here (a
+            // notification's text field is plain text); a click opens Shion, where its card is
+            content.title = "\(name) \(ask.title)"
         default:
             content.title = name
             content.body = ask.title

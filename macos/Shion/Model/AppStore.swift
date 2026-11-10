@@ -25,6 +25,10 @@ final class AppStore {
 
     // the Hermes server
     let gateway = Gateway()
+    /// Passwords and keys assistants ask for (AppStore+Secrets.swift); what was asked, never the answer.
+    let secrets = Secrets()
+    /// What you answered, the line that stays where it was asked (AppStore+Trail.swift).
+    let trail = AskTrail()
     // screenshot runs never touch the keychain (a locked one would put up a password prompt)
     var serverSettings = LaunchOptions.current.snapshot ? AppStore.snapshotSettings : ServerSettings.load()
     /// The browser sign-in, when that is how Shion logs in.
@@ -99,6 +103,7 @@ final class AppStore {
         gateway.onEvent = { [weak self] type, sessionId, payload in
             self?.apply(type, sessionId: sessionId, payload: payload)
         }
+        startSecrets()
         gateway.onReconnect = { [weak self] in
             self?.reattach()
         }
@@ -184,6 +189,7 @@ final class AppStore {
         guard !readOnly else { return }
         asks.removeAll { $0.id == ask.id }
         Notifier.shared.withdraw(ask.id)
+        keepAnswer(ask, with: option)
         if let remote = ask.remote {
             respond(to: ask, remote: remote, with: option)
             return
@@ -343,6 +349,7 @@ extension AppStore {
             Notifier.shared.withdraw(ask.id)
         }
         asks.removeAll { $0.botId == botId }
+        forgetSecrets(botId)
     }
 
     /// Screenshot and test runs keep what they type in memory: no keychain, no preferences.
@@ -444,6 +451,7 @@ extension AppStore {
         loadedChats = []
         replying = []
         Notifier.shared.withdrawAll()
+        endSecrets()
     }
 
     /// Finds the assistant's Bot Chat (the session titled "Bot Chat" in its profile), creates it
@@ -519,6 +527,7 @@ extension AppStore {
         for prompt in snapshot["prompts"]?.array ?? [] {
             addPrompt(prompt, sessionId: sessionId, botId: botId)
         }
+        resumeSecrets(botId, sessionId: sessionId, snapshot: snapshot)
     }
 
     /// The newest page of a resumed transcript (`session.transcript`, latest first), in place of
@@ -719,6 +728,7 @@ extension AppStore {
             return pluginChanged(payload)
         }
         guard let sessionId, let botId = sessionBots[sessionId] else { return }
+        secretEvent(type, sessionId: sessionId, payload: payload)
         // a chat not opened yet has no rows to add to: its first page brings them
         let shown = loadedChats.contains(botId)
         switch type {

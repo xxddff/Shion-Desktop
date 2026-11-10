@@ -27,7 +27,7 @@ struct ChatView: View {
     var body: some View {
         let bot = store.bot(botId)
         // and under them, what was said while not connected, waiting (ChatDelivery.swift)
-        let items = (store.chats[botId] ?? []) + WaitingMessages.items(for: botId)
+        let items = store.withAskCards(store.chats[botId] ?? [], of: botId) + WaitingMessages.items(for: botId)
         let lines = ChatLine.lines(items, replying: store.replying.contains(botId))
         let found = find.found(in: lines)
         // older rows coming in above: where the row at the top of what shows was, from the layout
@@ -372,7 +372,10 @@ struct ChatRow: View {
         case .system:
             TurnNote(item: item, botId: bot?.id ?? "")
         case .card:
-            if let found = store.chatCard(item) {
+            if let askId = item.askId {
+                // a password or a key the assistant asked for, or what became of an ask (SecretCard.swift)
+                AskTrailCard(askId: askId)
+            } else if let found = store.chatCard(item) {
                 CardChip(card: found.card, showsStatus: found.known)
             } else if !item.text.isEmpty {
                 // the board's notice about a card it no longer lists
