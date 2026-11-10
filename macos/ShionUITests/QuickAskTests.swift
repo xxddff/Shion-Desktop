@@ -119,6 +119,8 @@ final class QuickAskTests: XCTestCase {
         keep(XCUIScreen.main.screenshot(), "quick-3-streaming")
         XCTAssertTrue(streaming, "the reply did not stream into the window")
         XCTAssertFalse(whole, "the whole reply was there at once")
+        // the stand-in holds the rest until the test has seen it arrive, however long that took
+        StandIn.finishQuickReply("the quick window's reply")
         let replied = waitForText(reply, in: answer, timeout: 15)
         Thread.sleep(forTimeInterval: 0.5)
         keep(XCUIScreen.main.screenshot(), "quick-4-replied")
@@ -153,6 +155,11 @@ final class QuickAskTests: XCTestCase {
         keep(XCUIScreen.main.screenshot(), "quick-7-answered")
         XCTAssertTrue(handed, "the typed answer did not reach 詩音")
         XCTAssertFalse(question.exists, "the question stayed after it was answered")
+        // what was chosen and typed stays in the window, a line each (AppStore+Trail.swift)
+        continueAfterFailure = true
+        XCTAssertTrue(waitForText("已允许这一次", in: answer, timeout: 5), "the approval left no line in the window")
+        XCTAssertTrue(waitForText("你回答：中村老师", in: answer, timeout: 5), "the answer left no line in the window")
+        continueAfterFailure = false
 
         // 5. the whole chat: the window goes, 詩音's chat opens in the main window with the exchange
         element("quick-open", in: app).click()
@@ -162,6 +169,10 @@ final class QuickAskTests: XCTestCase {
         let inChat = waitForText("交给中村老师了。", in: element("transcript", in: app), timeout: 10)
         keep(window.screenshot(), "quick-8-full-chat")
         XCTAssertTrue(inChat, "the exchange is not in 詩音's chat")
+        continueAfterFailure = true
+        XCTAssertTrue(waitForText("你回答：中村老师", in: element("transcript", in: app), timeout: 5),
+                      "the answer's line is not in 詩音's chat")
+        continueAfterFailure = false
 
         // 6. an answered sentence went with the window: it comes back empty, and Esc puts it away
         open(app, field)

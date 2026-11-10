@@ -273,11 +273,11 @@ final class QuickAsk {
         store.live && store.gateway.phase == .online && !store.readOnly
     }
 
-    /// Into 总秘书's Bot Chat as one message, a line each: a second message during the answer to
-    /// the first would cut that answer short (Hermes's `display.busy_input_mode` is `interrupt`
-    /// unless the server says otherwise). Sentences written more than five minutes ago say when
-    /// they were. The window shows the exchange from it. Should the chat not open, they wait
-    /// again; the reason shows under the field.
+    /// Into 总秘书's Bot Chat as one message, a line each: the window shows one exchange, and what
+    /// was said together reads better answered at once. (Sent apart they would not cut each other
+    /// short either: Hermes queues a prompt behind the turn under way.) Sentences written more
+    /// than five minutes ago say when they were. The window shows the exchange from it. Should
+    /// the chat not open, they wait again; the reason shows under the field.
     private func deliver(_ sentences: [QuickAskWaiting], to store: AppStore) {
         let text = QuickAskWaiting.message(sentences, sentAt: Date())
         guard !text.isEmpty else { return }

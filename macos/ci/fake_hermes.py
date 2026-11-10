@@ -32,9 +32,15 @@ hermes_cli/dashboard_auth and the Canonical Gateway Protocol:
                                persisted_turn, a question left pending, a daily report written
                                (fake_extras.py, also "捷径慢：…", a reply slower than a Shortcuts
                                action waits)
-  prompt.submit "断线：…"       the socket drops at a chosen moment and the tunnel is down a few seconds;
-                               session.events.since replays what was missed (fake_reconnect.py, which
-                               also stamps, keeps and sends every session's frames)
+  prompt.submit "断线：…"       the socket drops at a chosen moment and the tunnel is down until the
+                               test says POST /ci/tunnel/up; session.events.since replays what was
+                               missed (fake_reconnect.py, which also stamps, keeps and sends every
+                               session's frames)
+  prompt.submit "装 ffmpeg（CI）" sudo and secret server requests, answered with a response frame
+                               (fake_secrets.py; the values are checked, never logged)
+  POST /ci/mark/<step>         a test's word, not Hermes's: where it got to, in this log
+  POST /ci/later               the message nobody asked for that 「等一会儿再说一句」 keeps back, now
+  POST /ci/quick/finish        the rest of the ⌥Space reply that waits after its first part
 
 Like Hermes's contracts (extra="forbid"), session.resume, session.transcript and prompt.submit
 refuse keys they do not know, so a client's wrong parameter fails here as it would on a real server.
@@ -66,11 +72,14 @@ import fake_shion  # noqa: E402  the shion plugin's RPCs
 import fake_quick  # noqa: E402  詩音's answers to the ⌥Space window (QuickAskTests)
 import fake_extras  # noqa: E402  notifications to click and slow replies (ExtrasTests)
 import fake_reconnect  # noqa: E402  frames, replay and dropped sockets (ReconnectTests)
+import fake_words  # noqa: E402  a prompt's words as the scripts read them, and as sent
+import fake_secrets  # noqa: E402  sudo and secret requests (SecretsTests)
 
 ACCESS_ID, ACCESS_SECRET = "ci-client", "ci-secret"
 USER, PASSWORD = "ci-user", "ci-pass"
 
 lock = threading.Lock()
+later_kept = []  # (connection, session id): messages nobody asked for, until a test says POST /ci/later
 access_logins = {}  # one-time token from the Access login page -> where the browser was going
 access_cookies = set()  # CF_Authorization values of browsers signed in to Access
 pending = {}  # broker -> {challenge, redirect_uri, state}
@@ -93,7 +102,8 @@ def seed_transcripts():
     row_id of the message it was stored on and comes just before it, and that message still shows
     when it holds real content too; tool rows have no row_id, only their call's id. The first
     compaction is on 第 1 条, with two tool rows after it; the second is on 第 32 条, which leads the
-    second page, so the compaction is the last row of the third."""
+    second page, so the compaction is the last row of the third. 第 120 条, in the middle of the
+    first page, is a reply some screens tall."""
     start = time.time() - 86400
     rows = []
 
@@ -108,8 +118,13 @@ def seed_transcripts():
             compaction(n + 1, 40, at)
         if n == 32:
             compaction(n + 1, 70, at)
-        rows.append({"row_id": n + 1, "row_kind": "message", "role": who,
-                     "text": f"第 {n} 条（{'你' if who == 'user' else '詩音'}）", "timestamp": at})
+        text = f"第 {n} 条（{'你' if who == 'user' else '詩音'}）"
+        if n == 120:
+            # a reply some screens tall: BoardTests goes to it with the find bar and reads the older
+            # pages while it fills what shows, and it stays where it was. The rest has no 第 or 条:
+            # finding 第 12 counts it once, as before, and 第 3 条 not at all
+            text += "\n\n" + "\n\n".join(f"很长的回复，段落 {i}：这一段只是为了把回复撑得比窗口还高。" for i in range(1, 49))
+        rows.append({"row_id": n + 1, "row_kind": "message", "role": who, "text": text, "timestamp": at})
         if n == 1:
             for call, context in (("call-ci-1", "第 1 条问的"), ("call-ci-2", "再查一次")):
                 rows.append({"row_kind": "message", "role": "tool", "name": "web_search", "context": context,
@@ -357,6 +372,8 @@ class Handler(BaseHTTPRequestHandler):
         self.answer(404, {"detail": "Not Found"})
 
     def do_POST(self):
+        if self.test_word():
+            return
         if fake_reconnect.tunnel_down(self):
             return
         if not self.access():
@@ -506,8 +523,8 @@ class Handler(BaseHTTPRequestHandler):
         reply = "交给课程了。"
         with lock:
             rows = transcripts.setdefault(session_id, [])
-            rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "user", "text": text,
-                         "timestamp": time.time()})
+            rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "user",
+                         "text": fake_words.sent(text), "timestamp": time.time()})
             rows.append({"row_kind": "message", "role": "tool", "name": "kanban_create", "context": title,
                          "args": args, "tool_call_id": call, "timestamp": time.time()})
             rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "assistant", "text": reply,
@@ -540,23 +557,54 @@ class Handler(BaseHTTPRequestHandler):
         except OSError:
             pass
 
+    def test_word(self):
+        """A test's own word to the stand-in (StandIn.swift), ahead of Access and of a tunnel that
+        is down, as the tunnel's own word is (fake_reconnect.py): a mark in this log where it got to;
+        the message nobody asked for, now; the rest of the quick window's reply. True when
+        answered here."""
+        path = self.path.split("?")[0]
+        if self.command != "POST" or not path.startswith("/ci/") or path == fake_reconnect.CONTROL:
+            return False
+        if path.startswith("/ci/mark/"):
+            log(f"== the test is at {path[len('/ci/mark/'):]}")
+            fake_reconnect.word(self, 200, {"marked": True})
+        elif path == "/ci/later":
+            with lock:
+                kept = later_kept.pop(0) if later_kept else None
+            if kept is None:
+                log("POST /ci/later -> 409 (no message kept back)")
+                fake_reconnect.word(self, 409, {"sent": False})
+            else:
+                connection, session_id = kept
+                connection.later_turn(session_id)
+                fake_reconnect.word(self, 200, {"sent": True})
+        elif path == "/ci/quick/finish":
+            held = fake_quick.finish_held(log)
+            fake_reconnect.word(self, 200, {"held": held})
+        else:
+            return False
+        return True
+
     LATER_NOW = "好，过一会儿再说一句（CI）。"
     LATER_REPLY = "又想起一件事（CI）：周四的实验课改到下午 3 点。"
 
     def later(self, session_id, text):
-        """A reply now, and 8 seconds on another one nobody asked for, as when an assistant comes
-        back to a chat by itself (a cron job's delivery, a card done). BoardTests reads further up
-        the chat meanwhile, and the new message must not pull it down to the end."""
+        """A reply now, and another one nobody asked for once the test says (POST /ci/later), as
+        when an assistant comes back to a chat by itself (a cron job's delivery, a card done).
+        BoardTests reads further up the chat meanwhile, and the new message must not pull it down to
+        the end; it says when it is there, not after a time it may not keep to."""
         with lock:
             rows = transcripts.setdefault(session_id, [])
-            rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "user", "text": text,
-                         "timestamp": time.time()})
+            rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "user",
+                         "text": fake_words.sent(text), "timestamp": time.time()})
             rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "assistant",
                          "text": self.LATER_NOW, "timestamp": time.time()})
         self.event("message.start", session_id, {})
         self.event("message.delta", session_id, {"text": self.LATER_NOW})
         self.event("message.complete", session_id, {"text": self.LATER_NOW, "status": "complete"})
-        threading.Timer(8.0, self.later_turn, args=(session_id,)).start()
+        with lock:
+            later_kept.append((self, session_id))
+        log(f"  -> a message nobody asked for on {session_id} waits for the test's word (POST /ci/later)")
 
     def later_turn(self, session_id):
         with lock:
@@ -604,8 +652,8 @@ class Handler(BaseHTTPRequestHandler):
         The transcript keeps the calls, without row ids or results, as Hermes's does."""
         with lock:
             rows = transcripts.setdefault(session_id, [])
-            rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "user", "text": text,
-                         "timestamp": time.time()})
+            rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "user",
+                         "text": fake_words.sent(text), "timestamp": time.time()})
             for call, name, context in self.HOMEWORK_CALLS:
                 rows.append({"row_kind": "message", "role": "tool", "name": name, "context": context,
                              "tool_call_id": call, "timestamp": time.time()})
@@ -675,8 +723,12 @@ class Handler(BaseHTTPRequestHandler):
         display_projection, raw rows otherwise."""
         with lock:
             rows = list(transcripts.setdefault(session_id, []))
+        # this socket is attached to the chat now: its sudo and secret requests come here, and the
+        # ones still waiting come back with the reply, as Hermes's open_requests
+        fake_secrets.note_viewer(session_id, self)
         reply = {"session_id": session_id, "running": False, "prompts": [], "message_count": len(rows),
-                 **fake_control.snapshot_fences(session_id), **fake_reconnect.attach(self, session_id)}
+                 "open_requests": fake_secrets.open_for(session_id), **fake_control.snapshot_fences(session_id),
+                 **fake_reconnect.attach(self, session_id)}
         if params.get("omit_messages") is True:
             return {**reply, "messages": [], "messages_omitted": True}
         shown = [{k: v for k, v in row.items() if k != "row_kind"} for row in rows if row["row_kind"] == "message"]
@@ -714,11 +766,18 @@ class Handler(BaseHTTPRequestHandler):
             "code": 4001, "message": "invalid_params", "data": {"reason": "invalid_params", "fields": fields}}})
 
     def rpc(self, request):
+        if fake_secrets.settles(request):
+            # a window's answer to a sudo or secret request: no reply, and only its id is logged
+            return fake_secrets.settle(log, request)
         method, params, rid = request.get("method", ""), request.get("params") or {}, request.get("id")
         if method != "gateway.ping":
             log(f"  rpc {method} {json.dumps(fake_profiles.loggable(method, params), ensure_ascii=False)[:160]}")
         if method == "prompt.submit" and set(params) - SUBMIT_KEYS:
             return self.refuse(rid, sorted(set(params) - SUBMIT_KEYS))
+        if method == "prompt.submit" and isinstance(params.get("text"), str):
+            # every module's scripts read the words as written (XCUI's typing can give a compatibility
+            # ideograph, 不 as U+F967); what is stored stays as sent (fake_words.py)
+            params = {**params, "text": fake_words.read(params["text"])}
         if fake_reconnect.answer(self, method, params, rid):
             return
         if fake_control.handles(method, params):
@@ -832,6 +891,8 @@ class Handler(BaseHTTPRequestHandler):
                 return fake_quick.answer(self, log, lock, transcripts, session_id, text)
             if fake_extras.handles(text):
                 return fake_extras.answer(self, log, lock, transcripts, session_id, text, params.get("submission_id"))
+            if fake_secrets.handles(text):
+                return fake_secrets.answer(self, log, lock, transcripts, session_id, text)
             if "派一张卡" in text:
                 return self.hand_over(session_id, text)
             if "这周的作业" in text:
@@ -840,8 +901,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.later(session_id, text)
             with lock:
                 rows = transcripts.setdefault(session_id, [])
-                rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "user", "text": text,
-                             "timestamp": time.time()})
+                rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "user",
+                             "text": fake_words.sent(text), "timestamp": time.time()})
                 rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "assistant",
                              "text": "收到：" + text, "timestamp": time.time()})
             self.event("message.start", session_id, {})

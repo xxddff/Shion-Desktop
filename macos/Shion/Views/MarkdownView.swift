@@ -116,8 +116,8 @@ struct MarkdownCode: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 9)
         }
-        // a block starts at its first column, whatever a scroll view around it anchors (the ⌥Space
-        // window's answer anchors its bottom)
+        // a block starts at its first column, whatever a scroll view around it anchors (the
+        // ⌥Space window's answer anchors its bottom)
         .defaultScrollAnchor(.leading)
         .frame(maxWidth: .infinity, alignment: .leading)
         .fixedSize(horizontal: false, vertical: true)

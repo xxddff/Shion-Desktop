@@ -41,8 +41,34 @@ struct DetailView: View {
         case .reports: ReportsView().askToolbar()
         case .board: BoardView().askToolbar()
         case .desktop: DesktopView().askToolbar()
-        case .chat(let id): AssistantView(botId: id).assistantSettingsButton(id).askToolbar(id != store.chiefId).id(id)
+        case .chat(let id): AssistantView(botId: id).assistantSettingsButton(id).askToolbar(id != store.chiefId).testInspector().id(id)
         case .botSettings(let id): BotSettingsView(botId: id).askToolbar().id("assistant-\(id)")
+        }
+    }
+}
+
+extension View {
+    /// `-ShionChatInspector` (SignInTests): the page in an inspector, as a page with a detail
+    /// column has it. Opening such a page, the window's split view sets it up again after the
+    /// chat has gone to its newest message, and the chat shows its top: a known problem, as no
+    /// page of the app is in one.
+    @ViewBuilder
+    func testInspector() -> some View {
+        if let shown = LaunchOptions.current.chatInspector {
+            modifier(TestInspector(shown: shown))
+        } else {
+            self
+        }
+    }
+}
+
+private struct TestInspector: ViewModifier {
+    @State var shown: Bool
+
+    func body(content: Content) -> some View {
+        content.inspector(isPresented: $shown) {
+            Color.clear
+                .inspectorColumnWidth(min: 200, ideal: 220, max: 260)
         }
     }
 }

@@ -46,6 +46,8 @@ import struct
 import tempfile
 import threading
 import time
+
+import fake_words
 import urllib.parse
 import zlib
 
@@ -531,10 +533,10 @@ def submit(conn, rid, params):
     again = bool(files) and text in sent_texts
     if files:
         sent_texts.add(text)
-    stored = text
+    stored = fake_words.sent(text)
     lines = []
     if taken:
-        caption = text or DEFAULT_CAPTION
+        caption = fake_words.sent(text) or DEFAULT_CAPTION
         stored = f"{caption}\n\n" + "\n".join(f"[Image attached at: {path}]" for path, _ in taken) \
             + "".join("\n[screenshot]" for _ in taken)
         for path, data in taken:
@@ -587,7 +589,7 @@ def screenshot_turn(conn, session_id, profile, params):
     shot = write(server_path(profile, "cache", "screenshots", "ci-login.png"), png(640, 400, (230, 140, 60)))
     reply = "截好了：登录页上写着要两步验证。"
     ids = store_turn(session_id, [
-        {"role": "user", "text": params.get("text", "")},
+        {"role": "user", "text": fake_words.sent(params.get("text", ""))},
         {"role": "tool", "name": name, "context": context, "args": {"url": "https://ci.example/login"},
          "tool_call_id": call},
         {"role": "assistant", "text": reply},
@@ -615,7 +617,7 @@ def media_turn(conn, session_id, profile, params):
     slides, chart, data = seed(profile)
     reply = (f"第8回的课件和这周的延误图都在这里：\n\nMEDIA:{slides}\nMEDIA:{chart}\n\n"
              f"原始数据我放在 {data} 了。\n\n![网上找的示例图](https://www.w3.org/Icons/w3c_home.png)")
-    ids = store_turn(session_id, [{"role": "user", "text": params.get("text", "")},
+    ids = store_turn(session_id, [{"role": "user", "text": fake_words.sent(params.get("text", ""))},
                                   {"role": "assistant", "text": reply}])
     try:
         conn.event("message.start", session_id, {})

@@ -231,6 +231,112 @@ final class SignInTests: XCTestCase {
         app.terminate()
     }
 
+    /// The demo's 詩音 chat opened from 日报 with the page in an inspector (`-ShionChatInspector`),
+    /// hidden and then shown, twice each. A known problem, noted and not failed: the window's split
+    /// view sets such a page up again as it opens, after the chat went to its newest message, and
+    /// the transcript shows its top (runs 152 and 153; no page of the app is in an inspector). Where
+    /// its scroll bar is goes in signin-inspector.txt, and, when not at its end, where it is 3.5 s
+    /// after opening and once the find bar has gone to words of the newest reply. No server.
+    @MainActor
+    func testOpensAtNewestUnderAnInspector() throws {
+        continueAfterFailure = true
+        var notes: [String] = []
+        for inspector in ["hidden", "shown"] {
+            let app = XCUIApplication()
+            app.launchArguments = [
+                "-ShionSnapshot", "YES",
+                "-ShionRoute", "reports",
+                "-ShionAppearance", "light",
+                "-ApplePersistenceIgnoreState", "YES",
+                "-ShionChatInspector", inspector,
+            ]
+            app.launch()
+            XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 20))
+            let window = app.windows.firstMatch
+            let transcript = element("transcript", in: app)
+            for round in 1...2 {
+                element("bot-shion", in: app).click()
+                let opened = transcript.waitForExistence(timeout: 10)
+                Thread.sleep(forTimeInterval: 1.5)
+                let bar = layout(of: transcript).bar
+                keep(window.screenshot(), "signin-9-inspector-\(inspector)-\(round)")
+                notes.append("inspector \(inspector), opening \(round): the scroll bar at \(bar.map { String(format: "%.3f", $0) } ?? "not there")")
+                XCTAssertTrue(opened, "the chat did not open (inspector \(inspector))")
+                XCTExpectFailure("known: under an inspector the chat opens at its top", options: .nonStrict()) {
+                    XCTAssertGreaterThan(bar ?? 0, 0.98, "the chat did not open at its newest message. \(notes.last ?? "")")
+                }
+                if (bar ?? 0) <= 0.98 {
+                    // not at its end: where it is later, and whether a scroll of the app's own
+                    // reaches the end, the find bar going to words of the newest reply
+                    let shown = { (bar: Double?) in bar.map { String(format: "%.3f", $0) } ?? "not there" }
+                    Thread.sleep(forTimeInterval: 2)
+                    let later = layout(of: transcript).bar
+                    app.typeKey("f", modifierFlags: .command)
+                    let field = element("find-field", in: app)
+                    var found: Double?
+                    if field.waitForExistence(timeout: 3) {
+                        // the keyboard is the sidebar's, the chat opened from there: ⌘F shows the
+                        // bar without the field taking the keys (run 155), as in ScreenshotTests
+                        field.click()
+                        field.typeText("至少覆盖")
+                        Thread.sleep(forTimeInterval: 1.5)
+                        found = layout(of: transcript).bar
+                        app.typeKey(.escape, modifierFlags: [])
+                    }
+                    notes.append("  3.5 s after opening \(shown(later)); the find bar gone to 至少覆盖 (the newest reply) \(shown(found))")
+                }
+                element("nav-reports", in: app).click()
+                Thread.sleep(forTimeInterval: 1)
+            }
+            app.terminate()
+        }
+        note(notes.joined(separator: "\n"), "signin-inspector")
+    }
+
+    /// The demo's 詩音 chat, at its end: one turn of the wheel all the way to its top, and two
+    /// seconds later it is still there; a jump to the top is the reader's, not something to follow
+    /// back down. The keyboard is the sidebar's (the app starts it there), where ⌘↑ goes to the page
+    /// above, so the jump is the wheel's. No server.
+    @MainActor
+    func testJumpToTheTopStays() throws {
+        continueAfterFailure = true
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-ShionSnapshot", "YES",
+            "-ShionRoute", "chat-shion",
+            "-ShionAppearance", "light",
+            "-ApplePersistenceIgnoreState", "YES",
+        ]
+        app.launch()
+        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 20))
+        let window = app.windows.firstMatch
+        let transcript = element("transcript", in: app)
+        XCTAssertTrue(transcript.waitForExistence(timeout: 10), "no transcript")
+        Thread.sleep(forTimeInterval: 1.5)
+        var notes = ["opened: the scroll bar at \(barText(layout(of: transcript)))"]
+        XCTAssertGreaterThan(layout(of: transcript).bar ?? 0, 0.98, "the chat did not open at its end. \(notes[0])")
+        let margin = transcript.coordinate(withNormalizedOffset: CGVector(dx: 0.03, dy: 0.5))
+        margin.hover()
+        Thread.sleep(forTimeInterval: 0.3)
+        // a first turn of the wheel sometimes moves nothing on the runner (see upward): up to three
+        var turns = 0
+        for _ in 0..<3 where (layout(of: transcript).bar ?? 1) > 0.02 {
+            margin.scroll(byDeltaX: 0, deltaY: 100_000)
+            turns += 1
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+        let jumped = layout(of: transcript).bar
+        Thread.sleep(forTimeInterval: 2)
+        let later = layout(of: transcript).bar
+        keep(window.screenshot(), "signin-10-jumped-to-top")
+        notes.append("to the top in \(turns) turn(s) of the wheel: the scroll bar at \(jumped.map { String(format: "%.3f", $0) } ?? "not there"), "
+                     + "two seconds later \(later.map { String(format: "%.3f", $0) } ?? "not there")")
+        note(notes.joined(separator: "\n"), "signin-jump")
+        XCTAssertLessThan(jumped ?? 1, 0.02, "nothing took the chat to its top. \(notes.last ?? "")")
+        XCTAssertLessThan(later ?? 1, 0.02, "the chat went back down after a jump to its top. \(notes.last ?? "")")
+        app.terminate()
+    }
+
     /// Which sign of a wheel delta at `wheel` scrolls the chat back, from nudges each way watching
     /// the row `label`; nil when none moves it. The pointer rests there first, and the nudges grow
     /// from 40 to 80: on the runner a first nudge of 40 sometimes moves nothing, the pointer

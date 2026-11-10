@@ -32,7 +32,7 @@ hermes-plugin/
 
 所以詩音和五个助手的 profile 都要装、都要启用。助手要用插件的工具，詩音的 profile 还要处理 Shion 的 RPC。
 
-**1. 每个 profile 装一次（顺便启用）。** 仓库是私有的也能装：Hermes 先匿名 clone，被拒后依次试 `GITHUB_TOKEN` / `GH_TOKEN`（profile 的 `.env` 里的）、`gh auth token`、git 配好的凭证助手，凭证只放在这次 clone 的请求头里，不写进 URL 也不留在 `.git/config`（`hermes_cli/git_credentials.py`）。所以先在服务器上 `gh auth login`，或者给每个 profile 的 `.env` 写一个只读这个仓库的 fine-grained token，然后：
+**1. 每个 profile 装一次（顺便启用）。** Hermes 从仓库的默认分支（`claude/macos-app`）clone，命令里不能另指分支。仓库是公开的，不用凭证。（换成私有的仓库也能装：Hermes 先匿名 clone，被拒后依次试 `GITHUB_TOKEN` / `GH_TOKEN`（profile 的 `.env` 里的）、`gh auth token`、git 配好的凭证助手，凭证只放在这次 clone 的请求头里，不写进 URL 也不留在 `.git/config`（`hermes_cli/git_credentials.py`）。那样就先在服务器上 `gh auth login`，或者给每个 profile 的 `.env` 写一个只读这个仓库的 fine-grained token。）
 
 ```bash
 for p in shion study commute mail news journal; do
@@ -80,7 +80,7 @@ hermes -p shion plugins doctor shion  # 用 Hermes 自己的发现和注册流�
 
 再从 Shion（或任何 `/api/ws` 客户端）调 `plugin.shion.info`，带 `profile: "shion"`，应该返回版本和今天的日期。
 
-**更新**：`for p in shion study commute mail news journal; do hermes -p $p plugins update shion; done`（手动复制的就重新复制），再重启 gateway。数据不在插件目录里，更新不会丢。
+**更新**：`for p in shion study commute mail news journal; do hermes -p $p plugins update shion; done`（取的也是默认分支 `claude/macos-app` 上最新的；手动复制的就重新复制），再重启 gateway。数据不在插件目录里，更新不会丢。
 
 ## 数据存在哪
 

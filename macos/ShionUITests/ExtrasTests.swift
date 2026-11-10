@@ -281,6 +281,8 @@ final class ExtrasTests: XCTestCase {
         } else {
             XCTFail("the card left 等你确认 while the connection was down")
         }
+        // seen while away: the stand-in's tunnel comes back now (it waits for the word, StandIn.swift)
+        StandIn.tunnelUp("test7: the card's answers greyed out while down")
         XCTAssertTrue(waitUntil(timeout: 40) { self.text("重新连接中…", in: app) == nil }, "the connection did not come back")
         XCTAssertTrue(waitUntil(timeout: 10) { reply.isEnabled }, "the reply box stayed grey once connected")
         app.terminate()

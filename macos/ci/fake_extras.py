@@ -27,6 +27,7 @@ import threading
 import time
 
 import fake_shion
+import fake_words  # the user's words as sent, for the transcript
 
 PARAGRAPHS = 30
 LONG_FIRST = "（CI 长回复）第 1 段：这是一条很长的回复，点通知时要从这里开始看。"
@@ -76,7 +77,8 @@ def keep(transcripts_lock, transcripts, session_id, text, reply_text):
     now = time.time()
     with transcripts_lock:
         rows = transcripts.setdefault(session_id, [])
-        rows.append({"row_id": user, "row_kind": "message", "role": "user", "text": text, "timestamp": now})
+        rows.append({"row_id": user, "row_kind": "message", "role": "user", "text": fake_words.sent(text),
+                     "timestamp": now})
         rows.append({"row_id": assistant, "row_kind": "message", "role": "assistant", "text": reply_text,
                      "timestamp": now})
     return user, assistant
@@ -117,7 +119,8 @@ def slow(handler, log, transcripts_lock, transcripts, session_id, text):
 def ask(handler, log, transcripts_lock, transcripts, session_id, text, prompt, kind):
     with transcripts_lock:
         transcripts.setdefault(session_id, []).append(
-            {"row_id": next_row(), "row_kind": "message", "role": "user", "text": text, "timestamp": time.time()})
+            {"row_id": next_row(), "row_kind": "message", "role": "user", "text": fake_words.sent(text),
+             "timestamp": time.time()})
     with lock:
         pending.setdefault(session_id, []).append(prompt)
     log(f"  -> {kind} {prompt['prompt_id']} on {session_id}")

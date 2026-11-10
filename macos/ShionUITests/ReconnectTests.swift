@@ -4,12 +4,13 @@ import XCTest
 /// Dropped connections, end to end against ci/fake_hermes.py (fake_reconnect.py plays Hermes's side:
 /// each session's frames numbered and kept, session.events.since, a resume that catches up what came
 /// in between, a prompt admitted once per submission id). Signs in as SignInTests does, then in
-/// 詩音's chat has the stand-in drop the socket at each moment that matters, and keep the tunnel
-/// down a few seconds after:
-/// 1. half way through a reply that goes on past the outage: the sidebar says 重新连接中… and when it
-///    tries again; two sentences said meanwhile wait under the chat, saying when they were written;
-///    once back, the rest of the reply streams into the same bubble, then the two go out, in order,
-///    saying when they were written (the run counts them as written two hours before);
+/// 詩音's chat has the stand-in drop the socket at each moment that matters. The tunnel stays down
+/// until the test has seen what it looks for while Shion is away and tells the stand-in so
+/// (StandIn.tunnelUp); Shion is back at its next try:
+/// 1. half way through a reply that goes on until Shion is back: the sidebar says 重新连接中… and
+///    when it tries again; two sentences said meanwhile wait under the chat, saying when they were
+///    written; once back, the rest of the reply streams into the same bubble, then the two go out,
+///    in order, saying when they were written (the run counts them as written two hours before);
 /// 2. into a reply that ends while the tunnel is down: once back, the bubble has all of it, and
 ///    nothing is still replying;
 /// 3. after a sentence was admitted, before its receipt: 等连上后确认 while down, then an ordinary
@@ -18,7 +19,12 @@ import XCTest
 /// 5. while an approval waits: once back it is still in 等你确认, and answering it there lets the
 ///    turn finish in the same bubble;
 /// 6. before a reply longer than the session keeps: the replay cannot reach back, the newest page
-///    stands in, and the reply is there whole, once, with nothing still replying.
+///    stands in, and the reply is there whole, once, with nothing still replying;
+/// 7. not a drop: Hermes ends the subscription of a socket that cannot keep up (session.replay_gap)
+///    and keeps the socket; what was missed comes back on it, and the reply is whole in one bubble;
+/// 8. a picture and a file, before Hermes had them: once back, 没发出去 with 重发. The server
+///    cleared the picture meanwhile, so the same submission is refused, and the picture goes up
+///    again from the Mac under a new one; answered once, with both.
 /// A picture at each step (reconnect-*.png).
 final class ReconnectTests: XCTestCase {
     private let server = "http://127.0.0.1:8765"
@@ -71,6 +77,7 @@ final class ReconnectTests: XCTestCase {
         keep(app.windows.firstMatch.screenshot(), "reconnect-2-waiting")
         XCTAssertTrue(waits, "what was said while not connected does not wait under the chat")
         XCTAssertEqual(app.descendants(matching: .any).matching(identifier: "waiting").count, 2, "not two sentences waiting")
+        StandIn.tunnelUp("1. half way through a reply")
         XCTAssertTrue(waitUntil(timeout: 40) { !self.hasText("重新连接中…", in: app) }, "the connection did not come back")
         let rest = waitForText("第80段。", in: app, timeout: 40)
         keep(app.windows.firstMatch.screenshot(), "reconnect-3-back")
@@ -93,6 +100,7 @@ final class ReconnectTests: XCTestCase {
         say("断线：讲完了", in: app)
         XCTAssertTrue(waitForText("第2句。", in: app, timeout: 10), "the short reply did not start")
         XCTAssertTrue(waitForText("重新连接中…", in: app, timeout: 10), "the socket did not drop")
+        StandIn.tunnelUp("2. a reply that ends while the tunnel is down")
         XCTAssertTrue(waitUntil(timeout: 40) { !self.hasText("重新连接中…", in: app) }, "the connection did not come back")
         let ended = waitForText("第10句。", in: app, timeout: 15)
         keep(app.windows.firstMatch.screenshot(), "reconnect-4-ended-while-away")
@@ -105,6 +113,7 @@ final class ReconnectTests: XCTestCase {
         let unsure = element("unsure", in: app).waitForExistence(timeout: 10)
         keep(app.windows.firstMatch.screenshot(), "reconnect-5-unsure")
         XCTAssertTrue(unsure, "the sentence whose receipt the connection took does not say 等连上后确认")
+        StandIn.tunnelUp("3. admitted, and the receipt lost")
         XCTAssertTrue(waitForText("收到：断线：还没回执", in: app, timeout: 40), "its answer did not come")
         XCTAssertTrue(waitUntil(timeout: 10) { !self.element("unsure", in: app).exists }, "it still says 等连上后确认")
         XCTAssertFalse(element("unsent", in: app).exists, "it says 没发出去, though Hermes had it")
@@ -113,6 +122,7 @@ final class ReconnectTests: XCTestCase {
         // 4. never admitted: 没发出去, and 重发
         say("断线：没收到", in: app)
         XCTAssertTrue(waitForText("重新连接中…", in: app, timeout: 10), "the socket did not drop")
+        StandIn.tunnelUp("4. never admitted")
         let unsent = element("unsent", in: app).waitForExistence(timeout: 40)
         keep(app.windows.firstMatch.screenshot(), "reconnect-6-unsent")
         XCTAssertTrue(unsent, "the sentence Hermes never got does not say 没发出去")
@@ -131,6 +141,7 @@ final class ReconnectTests: XCTestCase {
         say("断线：等你批准", in: app)
         XCTAssertTrue(waitForText("要先在服务器上跑一条命令。", in: app, timeout: 10), "the turn did not start")
         XCTAssertTrue(waitForText("重新连接中…", in: app, timeout: 10), "the socket did not drop")
+        StandIn.tunnelUp("5. while an approval waits")
         XCTAssertTrue(waitUntil(timeout: 40) { !self.hasText("重新连接中…", in: app) }, "the connection did not come back")
         element("nav-confirm", in: app).click()
         let asked = waitForText("要看一下服务器的磁盘还剩多少吗？", in: app, timeout: 10)
@@ -152,12 +163,61 @@ final class ReconnectTests: XCTestCase {
         XCTAssertTrue(element("send", in: app).waitForExistence(timeout: 10), "the approved turn is still replying")
         say("断线：说很多", in: app)
         XCTAssertTrue(waitForText("重新连接中…", in: app, timeout: 10), "the socket did not drop")
+        StandIn.tunnelUp("6. more than the session keeps")
         XCTAssertTrue(waitUntil(timeout: 40) { !self.hasText("重新连接中…", in: app) }, "the connection did not come back")
         let page = waitForText("长长的回复。长长的回复。", in: app, timeout: 20)
         keep(app.windows.firstMatch.screenshot(), "reconnect-10-page")
         XCTAssertTrue(page, "the reply longer than the session keeps did not come from the page")
         once("长长的回复。长长的回复。", whole: false, "the long reply is not there once", "reconnect-count-6", in: app)
         XCTAssertTrue(element("send", in: app).waitForExistence(timeout: 5), "a bubble is still replying after the page")
+
+        // 7. the subscription goes, the socket stays (session.replay_gap): caught up on the same socket
+        say("断线：跟不上", in: app)
+        XCTAssertTrue(waitForText("第3节。", in: app, timeout: 10), "the reply did not start")
+        var dropped = false
+        let caught = waitUntil(timeout: 40) {
+            if self.hasText("重新连接中…", in: app) { dropped = true }
+            return self.hasText("第40节。", in: app)
+        }
+        keep(app.windows.firstMatch.screenshot(), "reconnect-11-gap")
+        XCTAssertTrue(caught, "the reply did not go on after the gap")
+        XCTAssertFalse(dropped, "a gap is not a drop: the sidebar said 重新连接中…")
+        once("第1节。", whole: false, "the reply is not in one bubble across the gap", "reconnect-count-7", in: app)
+        XCTAssertTrue(holds(["第1节。", "第6节。", "第40节。"], in: app), "the bubble does not have the whole reply")
+        XCTAssertTrue(element("send", in: app).waitForExistence(timeout: 10), "a bubble is still replying after the gap")
+
+        // 8. a picture and a file, dropped before Hermes had them: 没发出去, and 重发, which finds the
+        // picture cleared and sends it up again under a new submission
+        let composer = element("composer", in: app)
+        putPicture()
+        composer.click()
+        composer.typeKey("v", modifierFlags: .command)
+        XCTAssertTrue(element("draft-picture", in: app).waitForExistence(timeout: 10), "the pasted picture is not in the composer")
+        putFiles(["ci-报告（CI）.pdf"])
+        composer.click()
+        composer.typeKey("v", modifierFlags: .command)
+        XCTAssertTrue(element("draft-file", in: app).waitForExistence(timeout: 10), "the pasted file is not in the composer")
+        let send = element("send", in: app)
+        XCTAssertTrue(waitUntil(timeout: 30) { send.isEnabled }, "the picture and the file did not go up")
+        say("断线：图和文件", in: app)
+        XCTAssertTrue(waitForText("重新连接中…", in: app, timeout: 10), "the socket did not drop")
+        StandIn.tunnelUp("8. a picture and a file")
+        let notSent = element("unsent", in: app).waitForExistence(timeout: 40)
+        keep(app.windows.firstMatch.screenshot(), "reconnect-12-media-unsent")
+        XCTAssertTrue(notSent, "the picture and the file Hermes never got do not say 没发出去")
+        let again = element("resend", in: app)
+        if again.waitForExistence(timeout: 5), waitUntil(timeout: 10, { again.isEnabled }) {
+            again.click()
+            let answered = waitForText("你说：断线：图和文件", in: app, timeout: 30)
+            keep(app.windows.firstMatch.screenshot(), "reconnect-13-media-resent")
+            XCTAssertTrue(answered, "重发 got no answer")
+            XCTAssertTrue(hasText("收到 1 张图", in: app), "the picture did not go with 重发")
+            XCTAssertTrue(hasText("收到文件：ci-报告（CI）.pdf", in: app), "the file did not go with 重发")
+            XCTAssertTrue(waitUntil(timeout: 5) { !self.element("unsent", in: app).exists }, "it still says 没发出去")
+            once("断线：图和文件", whole: true, "the message is not there once after 重发", "reconnect-count-8", in: app)
+        } else {
+            XCTFail("no 重发 to press")
+        }
         app.terminate()
     }
 
@@ -196,6 +256,33 @@ final class ReconnectTests: XCTestCase {
         field.click()
         field.typeKey("a", modifierFlags: .command)
         field.typeText(text)
+    }
+
+    /// A small picture on the pasteboard, as a screenshot copies one.
+    @MainActor
+    private func putPicture() {
+        guard let picture = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 64, pixelsHigh: 48, bitsPerSample: 8,
+                                             samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                             colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)
+        else { return XCTFail("no bitmap for the picture") }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: picture)
+        NSColor.systemTeal.setFill()
+        NSBezierPath(rect: NSRect(x: 0, y: 0, width: 64, height: 48)).fill()
+        NSGraphicsContext.restoreGraphicsState()
+        guard let data = picture.representation(using: .png, properties: [:]) else { return XCTFail("no PNG for the picture") }
+        let board = NSPasteboard.general
+        _ = board.clearContents()
+        XCTAssertTrue(board.setData(data, forType: .png))
+    }
+
+    /// Files as Finder copies them: their addresses, in the folder the stand-in fills (fake_media.py).
+    @MainActor
+    private func putFiles(_ names: [String]) {
+        let folder = URL(fileURLWithPath: "/tmp/shion-media-ci", isDirectory: true)
+        let board = NSPasteboard.general
+        _ = board.clearContents()
+        XCTAssertTrue(board.writeObjects(names.map { folder.appendingPathComponent($0) as NSURL }))
     }
 
     /// Typed into the chat's field and sent with its button.
