@@ -50,7 +50,8 @@ struct DetailView: View {
 extension View {
     /// `-ShionChatInspector` (SignInTests): the page in an inspector, as a page with a detail
     /// column has it. Opening such a page, the window's split view sets it up again after the
-    /// chat has gone to its newest message, and ChatView puts it back there.
+    /// chat has gone to its newest message, and the chat shows its top: a known problem, as no
+    /// page of the app is in one.
     @ViewBuilder
     func testInspector() -> some View {
         if let shown = LaunchOptions.current.chatInspector {

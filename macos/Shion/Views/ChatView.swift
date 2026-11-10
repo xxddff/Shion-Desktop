@@ -30,7 +30,6 @@ struct ChatView: View {
         // and under them, what was said while not connected, waiting (ChatDelivery.swift)
         let items = store.withAskCards(store.chats[botId] ?? [], of: botId) + WaitingMessages.items(for: botId)
         let lines = ChatLine.lines(items, replying: store.replying.contains(botId))
-        let _ = follow.last = lines.last?.id
         let found = find.found(in: lines)
         // before the rows are laid out: older rows coming in above (the row at the top of what
         // shows is noted, from the layout before them), or a new hit of the find bar
@@ -49,26 +48,12 @@ struct ChatView: View {
                             reveal.proxy = reader
                             place.proxy = reader
                             follow.placed = false
-                            follow.opening = Date().addingTimeInterval(1.2)
                             toEnd(lines, with: reader)
                             placing += 1
                         }
                         .onChange(of: placing) {
                             toEnd(lines, with: reader)
                             follow.placed = true
-                            follow.opening = Date().addingTimeInterval(1.2)
-                            // its host may set the scroll view up again as the page opens, losing
-                            // where it was put without a change to see (a split view with an
-                            // inspector does that): to the end twice more while it opens, unless
-                            // the reader went elsewhere (a hit of the find bar)
-                            Task {
-                                for wait in [0.3, 0.7] {
-                                    try? await Task.sleep(for: .seconds(wait))
-                                    guard follow.on, Date() < follow.opening, let last = follow.last else { return }
-                                    follow.until = Date().addingTimeInterval(1)
-                                    reader.scrollTo(last, anchor: .bottom)
-                                }
-                            }
                         }
                         // older rows arrived above: the row that was at the top of what shows goes
                         // back to where it was (a run of tool calls the page boundary cut is one
@@ -93,14 +78,10 @@ struct ChatView: View {
                                    container: geometry.containerSize.height)
                         } action: { old, new in
                             // not the reader either: the visible part changed height (the window,
-                            // the composer, the page's host), or, as the page opens, what shows
-                            // moved away from the end (its host set the scroll view up again: a
-                            // split view with an inspector does that). Followed, it goes back to
-                            // the end. Later a move away (Home, ⌘↑, the scroll bar, the wheel) is
-                            // the reader's and stays where it went
+                            // the composer, the page's host). Followed, it goes back to the end. A
+                            // jump to the top in one go (Home, ⌘↑, the scroll bar) is the reader's
+                            // and stays where it went
                             if follow.on, abs(new.container - old.container) > 1 {
-                                toEnd(lines, with: reader)
-                            } else if new.height == old.height, follow.on, Date() < follow.opening, new.below > 40 {
                                 toEnd(lines, with: reader)
                             } else if new.height == old.height {
                                 follow.on = new.below <= 40
@@ -198,12 +179,13 @@ struct ChatView: View {
         }
         // not anchored, where it starts either: the content's top stays put as it grows or shrinks,
         // and where it shows is only ever set above (to the newest message, after it, back to the
-        // row in view, to a hit; back to the end as its host sets it up again, EndGap); a short
-        // chat sits at the bottom of the full-height frame. Anchored at its bottom where it
-        // started, a transcript made again (the chat read again on reconnecting) with a reply
-        // taller than what shows a little above its end came up blank: its content counted about
-        // that reply too tall, its end past the rows (runs 146 and 149; main, without the
-        // anchor, did not, run 150)
+        // row in view, to a hit); a short chat sits at the bottom of the full-height frame.
+        // Anchored at its bottom where it started, a transcript made again (the chat read again on
+        // reconnecting) with a reply taller than what shows a little above its end came up blank:
+        // its content counted about that reply too tall, its end past the rows (runs 146 and 149;
+        // main, without the anchor, did not, run 150). Known: put in a split view's inspector (no
+        // page is), the transcript opens at its top, the host setting its scroll view up again
+        // after it went to its end (runs 152 and 153)
         .accessibilityIdentifier("transcript")
         // measured from the first layout on (a scroll geometry change only reports changes); the
         // size is already inside the toolbar and the composer
@@ -291,10 +273,6 @@ final class Follow {
     var until = Date.distantPast
     /// Put at its newest message since it was made: until then no older page is asked for.
     var placed = false
-    /// Until when the page is opening: a move away from the end then is its host, not the reader.
-    var opening = Date.distantPast
-    /// The newest line, as the transcript was last made.
-    var last: String?
 }
 
 /// Where a transcript shows, between updates, and in what order it is moved there. Older rows
