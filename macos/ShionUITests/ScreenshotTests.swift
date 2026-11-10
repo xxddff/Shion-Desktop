@@ -101,6 +101,54 @@ final class ScreenshotTests: XCTestCase {
         app.terminate()
     }
 
+    /// Settings' 服务器体检, with the screenshot run's made-up results: nothing is dialled.
+    @MainActor
+    func testServerCheck() throws {
+        continueAfterFailure = true
+        for appearance in ["light", "dark"] {
+            let app = launch(route: "today", appearance: appearance, extra: ["-ShionDemoSignIn", "YES"])
+            _ = app.windows.firstMatch.waitForExistence(timeout: 20)
+            app.typeKey(",", modifierFlags: .command)
+            let settings = app.windows.matching(NSPredicate(format: "identifier CONTAINS[c] 'settings'")).firstMatch
+            if settings.waitForExistence(timeout: 5) {
+                selectTab("服务器体检", in: settings)
+                Thread.sleep(forTimeInterval: 1)
+                keep(settings.screenshot(), name: "settings-check-\(appearance)")
+                selectTab("服务器", in: settings)
+            } else {
+                XCTFail("No Settings window (\(appearance))")
+            }
+            app.terminate()
+        }
+    }
+
+    /// 詩音's chat ending in a failed turn (demo, `-ShionFailureDemo YES`): what went wrong and what
+    /// to do, then 详情 opened on Hermes's own words, light and dark.
+    @MainActor
+    func testFailedTurn() throws {
+        continueAfterFailure = true
+        for appearance in ["light", "dark"] {
+            let app = launch(route: "chat-shion", appearance: appearance, extra: ["-ShionFailureDemo", "YES"])
+            let window = app.windows.firstMatch
+            guard window.waitForExistence(timeout: 20) else {
+                XCTFail("No window for the failed turn (\(appearance))")
+                app.terminate()
+                continue
+            }
+            Thread.sleep(forTimeInterval: 1)
+            keep(window.screenshot(), name: "failed-turn-\(appearance)")
+            let details = window.descendants(matching: .any).matching(identifier: "failure-details").firstMatch
+            if details.waitForExistence(timeout: 5) {
+                details.click()
+                Thread.sleep(forTimeInterval: 0.8)
+                keep(window.screenshot(), name: "failed-turn-details-\(appearance)")
+            } else {
+                XCTFail("No 详情 on the failed turn (\(appearance))")
+            }
+            app.terminate()
+        }
+    }
+
     /// The ⌥Space window with a sentence and 詩音's answer in it (demo), then empty from the 前往
     /// menu, with what it says when no server is connected; ⌘K over the main window, a search,
     /// ↓ and Return; ⌘1…⌘7. Whole screen for the window, which floats over the others.

@@ -119,14 +119,24 @@ struct ConnectionFooter: View {
 
     var body: some View {
         SettingsLink {
-            HStack(spacing: 6) {
-                Circle().fill(ConnectionState.color(store.gateway.phase)).frame(width: 7, height: 7)
-                Text(store.serverSettings.host.isEmpty ? "未连接服务器" : store.serverSettings.host)
-                    .font(.t12)
-                    .lineLimit(1)
-                Spacer()
-                if !store.live {
-                    Text("示例数据").font(.t11).foregroundStyle(.tertiary)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Circle().fill(ConnectionState.color(store.gateway.phase)).frame(width: 7, height: 7)
+                    Text(store.serverSettings.host.isEmpty ? "未连接服务器" : store.serverSettings.host)
+                        .font(.t12)
+                        .lineLimit(1)
+                    Spacer()
+                    if store.showsDemo {
+                        Text("示例数据").font(.t11).foregroundStyle(.tertiary)
+                    }
+                }
+                // not connected, or not any more: the server's data as it last was, from when
+                if let note = store.lastDataNote {
+                    Text(note)
+                        .font(.t11)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .padding(.leading, 13)
                 }
             }
             .padding(.horizontal, 16)

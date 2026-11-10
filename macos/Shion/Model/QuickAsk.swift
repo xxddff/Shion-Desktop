@@ -265,8 +265,10 @@ final class QuickAsk {
 
     // MARK: sending, now or once connected
 
+    /// Online, and the window shows the server's data again: until the first reads are in it still
+    /// shows the last data, read-only, and a send would not go.
     private static func connected(_ store: AppStore) -> Bool {
-        store.live && store.gateway.phase == .online
+        store.live && store.gateway.phase == .online && !store.readOnly
     }
 
     /// Into 总秘书's Bot Chat as one message, a line each: a second message during the answer to
@@ -316,6 +318,7 @@ final class QuickAsk {
         withObservationTracking {
             _ = store.live
             _ = store.gateway.phase
+            _ = store.readOnly
         } onChange: { [weak self] in
             // called before the change lands: look once it has
             Task { @MainActor in

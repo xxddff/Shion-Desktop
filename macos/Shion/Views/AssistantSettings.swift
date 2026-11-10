@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// The Settings window: the server, the assistants on it, and the keys (ShortcutSettings.swift).
-/// It opens on the tab it was left on; screenshot and test runs always open on 服务器 and leave
-/// the remembered tab alone.
+/// The Settings window: the server, the assistants on it, the server check (ServerCheckView.swift)
+/// and the keys (ShortcutSettings.swift). It opens on the tab it was left on; screenshot and test
+/// runs always open on 服务器 and leave the remembered tab alone.
 struct SettingsTabs: View {
     @State private var tab = SettingsTabs.firstTab
 
@@ -13,6 +13,9 @@ struct SettingsTabs: View {
             }
             Tab("助手", systemImage: "person.2", value: "assistants") {
                 AssistantSettings()
+            }
+            Tab("服务器体检", systemImage: "stethoscope", value: "check") {
+                ServerCheckView()
             }
             Tab("快捷键", systemImage: "keyboard", value: "keys") {
                 ShortcutSettings()
@@ -29,7 +32,7 @@ struct SettingsTabs: View {
     private static var firstTab: String {
         guard !LaunchOptions.current.snapshot,
               let stored = UserDefaults.standard.string(forKey: tabKey),
-              ["server", "assistants", "keys"].contains(stored)
+              ["server", "assistants", "check", "keys"].contains(stored)
         else { return "server" }
         return stored
     }

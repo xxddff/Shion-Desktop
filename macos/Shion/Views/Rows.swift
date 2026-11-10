@@ -32,6 +32,7 @@ struct TodoRow: View {
                     .foregroundStyle(todo.done ? Palette.accent : Color.secondary)
             }
             .buttonStyle(.plain)
+            .disabled(store.readOnly)
             .accessibilityLabel(todo.done ? "标为未完成" : "标为完成")
             .accessibilityIdentifier("todo-toggle-\(todo.id)")
 
@@ -75,6 +76,7 @@ struct TodoRow: View {
             if todo.proposed {
                 Button("确认") { store.confirm(todo.id) }
                     .controlSize(.small)
+                    .disabled(store.readOnly)
             }
         }
         .padding(.vertical, 8)
@@ -108,6 +110,7 @@ struct AskRow: View {
                 }
             }
         }
+        .disabled(store.readOnly)
         .padding(.vertical, 8)
     }
 }
@@ -150,6 +153,7 @@ struct AskCard: View {
                     }
                 }
                 .padding(.top, 2)
+                .disabled(store.readOnly)
             }
             .padding(.vertical, 8)
         }
