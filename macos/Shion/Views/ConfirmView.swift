@@ -18,13 +18,24 @@ struct ConfirmView: View {
                     ScrollView {
                         VStack(spacing: 16) {
                             ForEach(store.asks) { ask in
-                                AskCard(ask: ask)
-                                    .landed(selected == ask.id)
-                                    .accessibilityElement(children: .contain)
-                                    .accessibilityAddTraits(selected == ask.id ? .isSelected : [])
-                                    .accessibilityValue(selected == ask.id ? "已选中" : "")
-                                    .accessibilityIdentifier("ask-\(ask.id)")
-                                    .id(ask.id)
+                                if ask.kind == .secret {
+                                    // a password's or a key's card is one element already, named for
+                                    // its request (SecretCard.swift): marked selected as it is, since
+                                    // a container around it would take its name
+                                    AskCard(ask: ask)
+                                        .landed(selected == ask.id)
+                                        .accessibilityAddTraits(selected == ask.id ? .isSelected : [])
+                                        .accessibilityValue(selected == ask.id ? "已选中" : "")
+                                        .id(ask.id)
+                                } else {
+                                    AskCard(ask: ask)
+                                        .landed(selected == ask.id)
+                                        .accessibilityElement(children: .contain)
+                                        .accessibilityAddTraits(selected == ask.id ? .isSelected : [])
+                                        .accessibilityValue(selected == ask.id ? "已选中" : "")
+                                        .accessibilityIdentifier("ask-\(ask.id)")
+                                        .id(ask.id)
+                                }
                             }
                             ForEach(cards) { card in
                                 CardAskView(ask: card)

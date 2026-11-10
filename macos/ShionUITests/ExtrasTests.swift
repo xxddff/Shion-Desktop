@@ -146,8 +146,9 @@ final class ExtrasTests: XCTestCase {
                       "no notifications for the password and the key: \(noteList().map(\.id))")
         click(sudo)
         XCTAssertTrue(waitForTitle(window, "等你确认"), "the click did not open 等你确认: \(window.title)")
-        XCTAssertTrue(waitUntil(timeout: 10) { self.selected("ask-\(sudo)", in: app) }, "the password's card is not selected")
-        XCTAssertFalse(selected("ask-\(key)", in: app), "the key's card is selected too")
+        // a secret's card goes by its own name there (secret-card-…), selected or not
+        XCTAssertTrue(waitUntil(timeout: 10) { self.selected("secret-card-\(sudo)", in: app) }, "the password's card is not selected")
+        XCTAssertFalse(selected("secret-card-\(key)", in: app), "the key's card is selected too")
         Thread.sleep(forTimeInterval: 0.5)
         keep(window.screenshot(), "extras-7b-secret")
         for id in [sudo, key] {
