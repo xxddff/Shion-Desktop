@@ -5,10 +5,10 @@ import Foundation
 // (ShionAppShortcuts). Each runs on the app's own store through ShionShortcuts.swift; test runs
 // call their perform() themselves (IntentHook.swift). Settings → 通用 says what each does.
 //
-// The intents are main-actor types like the rest of the app (their @Parameter storage cannot be
-// nonisolated), so what the protocol reads without an actor is marked nonisolated: the title,
-// description and modes, and init() (the system and the shortcuts below make them anywhere).
-// perform() is async, and a main-actor perform() answers it.
+// The intents are not declared nonisolated (their @Parameter storage cannot be), so what the
+// protocol reads without an actor is marked nonisolated: the title, description and modes, and
+// init() (the system and the shortcuts below make them anywhere). perform() takes its isolation
+// from the protocol, none, so it awaits the store's main-actor work.
 
 /// 跟总秘书说: a sentence into 总秘书's Bot Chat, as the ⌥Space window sends it. The reply comes
 /// back when it comes within a few seconds; otherwise the action says it went out, and the reply
@@ -25,7 +25,7 @@ struct TellChiefIntent: AppIntent {
 
     func perform() async throws -> some IntentResult & ReturnsValue<String> & ProvidesDialog {
         let said = try await ShionShortcuts.tell(text) ?? "已发出"
-        IntentOutcome.note(said, value: .string(said))
+        await IntentOutcome.note(said, value: .string(said))
         return .result(value: said, dialog: IntentDialog("\(said)"))
     }
 }
@@ -47,7 +47,7 @@ struct TodayTodosIntent: AppIntent {
             let listed = todos.prefix(5).map { $0.subtitle.isEmpty ? $0.title : "\($0.title)（\($0.subtitle)）" }
             said = "今天还有 \(todos.count) 件：" + listed.joined(separator: "；") + (todos.count > 5 ? "……" : "。")
         }
-        IntentOutcome.note(said, value: .array(todos.map { .string($0.title) }))
+        await IntentOutcome.note(said, value: .array(todos.map { .string($0.title) }))
         return .result(value: todos, dialog: IntentDialog("\(said)"))
     }
 }
@@ -66,7 +66,7 @@ struct OpenAssistantIntent: AppIntent {
 
     func perform() async throws -> some IntentResult {
         try await ShionShortcuts.openAssistant(assistant.id)
-        IntentOutcome.note("打开了\(assistant.name)", value: .string(assistant.id))
+        await IntentOutcome.note("打开了\(assistant.name)", value: .string(assistant.id))
         return .result()
     }
 }
@@ -80,8 +80,8 @@ struct OpenConfirmIntent: AppIntent {
     nonisolated init() {}
 
     func perform() async throws -> some IntentResult {
-        ShionShortcuts.openConfirm()
-        IntentOutcome.note("打开了等你确认")
+        await ShionShortcuts.openConfirm()
+        await IntentOutcome.note("打开了等你确认")
         return .result()
     }
 }
