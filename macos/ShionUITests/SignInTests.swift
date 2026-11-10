@@ -275,6 +275,9 @@ final class SignInTests: XCTestCase {
                     let field = element("find-field", in: app)
                     var found: Double?
                     if field.waitForExistence(timeout: 3) {
+                        // the keyboard is the sidebar's, the chat opened from there: ⌘F shows the
+                        // bar without the field taking the keys (run 155), as in ScreenshotTests
+                        field.click()
                         field.typeText("至少覆盖")
                         Thread.sleep(forTimeInterval: 1.5)
                         found = layout(of: transcript).bar
