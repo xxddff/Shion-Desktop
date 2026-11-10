@@ -5,8 +5,9 @@ reports.list/get, settings.get/update, and what the Mac sends of its own data: u
 usage.day, focus.report, focus.latest. Every call must name a profile (the plugin lives in the
 assistants' profiles, and they share one store, settings included);
 unknown or missing parameters are refused the way the plugin refuses them, and usage.upload's
-segments and focus.report's values are checked as hermes-plugin/shion/store.py checks them
-(check_fake_shion.py runs both on the same inputs). A `session_id` is checked first, as Hermes
+segments and focus.report's values are checked as hermes-plugin/shion/store.py checks them, and
+usage.day adds the day up as store.py does, with its built-in app categories (check_fake_shion.py
+runs both on the same inputs). A `session_id` is checked first, as Hermes
 does before any plugin method (gateway/session_plugin_rpc.py): it must be a string naming a
 session of that profile. Writes bump the revision and push `plugin.shion.changed` to the socket
 with an empty session id, as the plugin's watcher does. A few seconds after the first sync, 课程
@@ -34,6 +35,44 @@ ACTIVITY_LABELS = {"study": "学习", "work": "工作", "life": "生活", "fun":
 # the plugin's settings (store.py's DEFAULT_SETTINGS), one set for every profile
 settings = {"timezone": "Asia/Tokyo", "usage_retention_days": 30, "focus_retention_days": 7, "chief_profile": "shion"}
 PROFILE_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+# store.py's BUILTIN_CATEGORIES: browsers and mail are left out on purpose (usage.categories.set,
+# which overrides these, is not on the stand-in)
+BUILTIN_CATEGORIES = {
+    "com.apple.dt.Xcode": "work",
+    "com.microsoft.VSCode": "work",
+    "com.todesktop.230313mzl4w4u92": "work",  # Cursor
+    "com.googlecode.iterm2": "work",
+    "com.apple.Terminal": "work",
+    "com.mitchellh.ghostty": "work",
+    "com.tinyspeck.slackmacgap": "work",
+    "com.microsoft.teams2": "work",
+    "us.zoom.xos": "work",
+    "com.microsoft.Word": "work",
+    "com.microsoft.Excel": "work",
+    "com.microsoft.Powerpoint": "work",
+    "com.apple.iWork.Pages": "work",
+    "com.apple.iWork.Numbers": "work",
+    "com.apple.iWork.Keynote": "work",
+    "com.figma.Desktop": "work",
+    "notion.id": "study",
+    "com.apple.iBooksX": "study",
+    "net.ankiweb.dtop": "study",
+    "com.apple.Preview": "study",
+    "jp.naver.line.mac": "social",
+    "com.tencent.xinWeChat": "social",
+    "com.hnc.Discord": "social",
+    "ru.keepcoder.Telegram": "social",
+    "com.apple.MobileSMS": "social",
+    "com.apple.FaceTime": "social",
+    "com.spotify.client": "fun",
+    "com.apple.Music": "fun",
+    "com.apple.TV": "fun",
+    "com.valvesoftware.steam": "fun",
+    "com.apple.iCal": "life",
+    "com.apple.reminders": "life",
+    "com.apple.Maps": "life",
+}
 
 
 def iso(dt):
@@ -287,22 +326,55 @@ def upload_usage(args):
         (["usage"] if changed else None)
 
 
-def usage_day(day):
-    lo = datetime(day.year, day.month, day.day, tzinfo=TOKYO).astimezone(timezone.utc)
-    hi = lo + timedelta(days=1)
-    per_app, names, everything = {}, {}, []
-    for (device, bundle, _), seg in usage.items():
-        start, end = max(seg["start"], lo), min(seg["end"], hi)
-        if start < end:
-            per_app.setdefault(bundle, []).append((start, end))
-            everything.append((start, end))
+def parse_date(value, field):
+    """timeutil.py's parse_date."""
+    if not isinstance(value, str) or not DATE_RE.match(value.strip()):
+        raise ShionError("invalid_params", f"{field} must be a date as YYYY-MM-DD")
+    text = value.strip()
+    try:
+        date.fromisoformat(text)
+    except ValueError as exc:
+        raise ShionError("invalid_params", f"{field} is not a real date: {value!r}") from exc
+    return text
+
+
+def zone():
+    """The settings' time zone, as store.py's tz() reads it; Tokyo's fixed offset where this Python
+    has no time zone database (as timeutil.py falls back)."""
+    try:
+        from zoneinfo import ZoneInfo
+        return ZoneInfo(settings["timezone"])
+    except Exception:
+        return timezone(timedelta(hours=9), settings["timezone"])
+
+
+def usage_day(day=None):
+    """store.py's usage_day: seconds per app and per category for one local day. One app's
+    overlapping stretches on one device count once; the total is each device's stretches joined,
+    added up over the devices; a stretch across midnight is cut at the day's ends."""
+    tz = zone()
+    day = parse_date(day, "date") if day is not None else datetime.now(tz).date().isoformat()
+    d = date.fromisoformat(day)
+    nxt = d + timedelta(days=1)
+    lo = datetime(d.year, d.month, d.day, tzinfo=tz).astimezone(timezone.utc)
+    hi = datetime(nxt.year, nxt.month, nxt.day, tzinfo=tz).astimezone(timezone.utc)
+    per_app, names, devices = {}, {}, {}
+    for (device, bundle, _), seg in sorted(usage.items(), key=lambda item: item[1]["start"]):
+        if seg["start"] < hi and seg["end"] > lo:
+            span = (max(seg["start"], lo), min(seg["end"], hi))
+            per_app.setdefault((device, bundle), []).append(span)
+            devices.setdefault(device, []).append(span)
             names[bundle] = seg["app_name"]
-    by_app = sorted(({"bundle_id": b, "app_name": names[b], "category": None, "seconds": union_seconds(spans)}
-                     for b, spans in per_app.items()), key=lambda item: (-item["seconds"], item["app_name"]))
+    app_seconds = {}
+    for (device, bundle), spans in per_app.items():
+        app_seconds[bundle] = app_seconds.get(bundle, 0) + union_seconds(spans)
+    by_app = sorted(({"bundle_id": b, "app_name": names[b], "category": BUILTIN_CATEGORIES.get(b), "seconds": s}
+                     for b, s in app_seconds.items()), key=lambda item: (-item["seconds"], item["app_name"]))
     by_category = {c: 0 for c in (*ACTIVITIES, "uncategorized")}
-    by_category["uncategorized"] = sum(item["seconds"] for item in by_app)
-    return {"date": day.isoformat(), "timezone": "Asia/Tokyo", "total_seconds": union_seconds(everything),
-            "by_app": by_app, "by_category": by_category}
+    for item in by_app:
+        by_category[item["category"] or "uncategorized"] += item["seconds"]
+    total = sum(union_seconds(spans) for spans in devices.values())
+    return {"date": day, "timezone": str(tz), "total_seconds": total, "by_app": by_app, "by_category": by_category}
 
 
 def report_focus(args, profile, heard):
@@ -382,8 +454,7 @@ def call(name, args, profile, heard=True):
     if name == "settings.update":
         return update_settings(args)
     if name == "usage.day":
-        day = date.fromisoformat(args["date"]) if "date" in args else today()
-        return usage_day(day), None
+        return usage_day(args.get("date")), None
     if name == "focus.report":
         return report_focus(args, profile, heard)
     if name == "focus.latest":

@@ -14,7 +14,10 @@ Shortcuts actions' sentences. Shaped like Hermes and the shion plugin:
                                   (gateway/session_pending_controls.py).
   prompt.submit "通知：写日报"     课程 writes today's life report through the plugin: yesterday's
                                   moves to the archive (reports.get still finds it, as the plugin
-                                  keeps every day), and the revision bumps and is pushed.
+                                  keeps every day), and the revision bumps and is pushed. The Mac's
+                                  usage of yesterday arrives with it (as an upload stores it), for
+                                  the screen time under yesterday's report: Notion, Safari twice
+                                  over itself, LINE, Spotify, and Steam across Tokyo's midnight.
   prompt.submit "捷径慢：…"        the reply comes after eight seconds, longer than a Shortcuts
                                   action waits for it in the test run.
 
@@ -139,10 +142,35 @@ def on_resume(session_id, result):
         result["running"] = True
 
 
+# yesterday in Tokyo: (bundle id, app name, start, end) as hours and minutes from that midnight
+YESTERDAY_USAGE = [
+    ("notion.id", "Notion", (9, 0), (10, 30)),
+    ("jp.naver.line.mac", "LINE", (12, 0), (12, 20)),
+    ("com.apple.Safari", "Safari", (20, 0), (21, 0)),
+    ("com.apple.Safari", "Safari", (20, 30), (20, 45)),
+    ("com.spotify.client", "Spotify", (21, 0), (21, 15)),
+    ("com.valvesoftware.steam", "Steam", (23, 50), (24, 20)),
+]
+
+
+def seed_usage():
+    """Yesterday's segments, stored as usage.upload stores them (UTC, by device, app and start)."""
+    day = fake_shion.today() - fake_shion.timedelta(days=1)
+    midnight = fake_shion.datetime(day.year, day.month, day.day, tzinfo=fake_shion.TOKYO)
+
+    def moment(hm):
+        return (midnight + fake_shion.timedelta(hours=hm[0], minutes=hm[1])).astimezone(fake_shion.timezone.utc)
+
+    for bundle, name, start, end in YESTERDAY_USAGE:
+        fake_shion.usage[("mac", bundle, moment(start))] = {
+            "bundle_id": bundle, "app_name": name, "start": moment(start), "end": moment(end)}
+
+
 def write_report(handler, log, transcripts_lock, transcripts, session_id, text):
     reply(handler, transcripts_lock, transcripts, session_id, text, "（CI）让课程写好了。")
     today = str(fake_shion.today())
     with fake_shion.lock:
+        seed_usage()
         old = fake_shion.reports.get("life")
         if old and old["date"] != today:
             archive[(old["date"], old["kind"])] = old
@@ -152,8 +180,8 @@ def write_report(handler, log, transcripts_lock, transcripts, session_id, text):
             "updated_at": fake_shion.iso(fake_shion.datetime.now(fake_shion.TOKYO)),
             "blocks": [{"heading": "睡眠", "items": ["比昨天早睡一小时（CI）"]}]}
         fake_shion.bump()
-    log(f"  课程 wrote today's life report; archived {sorted(archive)}")
-    fake_shion.push(handler, log, ["reports"])
+    log(f"  课程 wrote today's life report; archived {sorted(archive)}; yesterday's usage is in")
+    fake_shion.push(handler, log, ["reports", "usage"])
 
 
 def handles_rpc(method, params):

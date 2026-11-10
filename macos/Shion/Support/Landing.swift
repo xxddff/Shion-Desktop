@@ -57,8 +57,14 @@ enum Landing: Equatable {
 }
 
 extension Report {
-    /// The day it is about (`YYYY-MM-DD`, the plugin's `date`): its id begins with it.
-    var day: String { String(id.prefix(10)) }
+    /// The day it is about (`YYYY-MM-DD`, the plugin's `date`): its id begins with it; a demo
+    /// report's, from when it was written.
+    var day: String {
+        let prefix = String(id.prefix(10))
+        return prefix.wholeMatch(of: #/\d{4}-\d{2}-\d{2}/#) != nil
+            ? prefix
+            : date.formatted(Date.ISO8601FormatStyle(timeZone: .current).year().month().day())
+    }
 }
 
 /// The landing waiting for its page to take it up: the chat still opening, 等你确认 not holding

@@ -179,7 +179,10 @@ final class ExtrasTests: XCTestCase {
         app.terminate()
     }
 
-    /// Yesterday's report, no longer the newest of its kind: read for the click.
+    /// Yesterday's report, no longer the newest of its kind: read for the click. Under it, that
+    /// day's screen time as the plugin adds it up (`usage.day` for that day): the stand-in has the
+    /// segments test2's report brought (Notion 1:30; Safari an hour, twice over itself; LINE 20;
+    /// Spotify 15; Steam's ten minutes before midnight), so 3 小时 15 分.
     @MainActor
     func test5ColdReport() throws {
         continueAfterFailure = true
@@ -190,9 +193,31 @@ final class ExtrasTests: XCTestCase {
             XCTAssertTrue(waitForTitle(window, "日报"), "the click did not open 日报: \(window.title)")
             XCTAssertTrue(waitForText("CI 日报：昨天睡得早", in: app, timeout: 15), "yesterday's report is not shown")
             XCTAssertFalse(waitForText("CI 今天的日报", in: app, timeout: 1), "today's report is shown instead")
+            checkScreenTime(app, window)
             keep(window.screenshot(), "extras-14-cold-report")
         }
         app.terminate()
+    }
+
+    /// The screen time under yesterday's report: the total, every kind with its time (none for
+    /// work, life and other), and the apps by time.
+    @MainActor
+    private func checkScreenTime(_ app: XCUIApplication, _ window: XCUIElement) {
+        let total = element("usage-total", in: app)
+        guard total.waitForExistence(timeout: 15) else {
+            return XCTFail("no screen time under yesterday's report")
+        }
+        _ = bringIntoView(element("usage-chart", in: app), in: window, atTop: true)
+        let shown = [total.label, total.value as? String ?? ""].joined(separator: " ")
+        XCTAssertTrue(shown.contains("3 小时 15 分"), "the day's total: \(shown)")
+        let kinds = element("usage-categories", in: app).value as? String ?? ""
+        for kind in ["学习 1 小时 30 分", "未分类 1 小时", "娱乐 25 分", "社交 20 分", "工作 0 分", "生活 0 分", "其他 0 分"] {
+            XCTAssertTrue(kinds.contains(kind), "\(kind) is not among the kinds: \(kinds)")
+        }
+        let apps = element("usage-apps", in: app).value as? String ?? ""
+        XCTAssertTrue(apps.hasPrefix("Notion 1 小时 30 分，Safari 1 小时，LINE 20 分，Spotify 15 分，Steam 10 分"),
+                      "the apps used most: \(apps)")
+        print("screen time: \(shown) | \(kinds) | \(apps)")
     }
 
     /// A card on the other board: the board switches once it is read, and the card opens.

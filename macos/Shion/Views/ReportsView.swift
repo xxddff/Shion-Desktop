@@ -27,6 +27,10 @@ struct ReportsView: View {
                             }
                         }
                     }
+                    // that day's screen time, under a report about your own day (ScreenTime.swift)
+                    if report.kind != .news {
+                        ScreenTimeSection(day: report.day)
+                    }
                 } else {
                     ContentUnavailableView("还没有这类日报", systemImage: "doc.text")
                 }

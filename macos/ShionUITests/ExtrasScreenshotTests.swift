@@ -1,6 +1,7 @@
 import AppKit
 import XCTest
 
+/// 日报's screen time on the demo's day (its usage by kind and the apps used most), light and dark.
 /// Settings → 这台 Mac, after this Mac's own data: 开机启动 and 关窗后只留在菜单栏, light and dark,
 /// and once more with a login item waiting for approval and the menu bar option on; then where a
 /// notification's click lands and the Shortcuts actions. Then the menu bar with the Dock icon
@@ -29,7 +30,7 @@ final class ExtrasScreenshotTests: XCTestCase {
             }
             selectTab("这台 Mac", in: settings)
             // 启动 just under the toolbar, 关窗后只留在菜单栏 after it
-            if reveal(element("login-item", in: settings), in: settings, atTop: true) {
+            if bringIntoView(element("login-item", in: settings), in: settings, atTop: true) {
                 if run.extra.contains("requiresApproval") {
                     XCTAssertTrue(element("login-items", in: settings).waitForExistence(timeout: 3),
                                   "no button to System Settings → 登录项 while approval is needed")
@@ -42,7 +43,7 @@ final class ExtrasScreenshotTests: XCTestCase {
             }
             if run.name == "settings-start-light" {
                 // the end of the tab: where clicks land, and the Shortcuts actions
-                if reveal(element("landing-reply", in: settings), in: settings, atTop: true) {
+                if bringIntoView(element("landing-reply", in: settings), in: settings, atTop: true) {
                     Thread.sleep(forTimeInterval: 0.5)
                     keep(settings.screenshot(), "settings-ways-in-light")
                 } else {
@@ -53,6 +54,28 @@ final class ExtrasScreenshotTests: XCTestCase {
             // Settings opens on the tab it was left on, next launch too: back to 服务器
             selectTab("服务器", in: settings)
             XCTAssertTrue(settings.textFields["server-address"].waitForExistence(timeout: 5), "Settings not back on 服务器")
+            app.terminate()
+        }
+    }
+
+    @MainActor
+    func testScreenTime() throws {
+        continueAfterFailure = true
+        for appearance in ["light", "dark"] {
+            let app = launch(appearance: appearance, route: "reports")
+            let window = app.windows.firstMatch
+            let chart = element("usage-chart", in: window)
+            // its heading just under the toolbar: the kinds and the apps under it
+            if bringIntoView(chart, in: window, atTop: true) {
+                let kinds = element("usage-categories", in: window)
+                XCTAssertTrue((kinds.value as? String)?.contains("学习 2 小时 31 分") == true,
+                              "the demo's kinds: \(String(describing: kinds.value))")
+                Thread.sleep(forTimeInterval: 0.5)
+                keep(window.screenshot(), "reports-usage-\(appearance)")
+            } else {
+                keep(window.screenshot(), "reports-usage-\(appearance)-missing")
+                XCTFail("no screen time under the demo's 生活日报 (\(appearance))")
+            }
             app.terminate()
         }
     }
@@ -111,47 +134,6 @@ final class ExtrasScreenshotTests: XCTestCase {
         return false
     }
 
-    /// Scrolls Settings until `element` is in full view under the toolbar and above the Dock; with
-    /// `atTop`, until it is just under the toolbar, so what follows it shows too. As
-    /// LocalScreenshotTests scrolls the same tab: which sign of a wheel delta moves the page which
-    /// way is the runner's business, so a step that goes the wrong way flips it.
-    @MainActor
-    private func reveal(_ element: XCUIElement, in window: XCUIElement, atTop: Bool = false) -> Bool {
-        guard element.waitForExistence(timeout: 5) else { return false }
-        let area = window.scrollViews.firstMatch.exists ? window.scrollViews.firstMatch : window
-        let toolbar = window.toolbars.firstMatch
-        var up: CGFloat = -1  // the sign of a delta that moves the page up
-        var signKnown = false
-        // the window can reach down behind the Dock (the runner's screen is small). Screen points,
-        // top-left origin, as XCUI's.
-        let dock: CGFloat = NSScreen.main.map { $0.frame.maxY - $0.visibleFrame.minY } ?? .greatestFiniteMagnitude
-        for _ in 0..<40 {
-            let top = (toolbar.exists ? toolbar.frame.maxY : window.frame.minY) + 6
-            let bottom = min(window.frame.maxY, dock) - 6
-            let frame = element.frame
-            let inView = frame.minY >= top && frame.maxY <= bottom
-            let target = atTop ? top + 48 : min(max(frame.minY, top), bottom - frame.height)
-            let distance = frame.minY - target  // more than 0: the page has to move up
-            if inView, abs(distance) <= (atTop ? 16 : 0.5) { return true }
-            area.hover()
-            area.scroll(byDeltaX: 0, deltaY: (distance > 0 ? up : -up) * max(16, min(240, abs(distance))))
-            Thread.sleep(forTimeInterval: 0.25)
-            let moved = element.frame.minY - frame.minY
-            if abs(moved) < 1 {
-                // nothing moved: the wrong way at an end of the page, or the end it has to go to
-                if !signKnown {
-                    up = -up
-                    signKnown = true
-                    continue
-                }
-                return inView
-            }
-            signKnown = true
-            if (distance > 0) != (moved < 0) { up = -up }
-        }
-        return false
-    }
-
     @MainActor
     private func element(_ identifier: String, in root: XCUIElement) -> XCUIElement {
         root.descendants(matching: .any).matching(identifier: identifier).firstMatch
@@ -170,11 +152,11 @@ final class ExtrasScreenshotTests: XCTestCase {
     }
 
     @MainActor
-    private func launch(appearance: String, extra: [String] = []) -> XCUIApplication {
+    private func launch(appearance: String, route: String = "today", extra: [String] = []) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = [
             "-ShionSnapshot", "YES",
-            "-ShionRoute", "today",
+            "-ShionRoute", route,
             "-ShionAppearance", appearance,
             "-ApplePersistenceIgnoreState", "YES",
         ] + extra
