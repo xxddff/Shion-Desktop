@@ -26,6 +26,8 @@ hermes_cli/dashboard_auth and the Canonical Gateway Protocol:
   /api/skills, /api/tools/…,   servers, skills, toolsets, config, delete (fake_profiles.py, which
   /api/config?profile=         also answers profiles.list, profiles.create and profiles.configure)
   prompt.submit "小窗：…"       詩音's answer to the ⌥Space window, streamed slowly (fake_quick.py)
+  prompt.submit "装 ffmpeg（CI）" sudo and secret server requests, answered with a response frame
+                               (fake_secrets.py; the values are checked, never logged)
 
 Like Hermes's contracts (extra="forbid"), session.resume, session.transcript and prompt.submit
 refuse keys they do not know, so a client's wrong parameter fails here as it would on a real server.
@@ -53,6 +55,7 @@ import fake_kanban  # noqa: E402  the kanban plugin's routes (BoardTests)
 import fake_profiles  # noqa: E402  the profiles' routes and RPCs (BotsTests)
 import fake_shion  # noqa: E402  the shion plugin's RPCs
 import fake_quick  # noqa: E402  詩音's answers to the ⌥Space window (QuickAskTests)
+import fake_secrets  # noqa: E402  sudo and secret requests (SecretsTests)
 
 ACCESS_ID, ACCESS_SECRET = "ci-client", "ci-secret"
 USER, PASSWORD = "ci-user", "ci-pass"
@@ -589,7 +592,11 @@ class Handler(BaseHTTPRequestHandler):
         display_projection, raw rows otherwise."""
         with lock:
             rows = list(transcripts.setdefault(session_id, []))
-        reply = {"session_id": session_id, "running": False, "prompts": [], "message_count": len(rows)}
+        # this socket is attached to the chat now: its sudo and secret requests come here, and the
+        # ones still waiting come back with the reply, as Hermes's open_requests
+        fake_secrets.note_viewer(session_id, self)
+        reply = {"session_id": session_id, "running": False, "prompts": [], "message_count": len(rows),
+                 "open_requests": fake_secrets.open_for(session_id)}
         if params.get("omit_messages") is True:
             return {**reply, "messages": [], "messages_omitted": True}
         shown = [{k: v for k, v in row.items() if k != "row_kind"} for row in rows if row["row_kind"] == "message"]
@@ -627,6 +634,9 @@ class Handler(BaseHTTPRequestHandler):
             "code": 4001, "message": "invalid_params", "data": {"reason": "invalid_params", "fields": fields}}})
 
     def rpc(self, request):
+        if fake_secrets.settles(request):
+            # a window's answer to a sudo or secret request: no reply, and only its id is logged
+            return fake_secrets.settle(log, request)
         method, params, rid = request.get("method", ""), request.get("params") or {}, request.get("id")
         if method != "gateway.ping":
             log(f"  rpc {method} {json.dumps(fake_profiles.loggable(method, params), ensure_ascii=False)[:160]}")
@@ -717,6 +727,8 @@ class Handler(BaseHTTPRequestHandler):
             session_id, text = params.get("session_id"), params.get("text", "")
             if fake_quick.handles(text):
                 return fake_quick.answer(self, log, lock, transcripts, session_id, text)
+            if fake_secrets.handles(text):
+                return fake_secrets.answer(self, log, lock, transcripts, session_id, text)
             if "派一张卡" in text:
                 return self.hand_over(session_id, text)
             if "这周的作业" in text:

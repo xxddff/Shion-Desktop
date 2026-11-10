@@ -68,7 +68,7 @@ nonisolated enum GatewayError: LocalizedError {
 
 /// One WebSocket to the Hermes gateway (`/api/ws`), speaking the Canonical Gateway Protocol:
 /// JSON-RPC 2.0, one object per text frame. Requests get replies; `event` notifications go to
-/// `onEvent`; server requests Shion does not handle get a -32601 answer.
+/// `onEvent`; server requests go to `onRequest`, and the ones it does not take get a -32601 answer.
 @Observable
 final class Gateway {
     enum Phase: Equatable {
@@ -85,6 +85,12 @@ final class Gateway {
 
     /// (event type, session id, payload)
     @ObservationIgnored var onEvent: ((String, String?, JSONValue) -> Void)?
+    /// A server→client request (method, id, params): true when it was taken, to be answered with
+    /// `answer(_:_:)` (sudo and secret, AppStore+Secrets.swift).
+    @ObservationIgnored var onRequest: ((String, String, JSONValue) -> Bool)?
+    /// Counts the connections that came up. A server request is answered on the connection it came
+    /// on, or on one a resume found it waiting on.
+    private(set) var connection = 0
     /// Called after an automatic reconnect: attachments are per socket, so sessions must resume.
     @ObservationIgnored var onReconnect: (() -> Void)?
     /// Signs each dial: the session token, or a browser sign-in's access token. `true` asks for
@@ -151,6 +157,7 @@ final class Gateway {
             sessionAuthority = readyPayload["session_authority"]?.bool ?? false
             _ = try await call("client.capabilities", ["server_requests": true])
             guard attempt == self.attempt else { return }
+            connection += 1
             phase = .online
             wasOnline = true
             retries = 0
@@ -267,6 +274,15 @@ final class Gateway {
         }
     }
 
+    /// Answers a server→client request: a JSON-RPC response, which gets no reply. Throws when the
+    /// connection is down or the frame did not go out. The frame is not kept, retried or logged.
+    func answer(_ id: String, _ result: JSONValue) async throws {
+        guard let socket, phase == .online else { throw GatewayError.offline }
+        let frame: JSONValue = ["jsonrpc": "2.0", "id": .string(id), "result": result]
+        let text = try frame.serialized()
+        try await socket.send(.string(text))
+    }
+
     // MARK: receiving
 
     private func receive(on socket: URLSessionWebSocketTask) {
@@ -305,7 +321,9 @@ final class Gateway {
                     onEvent?(type, params["session_id"]?.string, payload)
                 }
             } else if let id = frame["id"] {
-                // sudo, secret and other server requests: not handled here yet, so say so at once
+                // sudo and secret wait for you (AppStore+Secrets.swift); the other server requests
+                // are not handled, so say so at once
+                if let key = id.string, onRequest?(method, key, frame["params"] ?? .null) == true { return }
                 send(["jsonrpc": "2.0", "id": id, "error": ["code": -32601, "message": .string("no handler for server request: \(method)")]])
             }
             return

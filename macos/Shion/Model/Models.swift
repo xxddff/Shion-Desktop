@@ -95,7 +95,7 @@ struct Card: Identifiable, Hashable {
 }
 
 enum AskKind {
-    case approval, clarify, takeover
+    case approval, clarify, takeover, secret
 }
 
 /// What answering an ask from the server needs: which session, which run of it.
@@ -137,6 +137,8 @@ struct ChatItem: Identifiable, Hashable {
     let at: Date
     var text = ""
     var cardId: String?
+    /// A password or a key asked for in this chat: the request its card shows (SecretRequest.swift).
+    var secretId: String?
     /// A card made in the chat (kanban_create): what it was made with, to find it on the board
     /// when the transcript does not say its id.
     var cardTitle: String?

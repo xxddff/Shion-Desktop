@@ -184,8 +184,46 @@ kanban:
 - **Bot Chat**：一个助手 = 一个 profile = 唯一一个标题为 `Bot Chat` 的会话。用 `session.list {title, include_hidden: true}` 按标题找，`profiles.list` 也直接给出 `canonical_session`。不存会话 id 指针。
 - **可靠提交**：客户端的 `input_id` 和服务端的 `admission_id` 分开，以回执为准（`prompt.receipt`、`prompt.resolve_unknown`）。
 - **审批、提问**：回复要对准 `prompt_id` 和 `execution_generation`；断线重连后用 `session.events.since` 恢复还没回答的请求。
+- **sudo 密码、技能的密钥**：不是事件，是服务器发来的 JSON-RPC 请求（`sudo`、`secret`），用响应回答，`request.cancel` 撤回，见「助手要密码和密钥时」。
 - **不在 canonical 里的**：看板走 `/api/plugins/kanban/*`，例行任务列表走 `/api/cron/jobs`（canonical 里只有 `cron.submit` 立即运行和 `cron.status`）。
 - **类型生成**：`apps/shared/src/gateway-contract.openrpc.json` 可以生成 Swift `Codable` 类型，不用手写。
+
+## 助手要密码和密钥时
+
+助手在一轮里有时要你给一样东西才能接着做：终端工具跑 `sudo` 要密码（比如 `sudo apt-get install -y ffmpeg`），或者一个技能缺它要的环境变量（比如 notion 技能的 `NOTION_API_KEY`）。Hermes 把这一步停下来，问挂在这个对话上的窗口。以前 Shion 一律回「不处理」（-32601），Hermes 当成拒绝，那一步直接失败。现在：
+
+- **卡片**：那个助手的对话里出现一张卡片，排在那次工具调用后面；「等你确认」里是同一张，侧栏、今天的「需要你」、菜单栏和 Dock 的件数都算它。卡片写着谁要、拿去做什么（工具名和那条命令；或者技能名、Hermes 的提示文字和去哪拿），要的是环境变量时写出变量名，让你知道交出去的是什么。下面一个密码框，「提交」「拒绝」，右上角是还剩多久。今天和 ⌥Space 小窗里只有一行：「填写」打开那张卡所在的对话，「拒绝」直接拒绝。
+- **同时来好几个**：每个一张卡，答一个不影响别的。Hermes 的并行工具调用会同时问。
+- **结束了**：提交、拒绝、过期，或者别的窗口先答了，输入框收起来，卡片写「已提交」「已拒绝」「已过期」「在别处回答了」，离开「等你确认」，通知也撤掉。Hermes 等 2 分钟；这一轮结束了（停止、出错）也算过期。
+- **通知**：对话和「等你确认」都不在眼前时，发一条只写「课程 要一个密码」或「课程 要一个密钥」的通知，没有按钮，不能在通知里填（通知里的输入框是明文的），点了打开 Shion 的「等你确认」。
+- **断线**：卡片留着，先不能提交；重连后 `session.resume` 的 `open_requests` 里还有它，就又能填，没有了就算过期。Shion 没开着时来的、还在等的，连上后也从 `open_requests` 出现（这种不知道还剩多久，不显示倒计时）。
+
+Shion 绝对不做的：
+- **不留**：你填的值不显示、不打印、不记日志，也不存：不进 last-data.json，不进偏好设置（UserDefaults），不进钥匙串，不写进这台 Mac 上的任何文件。它只在卡片的输入框里，提交时交给连接，输入框随即清空，Shion 不留那个字符串。
+- **不进对话**：答完，对话里只有「已提交」。
+- **只发一次，只发给这台服务器**：经发来请求的那条连接发回去，不重试；没发出去就写明为什么，要你再填一次。断线重连后，要等 resume 确认它还在等，才能在新连接上答。
+- **截图和辅助功能里也没有**：密码框（`NSSecureTextField`）在屏幕上、截图里、辅助功能读到的值里都只有圆点。
+- **不接自动填充**：密码框不设 content type，系统「密码」App 不替你填，也不会在你填完后提出保存。这是服务器上的 sudo 密码和第三方服务的密钥，不是这台 Mac 上哪个网站的登录：自动填充按网站对应，Shion 没有对应的网站，能填进来的多半不对；提出保存的话又会把它存进钥匙串。存在「密码」App 里的，复制过来粘贴。
+- **不替你回答别的**：只处理 `sudo` 和 `secret`；别的 server request（批量的 `clarify`、vault 系列、`display.install.sudo` 等）照旧回 -32601，Hermes 当成没答。
+
+**线上的样子**，按 hermes-agent `b3746e35`（2026-11-09）的源码核对：
+
+| | |
+| --- | --- |
+| 形状 | server→client 的 JSON-RPC **请求**（`tui_gateway/contracts/server_requests.py`）。没有 `sudo.request` 事件、`sudo.respond` 方法和 `sudo.expire` 事件：那是官方桌面端和 TUI 收到请求后自己内部用的名字（`tui_gateway/server_requests.py` 开头写明：no paired `*.request` notification / `*.respond` method, no per-kind `*.expire`） |
+| 谁收到 | 挂在这个对话上的窗口（`gateway/session_server_requests.py`），而且只在窗口自己开的对话里（`local_viewer_turn`：`session.create` 建的会话是 LOCAL 平台）；一个窗口都没挂着时不发，当成没答。Telegram 这类平台上的对话没有这一步 |
+| sudo | `{"jsonrpc": "2.0", "id": "srq-<12 位十六进制>", "method": "sudo", "params": {"session_id": …, "command": …}}`：`command` 是原来的命令，服务器先脱敏（`_redact_approval_command`）。工具名不在里面，Shion 用这个对话上一次 `tool.start` 的名字 |
+| secret | `"method": "secret"`，`params`：`session_id`、`env_var`（变量名）、`prompt`（技能写的提示，没写是 `Enter value for <变量名>`）、`metadata`：`skill_name`，可能还有 `help`（去哪拿，常是网址）、`required_for`（`tools/skills_tool_setup.py`） |
+| 回答 | 同一个 WebSocket 上回 JSON-RPC 响应 `{"jsonrpc": "2.0", "id": "srq-…", "result": {"value": "…"}}`，服务器不回复它（`gateway/session_controls.py` 的 `dispatch`）。只有挂在这个对话上、有 `session:respond` 权限的连接答得了（`may_settle`）；断线后还没重新 resume 就答的，服务器只按 id 记一笔，然后丢掉 |
+| 拒绝 | `"value": ""`。回 error 响应也一样当成空 |
+| 多久 | sudo 和 secret 都等 120 秒（`gateway/session_sudo_prompt.py` 的 `SUDO_TIMEOUT_S`、`gateway/session_secret_prompt.py` 的 `SECRET_TIMEOUT_S`）。请求里不带这个数，Shion 从收到时算起；这一轮被打断也就不等了 |
+| 撤回 | 事件 `request.cancel {id, method, reason}`，发给这个对话上的所有窗口：`reason` 是 `timeout`、`interrupted`；有窗口答了是 `resolved` |
+| 重连 | `session.resume`（和 `session.events.since`）的回复里有 `open_requests: [{id, method, params}]`，还在等的请求原样再给一遍 |
+
+**Hermes 拿到之后**（同一个提交）：
+- sudo 密码经 `sudo -S -p ''` 的标准输入交给那条命令，不上命令行（`tools/terminal_tool_sudo.py`）；在 gateway 进程的内存里按对话记住，这次对话里下次 sudo 不再问，sudo 说密码不对就忘掉；不写盘。
+- 密钥写进那个 profile 的 `.env`（`save_env_value_secure`），模型拿到的工具结果里只有变量名（`missing_names`、`setup_skipped`）。
+- 所以**对话记录里没有这个值**：工具调用是模型写的原命令，结果是命令的输出或变量名；服务器自己的日志里只有请求的 id（`gateway/session_server_requests.py`：Values are never published, journaled or logged）。没核实的：技能自己的代码拿到环境变量以后会不会把它打出来，那是那个技能的事。
 
 ## 连接远端：Cloudflare Tunnel + Access
 
@@ -404,8 +442,8 @@ prototype/      UI 原型（Vite + React + TypeScript，示例数据）
   src/views/    今天、待办、日程、日报、等你确认、Bot Chat
 macos/          macOS App（SwiftUI + AppKit，最低 macOS 27），project.yml 由 XcodeGen 生成工程
   Shion/        App：Model（数据和示例数据）、Support（启动参数、格式、配色）、Views（各页面）
-  ShionUITests/ 截图测试（每个页面浅色、深色各一张），浏览器登录、看板、助手管理、⌥Space 小窗的端到端测试
-  ci/           CI 上替身用的假 Hermes（fake_hermes.py，看板 fake_kanban.py，profile fake_profiles.py，小窗的回复 fake_quick.py，只用标准库）
+  ShionUITests/ 截图测试（每个页面浅色、深色各一张），浏览器登录、看板、助手管理、⌥Space 小窗、助手要密码和密钥的端到端测试
+  ci/           CI 上替身用的假 Hermes（fake_hermes.py，看板 fake_kanban.py，profile fake_profiles.py，小窗的回复 fake_quick.py，sudo 和 secret 请求 fake_secrets.py，只用标准库）
 .github/workflows/macos.yml   在 macOS 27 runner 上编译、截图、跑登录测试
 hermes-plugin/  Hermes 的 shion 插件（服务器端）：待办、今天的汇总、日报、应用记录、专注检查；接口见 hermes-plugin/README.md
 .github/workflows/hermes-plugin.yml   在 ubuntu runner 上跑插件的 pytest
@@ -458,6 +496,7 @@ open Shion.xcodeproj
 - **助手**：设置（⌘,）的「助手」一栏选谁当总秘书、哪些助手在 Shion 里不显示（Hermes 自己的默认 profile 删不掉，不用就不显示），按服务器地址存在这台 Mac 上；没选过时名叫 `shion` 的 profile 当总秘书，没有就是默认 profile。总秘书决定今天页那段话、专注检查发给谁、shion 插件在哪个 profile 里调用；「跟…说」的按钮、今天页的输入框、⌥Space 的小窗、⌘K 和菜单栏都用总秘书的名字和头像。换成没装插件的助手，今天、待办和日报回到示例数据。这台 Mac 第一次见到一个助手时，照 Bot Mode 的 `ui_meta['hermes-bots'].hidden` 决定显示不显示，之后以这台 Mac 的选择为准。「新建助手…」（那一栏，或侧栏右键）经 `profiles.create` 建 profile：名字、显示名、简介、SOUL、模型，可以复制一个现有的；不复制时 Hermes 把服务器自己的密钥和模型给它。每个助手有自己的设置页（侧栏右键「助手设置…」，或对话页顶部的按钮）：显示名（写进 `ui_meta`，和 Bot Mode 同一处）、头像（Bot Mode 的颜色和形状，写回 `ui_meta` 前比对版本号；图片经 `profiles.set_asset`；侧栏和对话里都用它）、简介、SOUL、模型、MCP 服务器（添加、编辑网址、命令、参数和登录方式、删除、开关、测试、OAuth 登录、从目录安装，要先下载的条目在后台装完会自己出现）、技能（开关、锁定）、工具，还有危险命令的审批方式、记忆、每轮步数上限；最下面删除这个助手（默认 profile 和总秘书除外）。删除时 Hermes 没能当场清掉这个名字的会话和路由记录（`settlement_pending`）的话，设置里列在「还在清理」，同名的新建先拦住；Shion 连着服务器时经 `cli.exec` 重试 Hermes 给的 `hermes profile purge-identity`，成功了自动放行。每个请求都写明是哪个 profile：路径里带名字，或者 `?profile=`；Shion 从不调 `POST /api/profiles/active`。删除、替换 SOUL、服务器提醒要确认的模型都先问你。MCP 的令牌和环境变量用密码框输入，只发一次，Shion 不显示、不保存，也不从服务器取回（不调 `/api/env/reveal`；编辑时只合并改了的项，新的令牌和值经 `mcp.servers.set_api_key` 存进那个 profile 的 .env，config.yaml 里只留引用）。
 - **快捷键**：在任何 App 里按 ⌥Space 跟总秘书说一句话，回复在小窗里流式显示，⌘O 打开完整对话，Esc 收起；主窗口里 ⌘1…⌘7 切页面，⌘K 快速跳转（页面、助手、待办标题），都列在「前往」菜单里；全局快捷键在「设置 → 快捷键」里改。见「快捷呼出」。
 - **连接方式**照官方桌面端连远端的做法：`wss://<地址>/api/ws?token=<登录凭证或会话令牌>`，不带子协议，每个请求带 Cloudflare Access 的两个头；连上后等 `gateway.ready`、发 `client.capabilities`，按服务器要求每 15 秒 `gateway.ping`；连上过又断了会自动重连，并重新打开刚才的对话。登录凭证被拒时先续一次再试，续不上才算登录过期。
+- **助手要密码或密钥时**：终端要 sudo 密码、技能要密钥时，对话里和「等你确认」里出现一张卡片，填了只经这条连接发一次，Shion 不留；见「助手要密码和密钥时」。
 
 ### 原生 App 的界面检查
 
@@ -467,6 +506,7 @@ open Shion.xcodeproj
 - **浏览器登录、看板、助手和小窗的端到端测试**：runner 上没有真的 Cloudflare 和 Hermes，`macos/ci/fake_hermes.py` 两个都演：Access 按严格 service token 认证来（带 token 的请求只看 token、不发 cookie，错的 token 直接 403；不带 token 的浏览器转去另一个域名上的 Access 登录页，登录后靠 cookie 放行）；登录页自己填用户名密码提交；检查 PKCE、回调地址和 state；发登录凭证；`/api/ws` 说 JSON-RPC。替身还照 Hermes 的接口检查参数：`session.resume`、`session.transcript`、`session.create`、`prompt.submit` 不认识的键一律 `invalid_params`，`source` 和 `client` 也照规则查。`SignInTests` 在设置里填好地址，点「用浏览器登录…」，等登录完、连上、助手列表换成服务器的；先到「等你确认」：没打开过的课程的对话发来一个批准，点「允许这一次」，替身记下回答；再看今天、待办、日报是不是插件里的（替身里的插件在 `macos/ci/fake_shion.py`）：勾掉一条待办，等课程经插件加的那条推过来；再打开詩音的对话（135 行，先只来最近 50 行；照 Hermes 的样子，压缩行和存它的那条消息共用 `row_id`，工具行没有 `row_id`），发一句、等回复，往上滑到第一条，看压缩行、第一条都在，后面那轮的两次工具调用折成了一行；打开通勤的对话（新建）；最后看设置里的看板上限是不是服务器的值。每一步截一张（`signin-*.png`）。替身还演看板插件（`macos/ci/fake_kanban.py`：两块看板，`/workflow` 的移动规则、400 和 409 的拒绝、做完后把子卡升到就绪、`/events` 的 WebSocket，调了 `/dispatch` 会在记录里标出来）；`BoardTests` 登录后打开看板，看服务器的卡和每种「在等什么」，点开卡住的卡看评论和运行记录，留一条言（替身记下作者，要显示成「你」）并让它继续，把一张卡拖到「完成」（拖不动就用右键菜单），新建一张；再到詩音的对话里说「派一张卡」，替身照 Hermes 的样子演她调 `kanban_create`（开始时带参数，结束时结果里有卡的编号），几秒后课程做完，替身发看板的通知行，再让詩音接着说一句：对话里要先出现那张卡，再变成「完成」，通知行也显示成卡；在设置里断开再连上，对话从服务器重新读一遍（对话记录只留调用、不留结果），两张卡都还在、都是「完成」；然后换到另一块看板，再看今天页的「助手在做」列出两块看板上在做的卡；最后回到詩音的对话说「列一下这周的作业」，替身照 Hermes 的样子演一轮：三次工具调用（中间隔一会儿，跑着的时候能看到），再一段一段地回一张表：表格的格子要单独显示出来（不是带竖线的原文），回复完成后三次调用折成一行，点开能看到每一条（`board-*.png`）。替身还演 profile 这一套（`macos/ci/fake_profiles.py`：`profiles.list`、`profiles.create`、`profiles.configure` 照 Hermes 的参数检查和拒绝方式，`ui_meta` 按版本号比对，贵的模型要确认；`/api/profiles`、SOUL、简介、`/api/mcp/*`、`/api/skills`、`/api/tools/toolsets`、`/api/config?profile=`；`mcp.servers.add` / `remove` / `set_api_key`、`profiles.get_asset` / `set_asset`、`/api/actions/{name}/status`、只演 `hermes profile purge-identity` 的 `cli.exec`；`/api/config` 照 Hermes 的 `_deep_merge` 合并 `mcp_servers`；删默认 profile 照 Hermes 返回 400；shion 插件只装在詩音的 profile 里；几个专门的情形：归档（archive-ci）在 Bot Mode 里是隐藏的，通勤有头像图片，删 mail-ci 时身份记录没清完、第四次重试才成功，目录里的 slow-ci 在后台安装，通勤的 SOUL 在第二次读的时候已经被别的客户端改过；比 Hermes 严的一处：按 profile 的接口不带 `?profile=` 直接拒绝）；`BotsTests` 登录后看归档一开始就不显示，把总秘书换成课程（今天页回到示例数据，输入框和「跟…说」都改成课程）再换回詩音，看默认 profile 的设置页上删不了，在设置里把它设成不显示，从侧栏右键新建一个助手，改它的简介和 SOUL（替换前要确认），加一个 MCP 服务器并测试，关掉一个技能，重新打开这一页看这些都从服务器读回来了，删掉它，再看设置里列着「还在清理」、同名的新建被拦住，等 Shion 的重试成功后自动放行（`bots-*.png`）；`BotPageTests` 走一遍通勤的设置页：SOUL 被别处改过时先问再覆盖，换一个要确认的贵模型，选头像的颜色和形状，加一个 MCP 服务器、改网址加令牌、再改成 OAuth、关掉、删掉，从目录装一个马上装好的和一个后台装的（装完自己出现），开一个工具集，改「其他」里的四项，锁一个技能，最后重新打开这一页看都从服务器读回来了（`page-*.png`）。`QuickAskTests` 登录后先把访达切到前台，在访达里按 ⌥Space（只有系统的全局快捷键做得到，「前往」菜单里那份只在 Shion 在前台时有用），看小窗出来、再按一次收起；再回到 Shion 按 ⌥Space（到不了小窗时改用「前往」菜单），说「小窗：明天几点出门？」，替身（`macos/ci/fake_quick.py`）照 Hermes 的样子一段一段地回「收到：…」，每 0.6 秒三个字：小窗里要先看到光标、后看到整句；点「打开完整对话」，小窗收起，主窗口打开詩音的对话，这一问一答都在；再按 ⌥Space，小窗是空的，Esc 收起（`quick-*.png`）。设置窗口记得上次停在哪个标签，下次启动也从那里开，所以测试切了标签要切回来：截图测试看完「快捷键」回到「服务器」；`BotsTests` 停在「助手」，排在它后面的 `BotPageTests` 和 `QuickAskTests` 登录前自己点「服务器」。每个测试各用一个新起的替身，课程的批准、它加的待办这类只发一次的事不会被前一个测试用掉，`BotsTests`、`BotPageTests` 改过的 profile 也不会留给别的测试。替身的请求记录（`fake_hermes-SignInTests.log`、`fake_hermes-BoardTests.log`、`fake_hermes-BotsTests.log`、`fake_hermes-BotPageTests.log`、`fake_hermes-QuickAskTests.log`，密钥只记名字）也在附件里。用 OAuth 登录 MCP 服务器要开浏览器，CI 上没测。这一步失败只报警告，截图和安装包照样出。
 - **截图模式**：日期固定在 2026 年 11 月 9 日（周一）10:52，外观对整个 App 生效（菜单栏面板也跟着变），呼吸点不动。动画停下来 App 才算空闲，XCTest 不用干等，一次运行从 4.3 分钟降到 2.3 分钟。
 - **runner 的屏幕**：1024×768、1 倍，所以窗口截出来是 1024×674，比默认窗口小，正好看窄窗口下的布局。
+- **密码和密钥**：`SecretsTests` 也用自己新起的替身（`macos/ci/fake_secrets.py`：照 Hermes 发 `sudo`、`secret` 请求，收响应，发 `request.cancel`，resume 时给 `open_requests`）。登录后打开通勤的对话说「装 ffmpeg（CI）」，替身照并行的工具调用同时要 sudo 密码和 `NOTION_API_KEY`：两张卡都在对话里、都有倒计时，「等你确认」里也有；在「等你确认」里填密码、提交（密码框的值只有圆点），替身核对是不是 SecretsTests 填的那个，记录里只写来了一个值、对不对，不写值也不写长度，那条命令随后成功；回到对话，密钥那张卡还在等，点「拒绝」；再说「会过期（CI）」，这次替身只等 8 秒（Hermes 是 120 秒），卡片变成「已过期」、输入框收起（`secrets-*.png`）。接着一步在替身的记录、App 的偏好设置和 Application Support 里找这个密码，找到了，或者同一个请求答了两次，这次运行就失败。截图另有 `SecretScreenshotTests`：示例数据里课程要 sudo 密码（一张已过期、一张在等）和 `NOTION_API_KEY`，截课程的对话、「等你确认」和今天，浅色、深色（`secrets-chat-*`、`secrets-confirm-*`、`secrets-today-*`）；替身的记录是 `fake_hermes-SecretsTests.log`。
 - **看哪里**：截图打包成这次运行的 `shots` 附件（保留 14 天），文件名是「页面-外观.png」。编译失败时，最后一步会列出错误；编译警告（xcodebuild 的警告不会自己变成注解）由「Compiler warnings」一步列成这次运行的注解，所以一次运行没有注解，就是没有警告。端到端测试失败时，那一步从结果包里打出失败的断言和消息（`-quiet` 不打）；XCTest 在找不到元素时存的界面层级（「App UI hierarchy」）也在附件里，同名的按新旧编号，不互相覆盖。
 - **省时间**：macOS runner 的分钟数有限，攒够一批改动再推；只改 README 这类文件不会触发。
 

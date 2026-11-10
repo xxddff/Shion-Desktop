@@ -47,6 +47,8 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+            SecretSettings()
+
             Section {
                 if let limits = store.boardLimits {
                     LabeledContent("整台服务器同时进行") {

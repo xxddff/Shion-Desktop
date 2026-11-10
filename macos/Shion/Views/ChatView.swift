@@ -14,7 +14,7 @@ struct ChatView: View {
 
     var body: some View {
         let bot = store.bot(botId)
-        let items = store.chats[botId] ?? []
+        let items = store.withSecretCards(store.chats[botId] ?? [], of: botId)
         let lines = ChatLine.lines(items, replying: store.replying.contains(botId))
         ScrollViewReader { reader in
             transcript(lines, bot: bot)
@@ -158,7 +158,10 @@ struct ChatRow: View {
                 .foregroundStyle(.tertiary)
                 .frame(maxWidth: .infinity)
         case .card:
-            if let found = store.chatCard(item) {
+            if let secretId = item.secretId {
+                // a password or a key the assistant asked for (SecretCard.swift)
+                SecretCard(requestId: secretId)
+            } else if let found = store.chatCard(item) {
                 CardChip(card: found.card, showsStatus: found.known)
             } else if !item.text.isEmpty {
                 // the board's notice about a card it no longer lists
