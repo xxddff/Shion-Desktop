@@ -73,9 +73,19 @@ struct ChatView: View {
                         // heights, followed for a moment after a message, or a run opening
                         .onScrollGeometryChange(for: EndGap.self) { geometry in
                             EndGap(below: geometry.contentSize.height - geometry.visibleRect.maxY,
-                                   height: geometry.contentSize.height)
+                                   height: geometry.contentSize.height,
+                                   top: geometry.contentOffset.y + geometry.contentInsets.top,
+                                   container: geometry.containerSize.height)
                         } action: { old, new in
-                            if new.height == old.height {
+                            // not the reader either: the visible part changed size (the window,
+                            // or the page set up again by its host, as a split view with an
+                            // inspector does as the page opens), or what shows went back to the
+                            // top in one go from the end. Followed, it goes back to the end
+                            let moved = abs(new.container - old.container) > 1
+                                || (old.below <= 40 && new.top <= 1 && old.top - new.top > 100)
+                            if follow.on, moved {
+                                toEnd(lines, with: reader)
+                            } else if new.height == old.height {
                                 follow.on = new.below <= 40
                             } else if follow.on, Date() < follow.until, new.below > 1, let last = lines.last {
                                 reader.scrollTo(last.id, anchor: .bottom)
@@ -168,9 +178,13 @@ struct ChatView: View {
             // a short chat sits at the bottom of a full-height page, not on a short one
             .frame(maxWidth: .infinity, minHeight: viewport, alignment: .bottom)
         }
-        // no anchor: the content's top stays put as it grows or shrinks, and where it shows is
-        // only ever set above (to the newest message, after it, back to the row in view); a short
-        // chat sits at the bottom of the full-height frame
+        // anchored only where it starts: a scroll view set up again by its host (a split view with
+        // an inspector does that as the page opens, after the transcript went to its end) starts
+        // at its end too. Nothing else is anchored: the content's top stays put as it grows or
+        // shrinks, and where it shows is only ever set above (to the newest message, after it,
+        // back to the row in view, to a hit); a short chat sits at the bottom of the full-height
+        // frame
+        .defaultScrollAnchor(.bottom, for: .initialOffset)
         .accessibilityIdentifier("transcript")
         // measured from the first layout on (a scroll geometry change only reports changes); the
         // size is already inside the toolbar and the composer
@@ -458,10 +472,13 @@ nonisolated extension EnvironmentValues {
     }
 }
 
-/// How far the content goes on below what shows, and how tall it is.
+/// How far the content goes on below what shows, how tall it is, how far down it what shows
+/// starts, and how tall what shows is.
 private nonisolated struct EndGap: Equatable {
     let below: CGFloat
     let height: CGFloat
+    let top: CGFloat
+    let container: CGFloat
 }
 
 /// The top of a paged transcript: a spinner while the next older page loads, or why it did not.
