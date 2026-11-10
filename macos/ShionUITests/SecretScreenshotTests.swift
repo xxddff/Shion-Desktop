@@ -100,14 +100,22 @@ final class SecretScreenshotTests: XCTestCase {
         }
     }
 
-    /// Scrolls the window until `element` can be clicked: Form rows are there before they are in view.
+    /// Scrolls the window until `element` can be clicked (Form rows are there before they are in
+    /// view), then on the same way to the end: the section is the last one, so all of it shows.
     @MainActor
     private func reveal(_ element: XCUIElement, in window: XCUIElement) -> Bool {
         guard element.waitForExistence(timeout: 5) else { return false }
         let area = window.scrollViews.firstMatch.exists ? window.scrollViews.firstMatch : window
         for delta in [-300.0, 300.0] {
-            for _ in 0..<10 {
-                if element.isHittable { return true }
+            for step in 0..<10 {
+                if element.isHittable {
+                    // in view after scrolling this way: on to the end (none when it was in view already)
+                    for _ in 0..<(step > 0 ? 4 : 0) {
+                        area.scroll(byDeltaX: 0, deltaY: delta)
+                        Thread.sleep(forTimeInterval: 0.2)
+                    }
+                    return true
+                }
                 area.hover()
                 area.scroll(byDeltaX: 0, deltaY: delta)
                 Thread.sleep(forTimeInterval: 0.2)
