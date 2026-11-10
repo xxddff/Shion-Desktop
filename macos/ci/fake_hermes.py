@@ -51,6 +51,7 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import fake_control  # noqa: E402  stop, retry, a failed turn and the server check (ChatControlTests)
 import fake_kanban  # noqa: E402  the kanban plugin's routes (BoardTests)
 import fake_profiles  # noqa: E402  the profiles' routes and RPCs (BotsTests)
 import fake_media  # noqa: E402  pictures and files (MediaTests)
@@ -607,7 +608,8 @@ class Handler(BaseHTTPRequestHandler):
         display_projection, raw rows otherwise."""
         with lock:
             rows = list(transcripts.setdefault(session_id, []))
-        reply = {"session_id": session_id, "running": False, "prompts": [], "message_count": len(rows)}
+        reply = {"session_id": session_id, "running": False, "prompts": [], "message_count": len(rows),
+                 **fake_control.snapshot_fences(session_id)}
         if params.get("omit_messages") is True:
             return {**reply, "messages": [], "messages_omitted": True}
         shown = [{k: v for k, v in row.items() if k != "row_kind"} for row in rows if row["row_kind"] == "message"]
@@ -648,6 +650,10 @@ class Handler(BaseHTTPRequestHandler):
         method, params, rid = request.get("method", ""), request.get("params") or {}, request.get("id")
         if method != "gateway.ping":
             log(f"  rpc {method} {json.dumps(fake_profiles.loggable(method, params), ensure_ascii=False)[:160]}")
+        if method == "prompt.submit" and set(params) - SUBMIT_KEYS:
+            return self.refuse(rid, sorted(set(params) - SUBMIT_KEYS))
+        if fake_control.handles(method, params):
+            return fake_control.handle(self, method, params, rid)
         if method.startswith("plugin.shion."):
             if params.get("profile") and not fake_profiles.has_plugin(params["profile"], "shion"):
                 # the plugin is installed in 詩音's profile only: elsewhere Hermes knows no such method
@@ -729,6 +735,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"jsonrpc": "2.0", "id": rid, "result": {"accepted": True}})
             kind = "approval.settled" if method == "approval.respond" else "clarify.settled"
             self.event(kind, params.get("session_id"), {"prompt_id": params.get("prompt_id")})
+            if fake_quick.responded(self, log, lock, transcripts, params):
+                return  # the ⌥Space window's turn goes on
             self.event("session.info", params.get("session_id"), {"running": False})
             return
         elif method == "prompt.submit":
@@ -780,6 +788,7 @@ def main():
     fake_kanban.setup(log, valid_access)
     fake_profiles.setup(log, valid_access)
     fake_media.setup(log, valid_access, transcripts, lock)
+    fake_control.setup(log, transcripts, lock)
     server = Server(("127.0.0.1", args.port), Handler)
     log(f"stand-in Hermes on http://127.0.0.1:{args.port}")
     try:

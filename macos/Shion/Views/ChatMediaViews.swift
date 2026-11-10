@@ -24,7 +24,8 @@ struct UserMessage: View {
                     FileCard(media: file)
                 }
                 if !item.text.isEmpty || item.media.isEmpty {
-                    Text(item.text)
+                    // ⌘F marks what it finds in it (ChatControls.swift)
+                    FoundText(item.text)
                         .font(.t13)
                         .foregroundStyle(Palette.onAccent)
                         .textSelection(.enabled)

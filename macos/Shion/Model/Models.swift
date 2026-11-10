@@ -146,6 +146,10 @@ struct ChatItem: Identifiable, Hashable {
     var streaming = false
     /// The pictures and files you sent with the words (ChatMedia.swift).
     var media: [ChatMedia] = []
+    /// A reply you stopped: what had come before the stop.
+    var stopped = false
+    /// A turn Hermes ended with an error: this line says why (TurnFailure.swift).
+    var failure: TurnFailure?
 }
 
 enum ReportKind: String, CaseIterable, Identifiable {

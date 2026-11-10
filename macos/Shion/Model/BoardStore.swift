@@ -611,6 +611,7 @@ extension AppStore {
     }
 
     func moveCard(_ id: String, to key: String) {
+        guard !readOnly else { return }
         guard board.active else {
             guard let index = cards.firstIndex(where: { $0.id == id }) else { return }
             cards[index].status = CardStatus(key: key)
@@ -628,6 +629,7 @@ extension AppStore {
     }
 
     func createCard(title: String, body: String, assignee: String?) async throws -> String? {
+        guard !readOnly else { return nil }
         guard board.active else {
             let id = "demo-\(UUID().uuidString.prefix(8))"
             cards.append(Card(id: id, title: title, assignee: assignee ?? chiefId, status: .queued, line: "等下一轮派发", updatedAt: Date()))
@@ -653,7 +655,12 @@ extension AppStore {
     /// kanban_create call, not its result). `known` is false when the server has no such card
     /// (yet): the row's own title and assignee, without a status.
     func chatCard(_ item: ChatItem) -> (card: Card, known: Bool)? {
-        guard board.active else { return item.cardId.flatMap { card($0) }.map { (card: $0, known: true) } }
+        guard board.active else {
+            // the demo's cards, or the last data's: by id, else (a call read from the transcript) by title
+            let found = item.cardId.flatMap { card($0) }
+                ?? item.cardTitle.flatMap { title in cards.first { $0.title == title } }
+            return found.map { (card: $0, known: true) }
+        }
         let all = serverCards
         if let id = item.cardId, let found = all.first(where: { $0.id == id }) {
             return (card: found.card, known: true)

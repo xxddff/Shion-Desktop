@@ -11,19 +11,33 @@ struct ChatView: View {
     @State private var short = false
     /// Folded runs of tool calls opened by a click, by line id; not kept once the chat closes.
     @State private var openRuns: Set<String> = []
+    /// ⌘F (ChatControls.swift)
+    @State private var find = ChatFind()
 
     var body: some View {
         let bot = store.bot(botId)
         let items = store.chats[botId] ?? []
         let lines = ChatLine.lines(items, replying: store.replying.contains(botId))
+        let found = find.found(in: lines)
         ScrollViewReader { reader in
-            transcript(lines, bot: bot)
+            transcript(lines, bot: bot, found: found)
                 // older rows arrived above: the rows that were at the top stay where they were (a
                 // run of tool calls the page boundary cut is one line with the calls before it)
                 .onChange(of: items.first?.id) { previous, _ in
                     guard let previous, let line = lines.first(where: { line in line.items.contains { $0.id == previous } }) else { return }
                     reader.scrollTo(line.id, anchor: .top)
                 }
+                // the hit in view, its folded tool calls open
+                .onChange(of: found.focus) { _, line in
+                    guard let line else { return }
+                    if line.hasPrefix("tools-") {
+                        openRuns.insert(line)
+                    }
+                    reader.scrollTo(line, anchor: .center)
+                }
+        }
+        .overlay(alignment: .top) {
+            ChatFindBar(find: find, found: found, botId: botId)
         }
         .overlay {
             if let error = store.chatErrors[botId] {
@@ -41,12 +55,14 @@ struct ChatView: View {
         .safeAreaInset(edge: .bottom) {
             // with what is about to go: pictures and files (AttachmentViews.swift)
             ComposerBar(botId: botId) {
-                Composer(placeholder: "跟\(bot?.name ?? "")说…", text: $draft, canSend: store.canSend(botId, draft)) {
+                Composer(placeholder: "跟\(bot?.name ?? "")说…", text: $draft, canSend: store.canSend(botId, draft), send: {
                     if store.sendMessage(draft, to: botId) {
                         draft = ""
                     }
-                }
+                }, stop: store.turnRunning(botId) ? { store.stopReply(botId) } : nil,
+                   stopping: store.control.stopping.contains(botId))
             }
+            .disabled(store.readOnly)
             .frame(maxWidth: 720)
             .padding(.horizontal, 40)
             .padding(.bottom, 16)
@@ -56,24 +72,32 @@ struct ChatView: View {
         .environment(\.chatBotId, botId)
         .navigationTitle(bot?.name ?? "")
         .navigationSubtitle(bot?.title ?? "")
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                FindButton(find: find)
+            }
+        }
     }
 
     /// The rows, newest at the bottom. Older pages load as the top comes into view.
-    private func transcript(_ lines: [ChatLine], bot: Bot?) -> some View {
+    private func transcript(_ lines: [ChatLine], bot: Bot?, found: Found) -> some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 14) {
                 if store.olderPages[botId] != nil || store.olderErrors[botId] != nil {
                     OlderMessages(botId: botId)
                 }
                 ForEach(Array(lines.enumerated()), id: \.element.id) { index, line in
-                    switch line {
-                    case .item(let item):
-                        ChatRow(item: item, bot: bot, showHead: showsHead(lines, index))
-                    case .tools(let id, let tools):
-                        ToolRun(tools: tools, open: openRuns.contains(id)) {
-                            openRuns.formSymmetricDifference([id])
+                    Group {
+                        switch line {
+                        case .item(let item):
+                            ChatRow(item: item, bot: bot, showHead: showsHead(lines, index))
+                        case .tools(let id, let tools):
+                            ToolRun(tools: tools, open: openRuns.contains(id)) {
+                                openRuns.formSymmetricDifference([id])
+                            }
                         }
                     }
+                    .environment(\.findMarks, found.marks(line))
                 }
             }
             .padding(.horizontal, 40)
@@ -160,16 +184,13 @@ struct ChatRow: View {
     var body: some View {
         switch item.role {
         case .system:
-            Text(item.text)
-                .font(.t12)
-                .foregroundStyle(.tertiary)
-                .frame(maxWidth: .infinity)
+            TurnNote(item: item, botId: bot?.id ?? "")
         case .card:
             if let found = store.chatCard(item) {
                 CardChip(card: found.card, showsStatus: found.known)
             } else if !item.text.isEmpty {
                 // the board's notice about a card it no longer lists
-                Text(item.text)
+                FoundText(item.text)
                     .font(.t12)
                     .foregroundStyle(.tertiary)
                     .frame(maxWidth: .infinity)
@@ -190,10 +211,14 @@ struct ToolLine: View {
     let text: String
 
     var body: some View {
-        Label(text, systemImage: "wrench.adjustable")
-            .font(.t12)
-            .foregroundStyle(.secondary)
-            .lineLimit(2)
+        Label {
+            FoundText(text)
+        } icon: {
+            Image(systemName: "wrench.adjustable")
+        }
+        .font(.t12)
+        .foregroundStyle(.secondary)
+        .lineLimit(2)
     }
 }
 
@@ -262,6 +287,7 @@ struct AssistantMessage: View {
                     DeliveredMedia(media: reply.media)
                 }
             }
+            ReplyFooter(item: item, botId: bot?.id ?? "")
             if !todos.isEmpty {
                 VStack(spacing: 0) {
                     ForEach(todos) { todo in
@@ -282,6 +308,9 @@ struct Composer: View {
     /// Whether it can send now; nil: once there are words.
     var canSend: Bool?
     let send: () -> Void
+    /// While a turn runs: the stop button (⌘.) in place of send.
+    var stop: (() -> Void)?
+    var stopping = false
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 10) {
@@ -292,16 +321,20 @@ struct Composer: View {
                 .onSubmit(send)
                 .padding(.vertical, 7)
                 .accessibilityIdentifier("composer")
-            Button(action: send) {
-                Image(systemName: "arrow.up")
-                    .font(.system(size: 13, weight: .bold))
-                    .frame(width: 18, height: 18)
+            if let stop {
+                StopButton(stopping: stopping, action: stop)
+            } else {
+                Button(action: send) {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 13, weight: .bold))
+                        .frame(width: 18, height: 18)
+                }
+                .buttonStyle(.glassProminent)
+                .buttonBorderShape(.circle)
+                .disabled(!(canSend ?? !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
+                .accessibilityLabel("发送")
+                .accessibilityIdentifier("send")
             }
-            .buttonStyle(.glassProminent)
-            .buttonBorderShape(.circle)
-            .disabled(!(canSend ?? !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
-            .accessibilityLabel("发送")
-            .accessibilityIdentifier("send")
         }
         .padding(.leading, 16)
         .padding(.trailing, 6)
