@@ -72,8 +72,8 @@ final class ExtrasScreenshotTests: XCTestCase {
             // is taller than the runner's window)
             if bringIntoView(element("usage-total", in: window), in: window, atTop: true) {
                 let kinds = element("usage-categories", in: window)
-                XCTAssertTrue((kinds.value as? String)?.contains("学习 2 小时 31 分") == true,
-                              "the demo's kinds: \(String(describing: kinds.value))")
+                let said = [kinds.label, kinds.value as? String ?? ""].joined(separator: " ")
+                XCTAssertTrue(said.contains("学习 2 小时 31 分"), "the demo's kinds: \(said)")
                 Thread.sleep(forTimeInterval: 0.5)
                 keep(window.screenshot(), "reports-usage-\(appearance)")
             } else {

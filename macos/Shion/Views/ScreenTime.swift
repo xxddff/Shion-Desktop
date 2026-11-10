@@ -173,36 +173,40 @@ struct UsageChart: View {
 
     private func bars(_ rows: [Row], named name: String, identifier: String) -> some View {
         let longest = Double(rows.map(\.seconds).max() ?? 0) / 60
-        return Chart(rows) { row in
-            BarMark(
-                x: .value("分钟", Double(row.seconds) / 60),
-                y: .value("名称", row.id),
-                height: .fixed(10)
-            )
-            .foregroundStyle(Self.bar)
-            .cornerRadius(3)
-            // the name over the bar's start, the time at its end
-            .annotation(position: .top, alignment: .leading, spacing: 3) {
-                Text(row.label)
-                    .font(.t12)
-                    .lineLimit(1)
+        let said = rows.map { "\($0.label) \(UsageDay.duration($0.seconds))" }.joined(separator: "，")
+        // the chart in a stack: what is said of it goes on the stack, as the chart keeps its own
+        return VStack(spacing: 0) {
+            Chart(rows) { row in
+                BarMark(
+                    x: .value("分钟", Double(row.seconds) / 60),
+                    y: .value("名称", row.id),
+                    height: .fixed(10)
+                )
+                .foregroundStyle(Self.bar)
+                .cornerRadius(3)
+                // the name over the bar's start, the time at its end
+                .annotation(position: .top, alignment: .leading, spacing: 3) {
+                    Text(row.label)
+                        .font(.t12)
+                        .lineLimit(1)
+                }
+                .annotation(position: .trailing, alignment: .leading, spacing: 6) {
+                    Text(UsageDay.duration(row.seconds))
+                        .font(.t12)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
             }
-            .annotation(position: .trailing, alignment: .leading, spacing: 6) {
-                Text(UsageDay.duration(row.seconds))
-                    .font(.t12)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-            }
+            .chartXAxis(.hidden)
+            .chartYAxis(.hidden)
+            // room at the end of the longest bar for its time
+            .chartXScale(domain: 0...max(1, longest * 1.3))
+            .frame(height: CGFloat(rows.count) * Self.band)
         }
-        .chartXAxis(.hidden)
-        .chartYAxis(.hidden)
-        // room at the end of the longest bar for its time
-        .chartXScale(domain: 0...max(1, longest * 1.3))
-        .frame(height: CGFloat(rows.count) * Self.band)
         // one element for VoiceOver (and the tests): every row and its time
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(name)
-        .accessibilityValue(rows.map { "\($0.label) \(UsageDay.duration($0.seconds))" }.joined(separator: "，"))
+        .accessibilityLabel("\(name)：\(said)")
+        .accessibilityValue(said)
         .accessibilityIdentifier(identifier)
     }
 }

@@ -212,12 +212,14 @@ final class ExtrasTests: XCTestCase {
         _ = bringIntoView(total, in: window, atTop: true)
         let shown = [total.label, total.value as? String ?? ""].joined(separator: " ")
         XCTAssertTrue(shown.contains("3 小时 15 分"), "the day's total: \(shown)")
-        let kinds = element("usage-categories", in: app).value as? String ?? ""
+        let kindsElement = element("usage-categories", in: app)
+        let kinds = [kindsElement.label, kindsElement.value as? String ?? ""].joined(separator: " ")
         for kind in ["学习 1 小时 30 分", "未分类 1 小时", "娱乐 25 分", "社交 20 分", "工作 0 分", "生活 0 分", "其他 0 分"] {
             XCTAssertTrue(kinds.contains(kind), "\(kind) is not among the kinds: \(kinds)")
         }
-        let apps = element("usage-apps", in: app).value as? String ?? ""
-        XCTAssertTrue(apps.hasPrefix("Notion 1 小时 30 分，Safari 1 小时，LINE 20 分，Spotify 15 分，Steam 10 分"),
+        let appsElement = element("usage-apps", in: app)
+        let apps = [appsElement.label, appsElement.value as? String ?? ""].joined(separator: " ")
+        XCTAssertTrue(apps.contains("Notion 1 小时 30 分，Safari 1 小时，LINE 20 分，Spotify 15 分，Steam 10 分"),
                       "the apps used most: \(apps)")
         print("screen time: \(shown) | \(kinds) | \(apps)")
     }
