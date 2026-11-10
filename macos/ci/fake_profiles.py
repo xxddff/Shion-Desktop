@@ -110,14 +110,15 @@ def seed():
     shion["mcp"]["notion-ci"] = {"url": "https://mcp.notion.example/mcp", "auth": "oauth"}
     study = profile("study", "study", "课程", ui_meta={"hermes-bots": {"title": "课程（CI）", "color": "#4f8a5b"}},
                     revisions={"hermes-bots": 3})
-    # 通勤 has the shion plugin too, so LocalDataTests can make it 总秘书 (课程 has none, for BotsTests)
-    commute = profile("commute", "通勤（CI）", "通勤", plugins={"shion"})
+    commute = profile("commute", "通勤（CI）", "通勤")
     # Bot Mode hid this one: Shion starts it hidden the first time it sees it
     archive = profile("archive-ci", "archive-ci", "归档",
                       ui_meta={"hermes-bots": {"title": "归档（CI）", "hidden": True, "color": "#8b5cf6", "shape": "hexagon"}},
                       revisions={"hermes-bots": 1})
     # Hermes's own default profile (~/.hermes): it cannot be deleted
-    default = profile("default", "Hermes（CI）", default=True)
+    # Hermes's default profile has the shion plugin too, so LocalDataTests can make it 总秘书; 课程 and
+    # 通勤 have none (BotsTests makes 课程 总秘书 for the demo's 今天, ChatControlTests checks 通勤)
+    default = profile("default", "Hermes（CI）", default=True, plugins={"shion"})
     for p in (shion, study, commute, archive, default):
         profiles[p["name"]] = p
     assets["commute"] = "data:image/png;base64," + base64.b64encode(tile((79, 138, 91))).decode()

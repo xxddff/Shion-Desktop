@@ -9,7 +9,7 @@ import XCTest
 /// (and back) through `focus.report` without the plugin's line showing in her chat, that 回顾 writes
 /// the uploaded screen time into today's life report without the excluded app, that unticking a
 /// calendar takes its events away, and that the plugin wakes whoever is chosen 总秘书 on this Mac
-/// (its `chief_profile` follows: 通勤 has the plugin on the stand-in). A picture at each step
+/// (its `chief_profile` follows: Hermes's default profile has the plugin on the stand-in). A picture at each step
 /// (`local-*.png`).
 final class LocalDataTests: XCTestCase {
     private let server = "http://127.0.0.1:8765"
@@ -134,18 +134,18 @@ final class LocalDataTests: XCTestCase {
             XCTAssertTrue(waitForText("CI：线性代数", in: app, timeout: 2), "the ticked calendars' events went too")
         }
 
-        // 通勤 becomes 总秘书 in Settings → 助手: Shion sets the plugin's chief_profile in 通勤's
-        // profile, and the focus check says the plugin wakes 通勤; then back to 詩音
+        // Hermes's default profile becomes 总秘书 in Settings → 助手: Shion sets the plugin's
+        // chief_profile in that profile, and the focus check says the plugin wakes it; then back to 詩音
         guard let assistants = openSettings(app, tab: "助手", waitingFor: "chief-picker") else {
             keep(XCUIScreen.main.screenshot(), "local-10-no-assistants")
             return XCTFail("no 助手 tab in Settings")
         }
-        choose("通勤（CI）", in: "chief-picker", window: assistants, app: app)
+        choose("Hermes（CI）", in: "chief-picker", window: assistants, app: app)
         select("这台 Mac", in: assistants)
         let chief = element("focus-chief", in: assistants)
-        let commute = reveal(chief, in: assistants) && waitUntil(timeout: 10) { self.says(chief, "通勤（CI）") }
-        keep(assistants.screenshot(), "local-10-chief-commute")
-        XCTAssertTrue(commute, "the focus check does not say the plugin wakes 通勤: \(chief.label) / \(String(describing: chief.value))")
+        let other = reveal(chief, in: assistants) && waitUntil(timeout: 10) { self.says(chief, "Hermes（CI）") }
+        keep(assistants.screenshot(), "local-10-chief-default")
+        XCTAssertTrue(other, "the focus check does not say the plugin wakes Hermes（CI）: \(chief.label) / \(String(describing: chief.value))")
         select("助手", in: assistants)
         choose("詩音", in: "chief-picker", window: assistants, app: app)
         select("这台 Mac", in: assistants)
