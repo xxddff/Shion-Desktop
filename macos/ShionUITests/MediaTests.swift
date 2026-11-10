@@ -8,9 +8,9 @@ import XCTest
 /// photo that has a location and a camera in it and send it (the stand-in says what arrived);
 /// paste three files, a small one, one past the 2 MB at which Shion stages it on the Webapp, and
 /// one the stand-in refuses once, which a click sends again; ask for a screenshot (the stand-in
-/// clears it once Shion has read it); ask for files handed over with MEDIA:; save one; then
-/// disconnect, connect, and read the chat again from the server's transcript. A picture at each
-/// step (`media-*.png`).
+/// clears it once Shion has read it); ask for files handed over with MEDIA:; save one; show the
+/// web picture, which waited for the click; then disconnect, connect, and read the chat again
+/// from the server's transcript. A picture at each step (`media-*.png`).
 final class MediaTests: XCTestCase {
     private let server = "http://127.0.0.1:8765"
     /// The files the test pastes. The stand-in makes them (PASTED_FILES in ci/fake_media.py): this
@@ -114,6 +114,18 @@ final class MediaTests: XCTestCase {
         keep(window.screenshot(), "media-8-saved")
         XCTAssertTrue(saved, "the PDF was not saved: \(slides.label)")
 
+        // the web picture, now that it is asked for: W3C's logo, fetched from the web itself, so
+        // a runner without the web leaves it 图片没取到, which is noted rather than failed
+        element("show-web-picture", in: app).click()
+        let web = app.descendants(matching: .any).matching(identifier: "reply-picture")
+            .matching(NSPredicate(format: "label == %@", "网上找的示例图")).firstMatch
+        let fetched = waitUntil(timeout: 15) { web.exists && (web.value as? String) == "已显示" }
+        keep(window.screenshot(), "media-9-web-picture")
+        XCTAssertFalse(element("web-picture", in: app).exists, "the web picture still waits after the click")
+        if !fetched {
+            print("the web picture did not arrive: \(web.exists ? String(describing: web.value) : "gone")")
+        }
+
         // 5. read again from the server: the transcript has the pictures' notes and the files'
         // references, not the screenshot, which only the Mac has now
         app.typeKey(",", modifierFlags: .command)
@@ -131,10 +143,10 @@ final class MediaTests: XCTestCase {
         let transcript = element("transcript", in: app)
         let shotAgain = scrollUp(until: { self.value(of: "tool-shot", in: app) == "已显示" }, in: transcript,
                                  probe: card("第8回课件（CI）.pdf", in: app))
-        keep(window.screenshot(), "media-9-reread-screenshot")
+        keep(window.screenshot(), "media-10-reread-screenshot")
         let pictureAgain = scrollUp(until: { self.value(of: "sent-picture", in: app) == "已显示" }, in: transcript,
                                     probe: element("tool-shot", in: app))
-        keep(window.screenshot(), "media-10-reread-picture")
+        keep(window.screenshot(), "media-11-reread-picture")
         XCTAssertTrue(reread, "the chat did not read again")
         XCTAssertTrue(shotAgain, "the screenshot the server cleared is gone after reading again")
         XCTAssertTrue(pictureAgain, "the picture you sent does not show after reading again")

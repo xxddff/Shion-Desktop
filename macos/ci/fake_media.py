@@ -29,7 +29,8 @@ Turns, by the words sent:
     screenshot, the stand-in clears it, as Hermes's 24-hour sweep would, so later the chat can only
     show the Mac's copy
   - 「把课件发给我（CI）」: MEDIA: tags for a PDF and a picture, a path written in the words, and a web
-    picture, which must not be fetched without a click (any request for it would be logged here)
+    picture, W3C's logo (its old address redirects within w3.org): Shion fetches it from the web
+    itself, never through here, and only once it is clicked
 Stdlib only.
 """
 import base64
@@ -593,10 +594,10 @@ def screenshot_turn(conn, session_id, profile, text):
 
 def media_turn(conn, session_id, profile, text):
     """A reply handing files over as a desktop session's assistant is told to (MEDIA:<path>, a line
-    each), with a path written in passing and a web picture."""
+    each), with a path written in passing and a web picture (a real one: the test clicks it)."""
     slides, chart, data = seed(profile)
     reply = (f"第8回的课件和这周的延误图都在这里：\n\nMEDIA:{slides}\nMEDIA:{chart}\n\n"
-             f"原始数据我放在 {data} 了。\n\n![网上找的示例图](https://example.com/ci-sample.png)")
+             f"原始数据我放在 {data} 了。\n\n![网上找的示例图](https://www.w3.org/Icons/w3c_home.png)")
     store_turn(session_id, [{"role": "user", "text": text}, {"role": "assistant", "text": reply}])
     try:
         conn.event("message.start", session_id, {})

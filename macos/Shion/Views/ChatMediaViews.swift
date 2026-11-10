@@ -269,9 +269,13 @@ struct MediaPicture: View {
                 .accessibilityLabel(media.caption ?? "网上的图片")
                 .accessibilityValue("点了才显示")
                 .accessibilityIdentifier("web-picture")
-                Button("显示图片") { asked = true }
-                    .controlSize(.small)
-                    .accessibilityIdentifier("show-web-picture")
+                Button("显示图片") {
+                    // the grey block while it comes, not the button still
+                    load = nil
+                    asked = true
+                }
+                .controlSize(.small)
+                .accessibilityIdentifier("show-web-picture")
             }
             .frame(width: placeholder.width, height: placeholder.height)
             .background(Palette.fill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -283,7 +287,10 @@ struct MediaPicture: View {
             if !quietWhenGone {
                 block("图片没取到", value: "没取到")
                     .help(reason)
-                    .onTapGesture { attempt += 1 }
+                    .onTapGesture {
+                        load = nil
+                        attempt += 1
+                    }
             }
         case nil:
             block(nil, value: "加载中")
