@@ -16,6 +16,8 @@ import XCTest
 ///   writes that down) and lands there once signed in: the reply by the row Hermes stored it as,
 ///   the question still waiting, an older report read for it, a card on the other board. One
 ///   test each, after test2, whose turns they come back to.
+/// - The board's answers greyed out while the connection is down: a card's comment box on the
+///   board and its reply box in 等你确认, with the stand-in's socket dropped (fake_reconnect.py).
 /// A picture at each step (`extras-*.png`).
 final class ExtrasTests: XCTestCase {
     private let server = "http://127.0.0.1:8765"
@@ -207,7 +209,7 @@ final class ExtrasTests: XCTestCase {
         guard total.waitForExistence(timeout: 15) else {
             return XCTFail("no screen time under yesterday's report")
         }
-        _ = bringIntoView(element("usage-chart", in: app), in: window, atTop: true)
+        _ = bringIntoView(total, in: window, atTop: true)
         let shown = [total.label, total.value as? String ?? ""].joined(separator: " ")
         XCTAssertTrue(shown.contains("3 小时 15 分"), "the day's total: \(shown)")
         let kinds = element("usage-categories", in: app).value as? String ?? ""
@@ -233,6 +235,52 @@ final class ExtrasTests: XCTestCase {
             Thread.sleep(forTimeInterval: 0.5)
             keep(window.screenshot(), "extras-16-cold-card")
         }
+        app.terminate()
+    }
+
+    // MARK: 7. the connection down
+
+    /// 课程's card that waits on a code, opened on the board from 等你确认; then 詩音's reply cut
+    /// half way by a dropped socket (fake_reconnect.py's 断线：讲到一半, the tunnel down 8 s), sent
+    /// through the Shortcuts hook so the board stays in front. While 重新连接中…: the card's
+    /// comment box and 让它继续 are greyed out, and in 等你确认 its reply box, 回复 and 让它继续;
+    /// then the connection comes back.
+    @MainActor
+    func test7AnswersWhileDown() throws {
+        continueAfterFailure = true
+        let app = launch()
+        let window = app.windows.firstMatch
+        guard signIn(app, "extras-17") else { return }
+        element("nav-confirm", in: app).click()
+        let open = element("card-ask-open-t_grades", in: app)
+        guard open.waitForExistence(timeout: 20) else {
+            keep(window.screenshot(), "extras-17-no-card")
+            return XCTFail("no card waiting on a code in 等你确认")
+        }
+        open.click()
+        let comment = element("card-comment", in: app)
+        XCTAssertTrue(comment.waitForExistence(timeout: 15), "the card's detail has no comment box")
+        XCTAssertTrue(comment.isEnabled, "the card's comment box is greyed out while connected")
+
+        post("tell", id: "down", ["text": "断线：讲到一半"])
+        guard waitForText("重新连接中…", in: app, timeout: 15) else {
+            keep(window.screenshot(), "extras-18-not-down")
+            return XCTFail("the socket did not drop")
+        }
+        XCTAssertFalse(comment.isEnabled, "the card's comment box takes words while the connection is down")
+        XCTAssertFalse(element("card-comment-send", in: app).isEnabled, "the card's 让它继续 is not greyed out")
+        keep(window.screenshot(), "extras-18-card-down")
+        element("nav-confirm", in: app).click()
+        let reply = element("card-ask-reply-t_grades", in: app)
+        if reply.waitForExistence(timeout: 3) {
+            XCTAssertFalse(reply.isEnabled, "the reply box in 等你确认 takes words while the connection is down")
+            XCTAssertFalse(element("card-ask-resume-t_grades", in: app).isEnabled, "让它继续 in 等你确认 is not greyed out")
+            keep(window.screenshot(), "extras-19-confirm-down")
+        } else {
+            XCTFail("the card left 等你确认 while the connection was down")
+        }
+        XCTAssertTrue(waitUntil(timeout: 40) { self.text("重新连接中…", in: app) == nil }, "the connection did not come back")
+        XCTAssertTrue(waitUntil(timeout: 10) { reply.isEnabled }, "the reply box stayed grey once connected")
         app.terminate()
     }
 
@@ -336,15 +384,20 @@ final class ExtrasTests: XCTestCase {
 
     // MARK: Shortcuts actions
 
-    /// Runs an action as Shortcuts would (IntentHook.swift) and waits for what it said.
-    @MainActor
-    private func run(_ intent: String, id: String, _ extra: [String: String] = [:], timeout: TimeInterval = 15) -> [String: Any]? {
+    /// Asks the app to run an action as Shortcuts would (IntentHook.swift), without waiting for it.
+    private func post(_ intent: String, id: String, _ extra: [String: String] = [:]) {
         var request: [String: String] = ["id": id, "intent": intent]
         request.merge(extra) { _, new in new }
-        guard let json = try? JSONSerialization.data(withJSONObject: request) else { return nil }
+        guard let json = try? JSONSerialization.data(withJSONObject: request) else { return }
         DistributedNotificationCenter.default().postNotificationName(
             Notification.Name("dev.shion.test.intent"), object: String(decoding: json, as: UTF8.self), userInfo: nil,
             deliverImmediately: true)
+    }
+
+    /// Runs an action as Shortcuts would (IntentHook.swift) and waits for what it said.
+    @MainActor
+    private func run(_ intent: String, id: String, _ extra: [String: String] = [:], timeout: TimeInterval = 15) -> [String: Any]? {
+        post(intent, id: id, extra)
         var found: [String: Any]?
         _ = waitUntil(timeout: timeout) {
             found = self.intentResults().first { $0["id"] as? String == id }
