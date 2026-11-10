@@ -145,11 +145,15 @@ final class MediaTests: XCTestCase {
         element("bot-commute", in: app).click()
         let reread = card("第8回课件（CI）.pdf", in: app).waitForExistence(timeout: 20)
         let transcript = element("transcript", in: app)
+        // shown, then brought into view for its picture: a row can be there, and say so, off screen
+        let shot = element("tool-shot", in: app)
         let shotAgain = scrollUp(until: { self.value(of: "tool-shot", in: app) == "已显示" }, in: transcript,
                                  probe: card("第8回课件（CI）.pdf", in: app))
+        _ = bringIntoView(shot, in: transcript)
         keep(window.screenshot(), "media-10-reread-screenshot")
         let pictureAgain = scrollUp(until: { self.value(of: "sent-picture", in: app) == "已显示" }, in: transcript,
-                                    probe: element("tool-shot", in: app))
+                                    probe: shot)
+        _ = bringIntoView(element("sent-picture", in: app), in: transcript)
         keep(window.screenshot(), "media-11-reread-picture")
         XCTAssertTrue(reread, "the chat did not read again")
         XCTAssertTrue(shotAgain, "the screenshot the server cleared is gone after reading again")
