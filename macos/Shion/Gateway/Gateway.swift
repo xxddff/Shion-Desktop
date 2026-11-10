@@ -85,6 +85,9 @@ final class Gateway {
 
     /// (event type, session id, payload)
     @ObservationIgnored var onEvent: ((String, String?, JSONValue) -> Void)?
+    /// Every event's whole params, just before `onEvent`: Hermes stamps each frame of a turn with
+    /// its `execution_generation` there, beside the payload (AppStore+Control.swift keeps it).
+    @ObservationIgnored var onFrame: ((JSONValue) -> Void)?
     /// A server→client request (method, id, params): true when it was taken, to be answered with
     /// `answer(_:_:)` (sudo and secret, AppStore+Secrets.swift).
     @ObservationIgnored var onRequest: ((String, String, JSONValue) -> Bool)?
@@ -103,6 +106,8 @@ final class Gateway {
     @ObservationIgnored private var socket: URLSessionWebSocketTask?
     @ObservationIgnored private var nextId = 1
     @ObservationIgnored private var pending: [Int: CheckedContinuation<JSONValue, Error>] = [:]
+    /// Requests whose refusal is answered as `{"refusal": error}`, not thrown (`keepRefusal`).
+    @ObservationIgnored private var keepsRefusal: Set<Int> = []
     @ObservationIgnored private var ready: CheckedContinuation<JSONValue, Error>?
     @ObservationIgnored private var readyAttempt = 0
     @ObservationIgnored private var heartbeat: Task<Void, Never>?
@@ -238,12 +243,17 @@ final class Gateway {
 
     // MARK: requests
 
-    /// Sends a request and waits for its reply (30 s by default, as the Desktop does).
+    /// Sends a request and waits for its reply (30 s by default, as the Desktop does). With
+    /// `keepRefusal`, a refusal comes back as `{"refusal": <the error object>}` instead of being
+    /// thrown, for a caller that reads `error.data` (a revision conflict names the fresh revision).
     @discardableResult
-    func call(_ method: String, _ params: JSONValue = [:], timeout: Double = 30) async throws -> JSONValue {
+    func call(_ method: String, _ params: JSONValue = [:], timeout: Double = 30, keepRefusal: Bool = false) async throws -> JSONValue {
         guard let socket else { throw GatewayError.offline }
         let id = nextId
         nextId += 1
+        if keepRefusal {
+            keepsRefusal.insert(id)
+        }
         let frame: JSONValue = ["jsonrpc": "2.0", "id": .number(Double(id)), "method": .string(method), "params": params]
         let text = try frame.serialized()
         return try await withCheckedThrowingContinuation { continuation in
@@ -263,6 +273,7 @@ final class Gateway {
     }
 
     private func settle(_ id: Int, _ result: Result<JSONValue, Error>) {
+        keepsRefusal.remove(id)
         guard let continuation = pending.removeValue(forKey: id) else { return }
         continuation.resume(with: result)
     }
@@ -318,6 +329,7 @@ final class Gateway {
                 if type == "gateway.ready" {
                     resolveReady(.success(payload))
                 } else {
+                    onFrame?(params)
                     onEvent?(type, params["session_id"]?.string, payload)
                 }
             } else if let id = frame["id"] {
@@ -329,7 +341,9 @@ final class Gateway {
             return
         }
         guard let id = frame["id"]?.int else { return }
-        if let error = frame["error"] {
+        if let error = frame["error"], keepsRefusal.contains(id) {
+            settle(id, .success(["refusal": error]))
+        } else if let error = frame["error"] {
             settle(id, .failure(GatewayError.rpc(
                 code: error["code"]?.int ?? 0,
                 message: error["message"]?.string ?? "error",
@@ -399,6 +413,7 @@ final class Gateway {
         resolveReady(.failure(error))
         let waiting = pending
         pending = [:]
+        keepsRefusal = []
         for continuation in waiting.values {
             continuation.resume(throwing: error)
         }

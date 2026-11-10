@@ -21,6 +21,7 @@ struct TodosView: View {
                     Image(systemName: "plus").foregroundStyle(.secondary)
                     TextField("新待办", text: $draft)
                         .textFieldStyle(.plain)
+                        .disabled(store.readOnly)
                         .onSubmit {
                             store.addTodo(draft)
                             draft = ""
