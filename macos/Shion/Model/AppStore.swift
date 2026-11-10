@@ -50,6 +50,8 @@ final class AppStore {
     let board = BoardStore()
     /// The server's profiles, and who leads and who is hidden on this Mac (AppStore+Bots.swift).
     let roster = Roster(persist: !LaunchOptions.current.snapshot)
+    /// The chats' pictures and files (AppStore+Media.swift).
+    let media = MediaStore()
     /// Stopping and retrying turns (AppStore+Control.swift).
     let control = ChatControl()
     /// The server's data as it last was, for when it cannot be reached (AppStore+LastData.swift).
@@ -615,7 +617,7 @@ extension AppStore {
                              cardId: notice.taskId, cardAssignee: notice.assignee)
                 }
             }
-            return [ChatItem(id: id, role: .user, at: at, text: body)]
+            return [Self.userItem(id: id, at: at, text: body)]
         case "assistant":
             let body = text(of: row)
             // the row Hermes closes a failed turn with (AppStore+Control.swift)
@@ -759,6 +761,7 @@ extension AppStore {
                 append(ChatItem(id: id, role: .tool, at: Date(), text: toolLine(name, payload["context"]?.string ?? "")), to: botId)
             }
         case "tool.complete":
+            toolFinished(payload, botId: botId)
             // a kanban_create call's result names the card it made
             guard let call = payload["tool_id"]?.string, let made = madeCards.removeValue(forKey: call),
                   let cardId = Self.madeCardId(payload),

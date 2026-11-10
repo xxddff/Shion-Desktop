@@ -210,14 +210,15 @@ extension AppStore {
     /// The line 重试 goes under: how the chat's last turn ended (its reply, the line a stop or an
     /// error left), when that turn answers a message you typed (not the board's notice), nothing
     /// runs, and nothing you said came after it. Not after an error Hermes says trying again will
-    /// not mend (`error_surface.retryable` false).
+    /// not mend (`error_surface.retryable` false), nor for a message that took pictures, which
+    /// Hermes cannot replay (AppStore.retryable).
     func retryTarget(_ botId: String) -> String? {
         guard live, !readOnly, sessions[botId] != nil, !turnRunning(botId), !control.retrying.contains(botId),
               let items = chats[botId],
               let end = items.lastIndex(where: { Self.endsTurn($0) }),
               items[end].failure?.retryable ?? true,
               let prompt = items[..<end].lastIndex(where: { Self.startsTurn($0) }),
-              items[prompt].role == .user,
+              items[prompt].role == .user, Self.retryable(items[prompt]),
               !items[(end + 1)...].contains(where: { Self.startsTurn($0) })
         else { return nil }
         return items[end].id

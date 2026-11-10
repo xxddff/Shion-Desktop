@@ -38,7 +38,7 @@ extension AppStore {
         }
         while let sentence = sentences.first {
             let text = sentence.line(sentAt: Date())
-            chats[botId, default: []].append(ChatItem(id: sentence.id, role: .user, at: Date(), text: text))
+            chats[botId, default: []].append(Self.userItem(id: sentence.id, at: Date(), text: text))
             guard await submit(text, id: sentence.id, to: botId, sessionId: sessionId) else {
                 chats[botId]?.removeAll { $0.id == sentence.id }
                 return QuickAsk.shared.putBack(sentences)
@@ -54,7 +54,8 @@ extension AppStore {
     func say(_ text: String, to botId: String, sessionId: String) {
         let id = UUID().uuidString
         let written = Date()
-        chats[botId, default: []].append(ChatItem(id: id, role: .user, at: written, text: text))
+        // as the transcript will show it: words a retry sends again can start with their files' `@file:` lines
+        chats[botId, default: []].append(Self.userItem(id: id, at: written, text: text))
         Task {
             if await !submit(text, id: id, to: botId, sessionId: sessionId) {
                 requeue(id, text: text, at: written, to: botId)
@@ -116,7 +117,7 @@ extension AppStore {
         else { return }
         let written = Date()
         chats[botId]?.removeAll { $0.id == id }
-        chats[botId, default: []].append(ChatItem(id: id, role: .user, at: written, text: sent.text))
+        chats[botId, default: []].append(Self.userItem(id: id, at: written, text: sent.text))
         Task {
             if await !submit(sent.text, id: id, to: botId, sessionId: sessionId) {
                 requeue(id, text: sent.text, at: written, to: botId)
@@ -264,14 +265,16 @@ extension AppStore {
         let rows = (chats[botId] ?? []).filter { $0.role == .user && deliveries.state($0.id) == nil }
             .map { StoredUserRow(text: $0.text, at: $0.at) }
         for (id, sent) in doubtful {
-            if DeliveryCheck.arrived(id: id, text: sent.text, at: sent.at, seen: deliveries.seen, caughtUp: caughtUp,
+            // as a row shows it: a file's `@file:` line is not among its words
+            let row = Self.userItem(id: id, at: sent.at, text: sent.text)
+            if DeliveryCheck.arrived(id: id, text: row.text, at: sent.at, seen: deliveries.seen, caughtUp: caughtUp,
                                      pending: pending, rows: rows) {
                 deliveries.arrived(id)
             } else {
                 deliveries.set(id, .unsent(nil))
                 // a page read in its place: it goes back at the bottom
                 if chats[botId]?.contains(where: { $0.id == id }) != true {
-                    chats[botId, default: []].append(ChatItem(id: id, role: .user, at: sent.at, text: sent.text))
+                    chats[botId, default: []].append(row)
                 }
             }
         }

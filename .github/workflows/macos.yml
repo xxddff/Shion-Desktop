@@ -77,7 +77,7 @@ jobs:
       # Real Cloudflare Access and a real Hermes are not on the runner: the stand-in plays both,
       # checks what Shion sends (Access headers, PKCE, the loopback redirect, the bearer) and logs
       # each request. A failure here warns, and the screenshots and the package still go out.
-      - name: Sign-in, board and assistants against a stand-in Hermes
+      - name: Sign-in, board, assistants and media against a stand-in Hermes
         continue-on-error: true
         run: |
           set -o pipefail
@@ -85,7 +85,7 @@ jobs:
           # would otherwise go to whichever test connects first, and BotsTests and BotPageTests change
           # its profiles
           failed=""
-          for test in SignInTests BoardTests BotsTests BotPageTests QuickAskTests ChatControlTests ReconnectTests; do
+          for test in SignInTests BoardTests BotsTests BotPageTests QuickAskTests ChatControlTests MediaTests ReconnectTests; do
             python3 -u ci/fake_hermes.py --port 8765 > "build/fake_hermes-$test.log" 2>&1 &
             standin=$!
             for attempt in 1 2 3 4 5 6 7 8 9 10; do
@@ -113,7 +113,7 @@ jobs:
             wait "$standin" 2>/dev/null || true
           done
           if [ -n "$failed" ]; then
-            echo "::warning title=End to end::failed:$failed; see the signin-*, board-*, bots-*, page-*, quick-*, chatctl-* and reconnect-* screenshots and the fake_hermes-*.log files in the shots artifact"
+            echo "::warning title=End to end::failed:$failed; see the signin-*, board-*, bots-*, page-*, quick-*, chatctl-*, media-* and reconnect-* screenshots and the fake_hermes-*.log files in the shots artifact"
             exit 1
           fi
 
@@ -131,7 +131,7 @@ jobs:
         if: always()
         run: |
           mkdir -p build/shots
-          for bundle in Shots SignInTests BoardTests BotsTests BotPageTests QuickAskTests ChatControlTests ReconnectTests; do
+          for bundle in Shots SignInTests BoardTests BotsTests BotPageTests QuickAskTests ChatControlTests MediaTests ReconnectTests; do
             if [ -d "build/$bundle.xcresult" ]; then
               mkdir -p "build/export-$bundle"
               xcrun xcresulttool export attachments --path "build/$bundle.xcresult" --output-path "build/export-$bundle" \
@@ -144,7 +144,7 @@ jobs:
           out = 'build/shots'
           for folder in ('build/export-Shots', 'build/export-SignInTests', 'build/export-BoardTests', 'build/export-BotsTests',
                          'build/export-BotPageTests', 'build/export-QuickAskTests', 'build/export-ChatControlTests',
-                         'build/export-ReconnectTests'):
+                         'build/export-MediaTests', 'build/export-ReconnectTests'):
               manifest = os.path.join(folder, 'manifest.json')
               if not os.path.exists(manifest):
                   continue

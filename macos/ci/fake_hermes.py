@@ -25,6 +25,8 @@ hermes_cli/dashboard_auth and the Canonical Gateway Protocol:
   /api/profiles, /api/mcp/…,   the assistants' profiles: create, title, SOUL, model, MCP
   /api/skills, /api/tools/…,   servers, skills, toolsets, config, delete (fake_profiles.py, which
   /api/config?profile=         also answers profiles.list, profiles.create and profiles.configure)
+  /api/chat/*-upload, /api/fs/*  pictures and files: uploads, file.attach, read-data-url,
+                               download, and the turns that hand them over (fake_media.py)
   prompt.submit "小窗：…"       詩音's answer to the ⌥Space window, streamed slowly (fake_quick.py)
   prompt.submit "断线：…"       the socket drops at a chosen moment and the tunnel is down a few seconds;
                                session.events.since replays what was missed (fake_reconnect.py, which
@@ -55,6 +57,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fake_control  # noqa: E402  stop, retry, a failed turn and the server check (ChatControlTests)
 import fake_kanban  # noqa: E402  the kanban plugin's routes (BoardTests)
 import fake_profiles  # noqa: E402  the profiles' routes and RPCs (BotsTests)
+import fake_media  # noqa: E402  pictures and files (MediaTests)
 import fake_shion  # noqa: E402  the shion plugin's RPCs
 import fake_quick  # noqa: E402  詩音's answers to the ⌥Space window (QuickAskTests)
 import fake_reconnect  # noqa: E402  frames, replay and dropped sockets (ReconnectTests)
@@ -336,6 +339,16 @@ class Handler(BaseHTTPRequestHandler):
             return self.socket(query)
         if url.path.startswith(fake_kanban.PREFIX):
             return fake_kanban.route(self, "GET", url, query, {})
+        if url.path.startswith("/api/fs/"):
+            return fake_media.route(self, "GET", url, query)
+        self.answer(404, {"detail": "Not Found"})
+
+    def do_HEAD(self):
+        if not self.access():
+            return
+        url = urllib.parse.urlsplit(self.path)
+        if url.path.startswith("/api/fs/"):
+            return fake_media.route(self, "HEAD", url, dict(urllib.parse.parse_qsl(url.query)))
         self.answer(404, {"detail": "Not Found"})
 
     def do_POST(self):
@@ -344,6 +357,9 @@ class Handler(BaseHTTPRequestHandler):
         if not self.access():
             return
         url = urllib.parse.urlsplit(self.path)
+        if url.path in fake_media.POSTS:
+            # reads its own body: JSON with a picture, or multipart
+            return fake_media.route(self, "POST", url, dict(urllib.parse.parse_qsl(url.query)))
         body = self.body()
         if url.path == "/auth/password-login":
             return self.password_login(body)
@@ -424,6 +440,8 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.flush()
         log("  ws: open")
         self.close_connection = True
+        # sessions resumed or created on this connection: file.attach takes no others
+        self.subscribed = set()
         self.event("gateway.ready", None, {"session_authority": True, "heartbeat": True})
         try:
             while True:
@@ -517,14 +535,61 @@ class Handler(BaseHTTPRequestHandler):
         except OSError:
             pass
 
+    LATER_NOW = "好，过一会儿再说一句（CI）。"
+    LATER_REPLY = "又想起一件事（CI）：周四的实验课改到下午 3 点。"
+
+    def later(self, session_id, text):
+        """A reply now, and 8 seconds on another one nobody asked for, as when an assistant comes
+        back to a chat by itself (a cron job's delivery, a card done). BoardTests reads further up
+        the chat meanwhile, and the new message must not pull it down to the end."""
+        with lock:
+            rows = transcripts.setdefault(session_id, [])
+            rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "user", "text": text,
+                         "timestamp": time.time()})
+            rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "assistant",
+                         "text": self.LATER_NOW, "timestamp": time.time()})
+        self.event("message.start", session_id, {})
+        self.event("message.delta", session_id, {"text": self.LATER_NOW})
+        self.event("message.complete", session_id, {"text": self.LATER_NOW, "status": "complete"})
+        threading.Timer(8.0, self.later_turn, args=(session_id,)).start()
+
+    def later_turn(self, session_id):
+        with lock:
+            rows = transcripts.setdefault(session_id, [])
+            rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "assistant",
+                         "text": self.LATER_REPLY, "timestamp": time.time()})
+        log(f"  -> a message nobody asked for on {session_id}")
+        half = len(self.LATER_REPLY) // 2
+        try:
+            self.event("message.start", session_id, {})
+            self.event("message.delta", session_id, {"text": self.LATER_REPLY[:half]})
+            time.sleep(0.3)
+            self.event("message.delta", session_id, {"text": self.LATER_REPLY[half:]})
+            self.event("message.complete", session_id, {"text": self.LATER_REPLY, "status": "complete"})
+        except OSError:
+            pass
+
     HOMEWORK_CALLS = (("call-ci-hw-1", "web_search", "这周的作业（CI）"),
                       ("call-ci-hw-2", "read_file", "syllabus（CI）"),
                       ("call-ci-hw-3", "web_extract", "moodle.example（CI）"))
+    # a table that fits, then one wider than the reply, which scrolls on its own
     HOMEWORK_REPLY = ("这周要交的有两项：\n\n"
                       "| 作业 | 截止 | 进度 |\n"
                       "| :-- | :-: | --: |\n"
                       "| 实验报告（CI） | 周三 17:00（CI） | 50% |\n"
                       "| 作业5（CI） | 周五 23:59 | 0% |\n\n"
+                      "各门课这周的情况：\n\n"
+                      "| 课 | 这周讲了什么 | 要交的 | 要读的 | 下次课前 | 备注（CI） |\n"
+                      "| --- | --- | --- | --- | --- | --- |\n"
+                      "| 数据结构与算法 | 堆和优先队列：插入时上浮，删除最小值时下沉，建堆是 O(n) | 作业4：实现二叉堆，周五 23:59 前交 "
+                      "| 教科书第 6 章，重点是建堆那一节 | 把 push 和 pop 写完，先测空堆 | 最右这列的格子（CI） |\n"
+                      "| 机器学习基础 | 线性回归和梯度下降，学习率太大会发散 | 课前小测，今天 12:50 截止 | 讲义第 3 章 "
+                      "| 复习矩阵求导 | 小测可以带一张手写笔记 |\n\n"
+                      "作业4 先把这一行跑通：\n\n"
+                      "```python\n"
+                      "heap = BinaryHeap(key=lambda task: (task.due, -task.priority))  "
+                      "# 先比截止时间，同一时间再比优先级，都一样时按加进来的先后（CI）\n"
+                      "```\n\n"
                       "先写**实验报告**，周三前交。")
 
     def homework(self, session_id, text):
@@ -584,6 +649,12 @@ class Handler(BaseHTTPRequestHandler):
         with self.write_lock:
             self.wfile.write(bytes(head) + data)
             self.wfile.flush()
+
+    def send_late(self, value):
+        try:
+            self.send_json(value)
+        except OSError:
+            pass
 
     def send_json(self, value):
         self.send_frame(1, json.dumps(value, ensure_ascii=False).encode())
@@ -656,6 +727,8 @@ class Handler(BaseHTTPRequestHandler):
             return fake_shion.handle(self, log, method, params, rid)
         if fake_profiles.handles_rpc(method):
             return fake_profiles.rpc(self, method, params, rid)
+        if method == "file.attach":
+            return fake_media.attach(self, rid, params)
         result = None
         if method == "client.capabilities":
             result = {"server_requests": True}
@@ -685,6 +758,7 @@ class Handler(BaseHTTPRequestHandler):
             if unknown:
                 return self.refuse(rid, unknown)
             result = self.snapshot(params.get("session_id", ""), params)
+            self.subscribed.add(params.get("session_id", ""))
             if params.get("session_id") == "sess-study" and "sess-study" not in approvals_raised:
                 # 课程 wants a login on its cloud desktop, a moment after Shion attaches
                 approvals_raised.add("sess-study")
@@ -708,6 +782,7 @@ class Handler(BaseHTTPRequestHandler):
                 transcripts.setdefault(session_id, [{"row_id": 1, "row_kind": "message", "role": "assistant",
                                                      "text": "新的 Bot Chat。", "timestamp": time.time()}])
             result = self.snapshot(session_id, {})
+            self.subscribed.add(session_id)
         elif method == "session.transcript":
             unknown = sorted(set(params) - TRANSCRIPT_KEYS)
             if unknown:
@@ -715,6 +790,12 @@ class Handler(BaseHTTPRequestHandler):
             result, bad = self.transcript(params)
             if bad:
                 return self.refuse(rid, bad)
+            if params.get("cursor") is not None:
+                # an older page comes a moment after it is asked for, as over a real network: SignInTests
+                # reads where the rows in view are before it lands, and again after
+                reply = {"jsonrpc": "2.0", "id": rid, "result": result}
+                threading.Timer(1.5, self.send_late, args=(reply,)).start()
+                return
         elif method in ("approval.respond", "clarify.respond"):
             unknown = sorted(set(params) - RESPOND_KEYS)
             if unknown:
@@ -732,6 +813,9 @@ class Handler(BaseHTTPRequestHandler):
             unknown = sorted(set(params) - SUBMIT_KEYS)
             if unknown:
                 return self.refuse(rid, unknown)
+            # pictures, files and the turns that hand them over
+            if fake_media.submit(self, rid, params):
+                return
             # the admission receipt (fake_reconnect.py keeps the admission, for an exact retry)
             self.send_json({"jsonrpc": "2.0", "id": rid, "result": fake_reconnect.receipt(params)})
             session_id, text = params.get("session_id"), params.get("text", "")
@@ -741,6 +825,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.hand_over(session_id, text)
             if "这周的作业" in text:
                 return self.homework(session_id, text)
+            if "等一会儿再说" in text:
+                return self.later(session_id, text)
             with lock:
                 rows = transcripts.setdefault(session_id, [])
                 rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "user", "text": text,
@@ -774,6 +860,7 @@ def main():
     args = parser.parse_args()
     fake_kanban.setup(log, valid_access)
     fake_profiles.setup(log, valid_access)
+    fake_media.setup(log, valid_access, transcripts, lock)
     fake_control.setup(log, transcripts, lock)
     fake_reconnect.setup(log, transcripts, lock)
     server = Server(("127.0.0.1", args.port), Handler)

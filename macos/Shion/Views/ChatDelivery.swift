@@ -8,17 +8,17 @@ struct DeliveryMark: ViewModifier {
     @Environment(AppStore.self) private var store
     let item: ChatItem
     let botId: String
-    /// A sentence waiting for a connection (QuickAsk.waiting), written then.
-    var waiting: Date?
 
     @ViewBuilder
     func body(content: Content) -> some View {
         let state = item.role == .user ? store.deliveries.state(item.id) : nil
+        // a sentence waiting for a connection (QuickAsk.waiting), written then
+        let waiting = item.role == .user ? QuickAsk.shared.sentences(for: botId).first(where: { $0.id == item.id })?.at : nil
         if waiting != nil || (state != nil && state != .sending) {
             VStack(alignment: .trailing, spacing: 4) {
                 content
                     .opacity(0.55)
-                note(state)
+                note(state, waiting: waiting)
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
             .accessibilityElement(children: .contain)
@@ -28,7 +28,7 @@ struct DeliveryMark: ViewModifier {
         }
     }
 
-    private func note(_ state: Delivery?) -> some View {
+    private func note(_ state: Delivery?, waiting: Date?) -> some View {
         Group {
             if let waiting {
                 Label("\(QuickAskWaiting.written(waiting, now: clock)) 写的 · 等连上服务器后发出", systemImage: "clock")
@@ -64,17 +64,10 @@ struct DeliveryMark: ViewModifier {
     private var clock: Date { store.live || store.lastData.shown ? Date() : store.demoClock }
 }
 
-/// What waits in this chat for a connection, under what has been said, oldest first: it waits
-/// with the ⌥Space window's sentences (QuickAsk.swift).
-struct WaitingMessages: View {
-    let botId: String
-    let bot: Bot?
-
-    var body: some View {
-        ForEach(QuickAsk.shared.sentences(for: botId)) { sentence in
-            let item = ChatItem(id: sentence.id, role: .user, at: sentence.at, text: sentence.text)
-            ChatRow(item: item, bot: bot, showHead: false)
-                .modifier(DeliveryMark(item: item, botId: botId, waiting: sentence.at))
-        }
+/// What waits in this chat for a connection, as rows under what has been said, oldest first: it
+/// waits with the ⌥Space window's sentences (QuickAsk.swift), and DeliveryMark marks it waiting.
+enum WaitingMessages {
+    static func items(for botId: String) -> [ChatItem] {
+        QuickAsk.shared.sentences(for: botId).map { AppStore.userItem(id: $0.id, at: $0.at, text: $0.text) }
     }
 }
