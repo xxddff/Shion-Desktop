@@ -3,7 +3,7 @@ import XCTest
 
 /// The assistants against ci/fake_hermes.py (their routes are in ci/fake_profiles.py): sign in (归档,
 /// hidden in Bot Mode, starts hidden), make 课程 总秘书 (the shion plugin is only in 詩音's profile, so
-/// 今天 goes back to the demo; 今天's field and 「跟…说」 name 课程) and 詩音 again, see that Hermes's
+/// 今天 goes back to the demo; 今天's field, 「跟…说」 and 前往's item name 课程) and 詩音 again, see that Hermes's
 /// default profile cannot be deleted and hide it, make an assistant, change its description and SOUL,
 /// add an MCP server and test it, turn a skill off, read the page again from the server, delete the
 /// assistant, and see its name held back until the server has cleaned up after it. A picture at each
@@ -72,6 +72,11 @@ final class BotsTests: XCTestCase {
         XCTAssertTrue(asking("课程（CI）", in: app).waitForExistence(timeout: 5), "今天's field does not ask for 课程")
         element("nav-todos", in: app).click()
         XCTAssertTrue(waitForText("跟课程（CI）说", in: app, timeout: 5), "the toolbar's 「跟…说」 does not name 课程")
+        // and so does 前往's 「跟…说…」, a menu item rather than a view (kept going if not, to see the rest)
+        let studyItem = quickAskItem(in: app, "bots-3b-menu-study")
+        continueAfterFailure = true
+        XCTAssertEqual(studyItem, "跟课程（CI）说…", "前往's 「跟…说…」 does not name 课程")
+        continueAfterFailure = false
         element("nav-today", in: app).click()
 
         // Hermes's default profile has a page, but no way to delete it
@@ -95,6 +100,10 @@ final class BotsTests: XCTestCase {
         app.typeKey("w", modifierFlags: .command)
         let hidden = waitUntil(timeout: 10) { !self.element("bot-default", in: app).exists }
         XCTAssertTrue(hidden, "the hidden default profile is still in the sidebar")
+        let shionItem = quickAskItem(in: app, "bots-5b-menu-shion")
+        continueAfterFailure = true
+        XCTAssertEqual(shionItem, "跟詩音说…", "前往's 「跟…说…」 does not name 詩音 again")
+        continueAfterFailure = false
         element("nav-today", in: app).click()
         let pluginBack = waitForText("（CI）早上好", in: app, timeout: 15)
         keep(window.screenshot(), "bots-6-shion-again")
@@ -230,6 +239,18 @@ final class BotsTests: XCTestCase {
     @MainActor
     private func settingsWindow(_ app: XCUIApplication) -> XCUIElement {
         app.windows.matching(NSPredicate(format: "identifier CONTAINS[c] 'settings'")).firstMatch
+    }
+
+    /// The 前往 menu opened, its 「跟…说…」 as it reads there, and the menu closed again.
+    @MainActor
+    private func quickAskItem(in app: XCUIApplication, _ picture: String) -> String {
+        app.menuBars.menuBarItems["前往"].click()
+        let item = app.menuItems.matching(NSPredicate(format: "title BEGINSWITH %@ AND title ENDSWITH %@", "跟", "说…")).firstMatch
+        let title = item.waitForExistence(timeout: 3) ? item.title : "(none)"
+        keep(XCUIScreen.main.screenshot(), picture)
+        app.typeKey(.escape, modifierFlags: [])
+        print("前往 → \(title)")
+        return title
     }
 
     /// Settings, on its 助手 tab.

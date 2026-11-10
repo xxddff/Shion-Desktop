@@ -7,10 +7,10 @@ import SwiftUI
 /// `shion` plugin exists).
 @Observable
 final class AppStore {
-    /// The demo's pinned moment; with the server's own data or this Mac's calendars, `now` is the
-    /// real time, ticking every 30 seconds.
+    /// The demo's pinned moment; with the server's own data, the last of it, or this Mac's
+    /// calendars, `now` is the real time, ticking every 30 seconds.
     let demoClock: Date
-    var now: Date { pluginData || local.realTime ? local.clock : demoClock }
+    var now: Date { pluginData || lastData.shown || local.realTime ? local.clock : demoClock }
     /// This Mac's calendars, the focus check and the app usage record (AppStore+Local.swift).
     let local = LocalData.forLaunch()
     var route: Route? = LaunchOptions.current.route
@@ -50,6 +50,10 @@ final class AppStore {
     let board = BoardStore()
     /// The server's profiles, and who leads and who is hidden on this Mac (AppStore+Bots.swift).
     let roster = Roster(persist: !LaunchOptions.current.snapshot)
+    /// Stopping and retrying turns (AppStore+Control.swift).
+    let control = ChatControl()
+    /// The server's data as it last was, for when it cannot be reached (AppStore+LastData.swift).
+    let lastData = LastData()
     /// What `runtime.describe` says the server can do (`session-transcript-v1`, …).
     @ObservationIgnored var serverCapabilities: Set<String> = []
     /// Today, todos and reports come from the server's `shion` plugin (AppStore+Plugin.swift).
@@ -72,8 +76,8 @@ final class AppStore {
     @ObservationIgnored private var demoChats: [String: [ChatItem]] = [:]
     @ObservationIgnored private var demoAsks: [Ask] = []
     /// bot id → its Bot Chat's session id, and back
-    @ObservationIgnored private var sessions: [String: String] = [:]
-    @ObservationIgnored private var sessionBots: [String: String] = [:]
+    @ObservationIgnored private(set) var sessions: [String: String] = [:]
+    @ObservationIgnored private(set) var sessionBots: [String: String] = [:]
     /// bot id → the assistant message being streamed
     @ObservationIgnored private var streaming: [String: String] = [:]
 
@@ -98,6 +102,10 @@ final class AppStore {
             guard let self else { throw GatewayError.offline }
             return try await self.credential(for: settings, renew: renew)
         }
+        gateway.onFrame = { [weak self] params in
+            self?.noteFences(params)
+        }
+        startLastData()
         if !LaunchOptions.current.snapshot {
             Notifier.shared.start(self)
         }
@@ -147,6 +155,7 @@ final class AppStore {
     }
 
     func toggle(_ id: String) {
+        guard !readOnly else { return }
         if pluginData { return pluginToggle(id) }
         guard let index = todos.firstIndex(where: { $0.id == id }) else { return }
         todos[index].done.toggle()
@@ -154,6 +163,7 @@ final class AppStore {
     }
 
     func confirm(_ id: String) {
+        guard !readOnly else { return }
         if pluginData { return pluginConfirm(id) }
         guard let index = todos.firstIndex(where: { $0.id == id }) else { return }
         todos[index].proposed = false
@@ -161,12 +171,13 @@ final class AppStore {
 
     func addTodo(_ title: String) {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        guard !trimmed.isEmpty, !readOnly else { return }
         if pluginData { return pluginAdd(trimmed) }
         todos.append(Todo(id: UUID().uuidString, title: trimmed, area: .life, source: "你自己加的", doAt: now))
     }
 
     func answer(_ ask: Ask, with option: AskOption) {
+        guard !readOnly else { return }
         asks.removeAll { $0.id == ask.id }
         Notifier.shared.withdraw(ask.id)
         if let remote = ask.remote {
@@ -181,7 +192,7 @@ final class AppStore {
 
     func send(_ text: String, to botId: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        guard !trimmed.isEmpty, !readOnly else { return }
         guard live else {
             chats[botId, default: []].append(ChatItem(id: UUID().uuidString, role: .user, at: now, text: trimmed))
             return
@@ -190,12 +201,14 @@ final class AppStore {
             chatErrors[botId] = "对话还没打开"
             return
         }
-        chats[botId, default: []].append(ChatItem(id: UUID().uuidString, role: .user, at: Date(), text: trimmed))
+        // the submission id names the item: the turn's end says which row it was stored as
+        let id = UUID().uuidString
+        chats[botId, default: []].append(ChatItem(id: id, role: .user, at: Date(), text: trimmed))
         let params: JSONValue = [
             "profile": .string(botId),
             "session_id": .string(sessionId),
             "text": .string(trimmed),
-            "submission_id": .string(UUID().uuidString),
+            "submission_id": .string(id),
         ]
         Task {
             do {
@@ -229,11 +242,13 @@ extension AppStore {
         await describeRuntime()
         await loadProfiles()
         await loadPluginData()
-        // the plugin wakes the 总秘书 chosen on this Mac (AppStore+Local.swift)
-        await local.syncChief()
         await loadBoardLimits()
         board.start(serverSettings, credential: gateway.credential, author: signedInName)
+        settleLastData()
+        // the plugin wakes the 总秘书 chosen on this Mac (AppStore+Local.swift)
+        await local.syncChief()
         await attachAll()
+        await loadAttachedChats()
     }
 
     /// Attaches every assistant's existing Bot Chat, without its rows, so approvals, questions and
@@ -309,8 +324,10 @@ extension AppStore {
     }
 
     func disconnect() {
+        keepLastData()
         gateway.disconnect()
         leaveLive()
+        showLastData()
     }
 
     /// An assistant Shion stops following (hidden in Settings, or deleted): its Bot Chat's events,
@@ -488,6 +505,7 @@ extension AppStore {
 
     private func attach(_ botId: String, snapshot: JSONValue) {
         guard let sessionId = snapshot["session_id"]?.string else { return }
+        noteFences(snapshot)
         sessions[botId] = sessionId
         sessionBots[sessionId] = botId
         streaming[botId] = nil
@@ -629,7 +647,14 @@ extension AppStore {
             return [ChatItem(id: id, role: .user, at: at, text: body)]
         case "assistant":
             let body = text(of: row)
-            return body.isEmpty ? [] : [ChatItem(id: id, role: .assistant, at: at, text: body)]
+            // the row Hermes closes a failed turn with (AppStore+Control.swift)
+            if let failed = Self.failedTurn(row, id: id, at: at, body: body) { return [failed] }
+            // a reply you stopped: Hermes marks the row it kept (an empty one when nothing had come)
+            let stopped = row["display_metadata"]?["interrupted"]?.bool == true
+            guard !body.isEmpty else {
+                return stopped ? [ChatItem(id: id, role: .system, at: at, text: "已停止", stopped: true)] : []
+            }
+            return [ChatItem(id: id, role: .assistant, at: at, text: body, stopped: stopped)]
         case "tool":
             let name = row["name"]?.string ?? row["tool_name"]?.string ?? "tool"
             if let made = Self.madeCard(name, args: row["args"]) {
@@ -742,7 +767,11 @@ extension AppStore {
                     text = chats[botId]?.last(where: { $0.role == .assistant })?.text ?? ""
                 }
             }
-            notifyReply(botId, text)
+            if payload["status"]?.string == "error" {
+                notifyReply(botId, Self.failureLine(payload, streamed: ""))
+            } else if payload["status"]?.string != "interrupted" {
+                notifyReply(botId, text)
+            }
         case "tool.start":
             guard shown else { break }
             endReply(botId)
@@ -813,6 +842,14 @@ extension AppStore {
     }
 
     private func completeReply(_ botId: String, _ payload: JSONValue) {
+        // stopped: what had come stays (AppStore+Control.swift)
+        if payload["status"]?.string == "interrupted" {
+            return markStopped(botId, reply: streaming.removeValue(forKey: botId))
+        }
+        // failed: a line says why (AppStore+Control.swift)
+        if payload["status"]?.string == "error" {
+            return failReply(botId, payload, reply: streaming.removeValue(forKey: botId))
+        }
         let final = payload["text"]?.string ?? ""
         if let id = streaming[botId], let index = chats[botId]?.firstIndex(where: { $0.id == id }) {
             if !final.isEmpty {
@@ -822,9 +859,6 @@ extension AppStore {
             append(ChatItem(id: UUID().uuidString, role: .assistant, at: Date(), text: final), to: botId)
         }
         endReply(botId)
-        if payload["status"]?.string == "error" {
-            note("这一轮出错了：\(payload["error_surface"]?.string ?? "没有说明")", in: botId)
-        }
     }
 
     private func append(_ item: ChatItem, to botId: String) {

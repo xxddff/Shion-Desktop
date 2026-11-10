@@ -231,11 +231,12 @@ struct UsageSettings: View {
         }
     }
 
+    /// The last upload; while the window shows the last data (not connected), uploads wait.
     private var sent: String {
         let local = store.local
         if local.uploadFailed { return "没发出去，稍后再试" }
-        guard let at = local.lastUpload else { return store.pluginData ? "还没发过" : "连上服务器后发" }
-        return Fmt.hm(at)
+        guard let at = local.lastUpload else { return store.pluginData && !store.readOnly ? "还没发过" : "连上服务器后发" }
+        return store.readOnly ? "\(Fmt.hm(at))，连上服务器后接着发" : Fmt.hm(at)
     }
 
     static func duration(_ seconds: TimeInterval) -> String {

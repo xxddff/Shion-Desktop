@@ -55,14 +55,19 @@ extension AppStore: LocalHost {
 
     // MARK: what goes to the plugin
 
-    /// The plugin's todos are plans once their time comes (screenshot and test runs: the demo's).
+    /// The plugin's todos are plans once their time comes: the server's, or the last of them while
+    /// not connected (never the demo's, which stand in when the server had no plugin). Screenshot
+    /// and test runs: the demo's.
     var planTodos: [PlanTodo] {
-        guard pluginData || local.mode != .real else { return [] }
+        let real = pluginData || (lastData.shown && lastData.file?.todos != nil)
+        guard real || local.mode != .real else { return [] }
         return todos.map { PlanTodo(id: $0.id, title: $0.title, doAt: $0.doAt, done: $0.done, proposed: $0.proposed) }
     }
 
+    /// Reports and uploads go out only while connected to the plugin and showing the server's own
+    /// data, not the last of it (`readOnly`); meanwhile they wait, and go out once it is live.
     var pluginReady: Bool {
-        pluginData && gateway.phase == .online
+        pluginData && gateway.phase == .online && !readOnly
     }
 
     /// `plugin.shion.focus.report` in 总秘书's profile (the plugin's `chief_profile`), with that

@@ -27,7 +27,8 @@ struct SettingsView: View {
                 SecureField("Access Client Secret", text: $draft.accessClientSecret)
                     .accessibilityIdentifier("access-secret")
                 HStack(spacing: 8) {
-                    ConnectionState(phase: store.gateway.phase, live: store.live, count: store.bots.count, canonical: store.gateway.sessionAuthority)
+                    ConnectionState(phase: store.gateway.phase, live: store.live, count: store.bots.count, canonical: store.gateway.sessionAuthority,
+                                    lastDataAt: store.lastData.shown ? store.lastData.savedAt : nil)
                     Spacer()
                     if store.gateway.phase != .offline {
                         Button("断开") { store.disconnect() }
@@ -67,6 +68,8 @@ struct SettingsView: View {
                     .font(.t12)
                     .foregroundStyle(.secondary)
             }
+
+            LastDataSection()
         }
         .formStyle(.grouped)
         // tall enough for the server and the board at once
@@ -137,6 +140,8 @@ struct ConnectionState: View {
     let live: Bool
     let count: Int
     var canonical = true
+    /// Showing the last data (AppStore+LastData.swift): from when.
+    var lastDataAt: Date?
 
     var body: some View {
         HStack(spacing: 6) {
@@ -168,7 +173,9 @@ struct ConnectionState: View {
         case .online: return live ? "已连接 · \(count) 个助手" : "已连接"
         case .connecting: return "连接中…"
         case .failed(let reason): return reason
-        case .offline: return "未连接，现在是示例数据"
+        case .offline:
+            guard let lastDataAt else { return "未连接，现在是示例数据" }
+            return "未连接，现在是上次的数据（\(Fmt.when(lastDataAt, now: Date()))）"
         }
     }
 }

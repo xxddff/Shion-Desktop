@@ -393,8 +393,9 @@ def call(name, args, profile, heard=True):
         latest["age_minutes"] = int((datetime.now(TOKYO) - datetime.fromisoformat(latest["at"])).total_seconds() // 60)
         return {"latest": latest}, None
     if name == "info":
+        # no time zone database, as on a Debian 13 container without tzdata (Asia/Tokyo still works)
         return {"plugin_version": "ci", "schema_version": 1, "profile": "shion", "timezone": "Asia/Tokyo",
-                "today": str(today()), "revision": state["revision"]}, None
+                "today": str(today()), "revision": state["revision"], "tz_database": False}, None
     if name == "sync.state":
         return {"revision": state["revision"], "today": str(today()), "timezone": "Asia/Tokyo",
                 "topics": {"todos": state["revision"], "today": 1, "reports": 1, "usage": 1, "focus": 1}}, None
