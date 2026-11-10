@@ -136,6 +136,29 @@ final class ExtrasTests: XCTestCase {
         Thread.sleep(forTimeInterval: 0.5)
         keep(window.screenshot(), "extras-7-approval")
 
+        // 詩音 wants a sudo password and a key at once (fake_secrets.py's 装 ffmpeg（CI））: the
+        // password's notification, which has no buttons, opens 等你确认 with its card selected; then
+        // both are declined there, nothing typed
+        element("nav-today", in: app).click()
+        let sudo = "srq-00000000c101", key = "srq-00000000c102"
+        post("tell", id: "s1", ["text": "装 ffmpeg（CI）"])
+        XCTAssertTrue(waitUntil(timeout: 20) { self.note(sudo) != nil && self.note(key) != nil },
+                      "no notifications for the password and the key: \(noteList().map(\.id))")
+        click(sudo)
+        XCTAssertTrue(waitForTitle(window, "等你确认"), "the click did not open 等你确认: \(window.title)")
+        XCTAssertTrue(waitUntil(timeout: 10) { self.selected("ask-\(sudo)", in: app) }, "the password's card is not selected")
+        XCTAssertFalse(selected("ask-\(key)", in: app), "the key's card is selected too")
+        Thread.sleep(forTimeInterval: 0.5)
+        keep(window.screenshot(), "extras-7b-secret")
+        for id in [sudo, key] {
+            let deny = element("secret-deny-\(id)", in: app)
+            if deny.waitForExistence(timeout: 5) {
+                deny.click()
+            }
+            XCTAssertTrue(waitUntil(timeout: 10) { !app.secureTextFields["secret-field-\(id)"].exists },
+                          "\(id) still waits in 等你确认 after 拒绝")
+        }
+
         // 课程 writes today's life report: its notification opens it
         element("nav-today", in: app).click()
         _ = run("tell", id: "r1", ["text": "通知：写日报"], timeout: 20)

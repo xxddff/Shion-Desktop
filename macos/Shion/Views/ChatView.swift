@@ -95,11 +95,11 @@ struct ChatView: View {
                             settle(lines)
                         }
                         .environment(\.rowReveal, reveal)
-                        // the message a notification was about, from its top (Landing.swift); what
-                        // comes next is not followed down from there
+                        // the message a notification was about, from its top (Landing.swift), gone
+                        // to as a hit is (TranscriptPlace.land); what comes next is not followed down
                         .landing(botId, lines: lines) { line in
                             follow.on = false
-                            reader.scrollTo(line, anchor: .top)
+                            place.land(line)
                         }
                 }
             }
@@ -288,7 +288,9 @@ final class Follow {
 /// back; a hit that comes while a row is on its way back waits until that row is laid out where
 /// it was (or the scroll geometry has changed a few times without it). A hit gone to is looked
 /// for in the layouts after: not in view (going a long way through rows not laid out yet can land
-/// short), it is gone to again, three times at most. Not observed, so nothing redraws for it.
+/// short), it is gone to again, three times at most. A line asked for from outside the transcript
+/// (land: a notification's message) is gone to the same way, to the top of what shows rather than
+/// its middle, and is in view once its top is. Not observed, so nothing redraws for it.
 final class TranscriptPlace {
     var proxy: ScrollViewProxy?
     /// The transcript's visible height.
@@ -306,6 +308,8 @@ final class TranscriptPlace {
     private var queued: String?
     /// Gone to, not yet seen in view: the line, the scroll geometry changes since, and the tries.
     private var going: (id: String, changes: Int, tries: Int)?
+    /// The line last asked for from outside (land): gone to the top, in view by its top.
+    private var landing: String?
 
     private enum Restore {
         /// The row at the top of what showed, and its frame then.
@@ -365,13 +369,24 @@ final class TranscriptPlace {
         return hit
     }
 
+    /// From outside the transcript: a notification's message (Landing.swift), to the top of what
+    /// shows. Like a hit: after a row on its way back, and again while its top is not in view.
+    func land(_ id: String) {
+        landing = id
+        if restoring == nil {
+            go(id)
+        } else {
+            queued = id
+        }
+    }
+
     /// A row laid out.
     func laidOut(_ id: String, at frame: CGRect) {
         frames[id] = frame
         if let back = restoring, back.id == id, abs(frame.minY - back.y) <= 1 {
             restored()
         }
-        if let going, going.id == id, shows(frame) {
+        if let going, going.id == id, shows(id, frame) {
             self.going = nil
         }
     }
@@ -394,7 +409,7 @@ final class TranscriptPlace {
             }
         }
         guard var going else { return }
-        if let frame = frames[going.id], shows(frame) {
+        if let frame = frames[going.id], shows(going.id, frame) {
             self.going = nil
             return
         }
@@ -408,7 +423,7 @@ final class TranscriptPlace {
             return
         }
         self.going = (going.id, 0, going.tries + 1)
-        proxy?.scrollTo(going.id, anchor: .center)
+        proxy?.scrollTo(going.id, anchor: anchor(going.id))
     }
 
     private func put(_ restore: Restore, _ lines: [ChatLine]) {
@@ -439,12 +454,21 @@ final class TranscriptPlace {
     }
 
     private func go(_ id: String) {
+        if id != landing {
+            landing = nil
+        }
         going = (id, 0, 1)
-        proxy?.scrollTo(id, anchor: .center)
+        proxy?.scrollTo(id, anchor: anchor(id))
     }
 
-    private func shows(_ frame: CGRect) -> Bool {
-        frame.maxY > 0 && frame.minY < viewport
+    /// A hit to the middle of what shows; a line asked for from outside to the top.
+    private func anchor(_ id: String) -> UnitPoint {
+        id == landing ? .top : .center
+    }
+
+    /// In view: any of a hit; the top of a line asked for from outside.
+    private func shows(_ id: String, _ frame: CGRect) -> Bool {
+        id == landing ? frame.minY >= -1 && frame.minY < viewport : frame.maxY > 0 && frame.minY < viewport
     }
 
     /// The topmost row starting in what shows, and where it is; none starting there (a reply taller
