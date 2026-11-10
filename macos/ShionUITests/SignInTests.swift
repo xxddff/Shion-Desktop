@@ -150,7 +150,8 @@ final class SignInTests: XCTestCase {
             up = upward(wheel, watching: "第 124 条", in: app, positions: &positions)
             positions.append("after 课程 and back to 詩音: " + (up.map { "up is \($0)" } ?? "still does not move"))
         }
-        let direction = up ?? -1
+        // a positive delta scrolls back on the runner (BoardTests): that, when no nudge told
+        let direction = up ?? 1
         // to the first message a little at a time. An older page lands 1.5 s after it is asked for
         // (the stand-in's network): the rows are read before each wait and after it, and the row
         // at the top of what shows stays where it was as a page comes in above it
@@ -227,8 +228,10 @@ final class SignInTests: XCTestCase {
         app.terminate()
     }
 
-    /// Which sign of a wheel delta at `wheel` scrolls the chat back, from a nudge each way watching
-    /// the row `label`; nil when neither moves it. The numbers go in `positions`.
+    /// Which sign of a wheel delta at `wheel` scrolls the chat back, from nudges each way watching
+    /// the row `label`; nil when none moves it. The pointer goes there first: the first wheel turn
+    /// as it arrives does not reach the transcript (the CI recording shows it, and BoardTests'
+    /// first nudge of 40 did nothing where the second, of 80, moved). The numbers go in `positions`.
     @MainActor
     private func upward(_ wheel: XCUICoordinate, watching label: String, in app: XCUIApplication,
                         positions: inout [String]) -> CGFloat? {
@@ -236,14 +239,18 @@ final class SignInTests: XCTestCase {
             positions.append("wheel: no \(label) to watch")
             return nil
         }
-        for sign: CGFloat in [1, -1] {
-            let before = row.frame.minY
-            wheel.scroll(byDeltaX: 0, deltaY: sign * 40)
-            Thread.sleep(forTimeInterval: 0.5)
-            let after = row.exists ? row.frame.minY : -1
-            positions.append("wheel: \(sign * 40) moved \(label) from \(before) to \(after)")
-            if after > before + 1 {
-                return sign
+        wheel.hover()
+        Thread.sleep(forTimeInterval: 0.5)
+        for size: CGFloat in [40, 80] {
+            for sign: CGFloat in [1, -1] {
+                let before = row.exists ? row.frame.minY : -1
+                wheel.scroll(byDeltaX: 0, deltaY: sign * size)
+                Thread.sleep(forTimeInterval: 0.5)
+                let after = row.exists ? row.frame.minY : -1
+                positions.append("wheel: \(sign * size) moved \(label) from \(before) to \(after)")
+                if after > before + 1 {
+                    return sign
+                }
             }
         }
         return nil
