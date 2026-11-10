@@ -42,9 +42,9 @@ The scripted turns, in 詩音's chat, are sentences that start 「断线：」. 
 one moment, as a network does (no close frame); then for a few seconds (OUTAGE, unless said) the
 tunnel is down and every request gets Cloudflare's 502:
 
-  讲到一半   80 parts 0.3 s apart; the socket drops after the 5th and the tunnel stays down 8 s (time
-             to say something meanwhile); the reply is still going when Shion is back, so the rest
-             streams into the same bubble
+  讲到一半   80 parts 0.3 s apart; the socket drops after the 5th and the tunnel stays down 12 s (time
+             to say two things meanwhile: Shion's tries at 1, 3 and 7 s fail, the one at 15 s gets
+             back); the reply is still going then, so the rest streams into the same bubble
   讲完了     10 parts 0.2 s apart, dropped after the 3rd: the reply ends while the tunnel is down
   还没回执   admitted, then dropped before its receipt went out; the frames that follow are kept
   没收到     dropped before it was admitted, the first time its submission id comes; sent again with
@@ -465,7 +465,9 @@ def halfway(turn):
         time.sleep(0.3)
         say(turn, f"第{n}段。")
         if n == 5:
-            drop(turn["handler"], "half way through a reply", outage=8.0)
+            # long enough that the try at 7 s still fails, whatever a second's jitter: Shion is
+            # back at the try at 15 s, so the test has time to say two things meanwhile
+            drop(turn["handler"], "half way through a reply", outage=12.0)
     end(turn)
 
 

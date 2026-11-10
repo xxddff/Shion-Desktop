@@ -6,8 +6,9 @@ import XCTest
 /// in between, a prompt admitted once per submission id). Signs in as SignInTests does, then in
 /// 詩音's chat has the stand-in drop the socket at each moment that matters, and keep the tunnel
 /// down a few seconds after:
-/// 1. half way through a reply that goes on past the outage: the sidebar says 重新连接中… and when it
-///    tries again; two sentences said meanwhile wait under the chat, saying when they were written;
+/// 1. half way through a reply that goes on past the outage (12 s, so the tries at 1, 3 and 7 s
+///    fail): the sidebar says 重新连接中… and when it tries again; two sentences said meanwhile wait
+///    under the chat, saying when they were written;
 ///    once back, the rest of the reply streams into the same bubble, then the two go out, in order,
 ///    saying when they were written (the run counts them as written two hours before);
 /// 2. into a reply that ends while the tunnel is down: once back, the bubble has all of it, and
