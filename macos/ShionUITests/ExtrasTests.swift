@@ -12,9 +12,10 @@ import XCTest
 /// - Notifications are written down in a file instead of posted (`-ShionNotificationLog`) and
 ///   clicked with a distributed notification, as WorkTests answers them: a long reply opens its
 ///   chat at its top, a question and an approval are selected in 等你确认, a daily report opens.
-/// - Shion started by a click (`-ShionLaunchNotification`) lands there once signed in: the reply
-///   by the row Hermes stored it as, the question still waiting, an older report read for it, a
-///   card on the other board.
+/// - Shion started by a click (`-ShionLaunchNotification`) takes it once its window is up (it
+///   writes that down) and lands there once signed in: the reply by the row Hermes stored it as,
+///   the question still waiting, an older report read for it, a card on the other board. One
+///   test each, after test2, whose turns they come back to.
 /// A picture at each step (`extras-*.png`).
 final class ExtrasTests: XCTestCase {
     private let server = "http://127.0.0.1:8765"
@@ -145,65 +146,69 @@ final class ExtrasTests: XCTestCase {
         app.terminate()
     }
 
-    // MARK: 3. a click that starts Shion
+    // MARK: 3–6. a click that starts Shion
 
+    /// The reply, found by the row Hermes stored it as: the chat is read afresh, with the server's ids.
     @MainActor
-    func test3ClickStartsShion() throws {
+    func test3ColdReply() throws {
         continueAfterFailure = true
-
-        // the reply, found by the row Hermes stored it as: the chat is read afresh, with the server's ids
-        if let row = Self.longReplyRow ?? note("reply-shion")?.info["row"] {
-            let app = launch(clicked: ["bot": "shion", "row": row, "words": "（CI 长回复）第 1 段：这是一条很长的回复，点通知时要从这"])
-            let window = app.windows.firstMatch
-            if signIn(app, "extras-9") {
-                XCTAssertTrue(waitForTitle(window, "詩音"), "the click did not open 詩音's chat: \(window.title)")
-                checkAtTop(app, window, "extras-10-cold-reply")
-            }
-            app.terminate()
-        } else {
-            XCTFail("no row id for the long reply from test2")
+        guard let row = Self.longReplyRow ?? note("reply-shion")?.info["row"] else {
+            return XCTFail("no row id for the long reply from test2")
         }
-
-        // the question, still waiting: selected once 詩音's chat is attached again
-        do {
-            let app = launch(clicked: ["bot": "shion", "ask": "cl-ci-dinner"])
-            let window = app.windows.firstMatch
-            if signIn(app, "extras-11") {
-                XCTAssertTrue(waitForTitle(window, "等你确认"), "the click did not open 等你确认: \(window.title)")
-                XCTAssertTrue(waitUntil(timeout: 20) { self.selected("ask-cl-ci-dinner", in: app) }, "the question is not selected")
-                Thread.sleep(forTimeInterval: 0.5)
-                keep(window.screenshot(), "extras-12-cold-question")
-            }
-            app.terminate()
+        let app = launch(clicked: ["bot": "shion", "row": row, "words": "（CI 长回复）第 1 段：这是一条很长的回复，点通知时要从这"])
+        let window = app.windows.firstMatch
+        if tookClick(app, window, "詩音", "extras-9"), signIn(app, "extras-9") {
+            XCTAssertTrue(waitForTitle(window, "詩音"), "the click did not open 詩音's chat: \(window.title)")
+            checkAtTop(app, window, "extras-10-cold-reply")
         }
+        app.terminate()
+    }
 
-        // yesterday's report, no longer the newest of its kind: read for the click
-        do {
-            let yesterday = Self.tokyoDay(offset: -1)
-            let app = launch(clicked: ["report": "\(yesterday)-life", "date": yesterday, "kind": "life"])
-            let window = app.windows.firstMatch
-            if signIn(app, "extras-13") {
-                XCTAssertTrue(waitForTitle(window, "日报"), "the click did not open 日报: \(window.title)")
-                XCTAssertTrue(waitForText("CI 日报：昨天睡得早", in: app, timeout: 15), "yesterday's report is not shown")
-                XCTAssertFalse(waitForText("CI 今天的日报", in: app, timeout: 1), "today's report is shown instead")
-                keep(window.screenshot(), "extras-14-cold-report")
-            }
-            app.terminate()
+    /// The question, still waiting: selected once 詩音's chat is attached again.
+    @MainActor
+    func test4ColdQuestion() throws {
+        continueAfterFailure = true
+        let app = launch(clicked: ["bot": "shion", "ask": "cl-ci-dinner"])
+        let window = app.windows.firstMatch
+        if tookClick(app, window, "等你确认", "extras-11"), signIn(app, "extras-11") {
+            XCTAssertTrue(waitForTitle(window, "等你确认"), "the click did not open 等你确认: \(window.title)")
+            XCTAssertTrue(waitUntil(timeout: 20) { self.selected("ask-cl-ci-dinner", in: app) }, "the question is not selected")
+            Thread.sleep(forTimeInterval: 0.5)
+            keep(window.screenshot(), "extras-12-cold-question")
         }
+        app.terminate()
+    }
 
-        // a card on the other board: the board switches once it is read, and the card opens
-        do {
-            let app = launch(clicked: ["card": "t_receipt", "board": "side", "bot": "study"])
-            let window = app.windows.firstMatch
-            if signIn(app, "extras-15") {
-                XCTAssertTrue(waitForTitle(window, "看板"), "the click did not open 看板: \(window.title)")
-                XCTAssertTrue(waitForText("原件在「副业」文件夹里（CI）。", in: app, timeout: 20), "the card's detail did not open")
-                XCTAssertTrue(waitForText("看板 side", in: app, timeout: 5), "the detail is not the other board's card")
-                Thread.sleep(forTimeInterval: 0.5)
-                keep(window.screenshot(), "extras-16-cold-card")
-            }
-            app.terminate()
+    /// Yesterday's report, no longer the newest of its kind: read for the click.
+    @MainActor
+    func test5ColdReport() throws {
+        continueAfterFailure = true
+        let yesterday = Self.tokyoDay(offset: -1)
+        let app = launch(clicked: ["report": "\(yesterday)-life", "date": yesterday, "kind": "life"])
+        let window = app.windows.firstMatch
+        if tookClick(app, window, "日报", "extras-13"), signIn(app, "extras-13") {
+            XCTAssertTrue(waitForTitle(window, "日报"), "the click did not open 日报: \(window.title)")
+            XCTAssertTrue(waitForText("CI 日报：昨天睡得早", in: app, timeout: 15), "yesterday's report is not shown")
+            XCTAssertFalse(waitForText("CI 今天的日报", in: app, timeout: 1), "today's report is shown instead")
+            keep(window.screenshot(), "extras-14-cold-report")
         }
+        app.terminate()
+    }
+
+    /// A card on the other board: the board switches once it is read, and the card opens.
+    @MainActor
+    func test6ColdCard() throws {
+        continueAfterFailure = true
+        let app = launch(clicked: ["card": "t_receipt", "board": "side", "bot": "study"])
+        let window = app.windows.firstMatch
+        if tookClick(app, window, "看板", "extras-15"), signIn(app, "extras-15") {
+            XCTAssertTrue(waitForTitle(window, "看板"), "the click did not open 看板: \(window.title)")
+            XCTAssertTrue(waitForText("原件在「副业」文件夹里（CI）。", in: app, timeout: 20), "the card's detail did not open")
+            XCTAssertTrue(waitForText("看板 side", in: app, timeout: 5), "the detail is not the other board's card")
+            Thread.sleep(forTimeInterval: 0.5)
+            keep(window.screenshot(), "extras-16-cold-card")
+        }
+        app.terminate()
     }
 
     // MARK: steps
@@ -211,9 +216,7 @@ final class ExtrasTests: XCTestCase {
     @MainActor
     private func launch(clicked: [String: String]? = nil) -> XCUIApplication {
         try? FileManager.default.removeItem(atPath: results)
-        if clicked == nil {
-            try? FileManager.default.removeItem(atPath: notes)
-        }
+        try? FileManager.default.removeItem(atPath: notes)
         let app = XCUIApplication()
         app.launchArguments = [
             "-ShionSnapshot", "YES",
@@ -233,6 +236,25 @@ final class ExtrasTests: XCTestCase {
         app.launch()
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 20), "no window")
         return app
+    }
+
+    /// Started as a click would start it: the app took the click once its window was up (it
+    /// writes that down), and the page is the click's before anything is read from the server.
+    @MainActor
+    private func tookClick(_ app: XCUIApplication, _ window: XCUIElement, _ title: String, _ shot: String) -> Bool {
+        var taken: [String: Any]?
+        _ = waitUntil(timeout: 15) {
+            taken = self.logLines().first { $0["launched"] != nil }
+            return taken != nil
+        }
+        print("launch click: \(String(describing: taken))")
+        guard let taken, taken["launched"] is [String: Any] else {
+            keep(XCUIScreen.main.screenshot(), "\(shot)-no-click")
+            XCTFail("the app did not take the click it was started with: \(String(describing: taken))")
+            return false
+        }
+        XCTAssertTrue(waitForTitle(window, title), "the click did not open \(title) before signing in: \(window.title), route \(String(describing: taken["route"]))")
+        return true
     }
 
     /// Signs in as the other tests do; Settings opens on the tab it was last left on.
@@ -268,7 +290,10 @@ final class ExtrasTests: XCTestCase {
     @MainActor
     private func checkAtTop(_ app: XCUIApplication, _ window: XCUIElement, _ shot: String) {
         let transcript = element("transcript", in: app)
-        XCTAssertTrue(transcript.waitForExistence(timeout: 10), "no transcript")
+        guard transcript.waitForExistence(timeout: 10) else {
+            keep(window.screenshot(), shot)
+            return XCTFail("no transcript")
+        }
         let landed = waitUntil(timeout: 20) {
             guard let first = self.text(self.longFirst, in: app) else { return false }
             return self.inView(first, transcript)
@@ -315,7 +340,8 @@ final class ExtrasTests: XCTestCase {
     }
 
     /// The four actions and their phrases are in the app's App Intents metadata: built and
-    /// accepted by Xcode's extractor, which is what Shortcuts, Spotlight and Siri read.
+    /// accepted by Xcode's extractor, which is what Shortcuts, Spotlight and Siri read. (The
+    /// provider's type name is not written there; its phrases are.)
     private func checkMetadata() {
         var folder = Bundle(for: Self.self).bundleURL
         var app: URL?
@@ -332,8 +358,9 @@ final class ExtrasTests: XCTestCase {
         let files = (FileManager.default.enumerator(atPath: metadata.path)?.allObjects as? [String]) ?? []
         print("App Intents metadata: \(files)")
         let text = files.compactMap { try? String(contentsOf: metadata.appendingPathComponent($0), encoding: .utf8) }.joined()
-        for name in ["TellChiefIntent", "TodayTodosIntent", "OpenAssistantIntent", "OpenConfirmIntent", "ShionAppShortcuts",
-                     "跟总秘书说", "今天的待办", "打开助手", "打开等你确认", "转告总秘书"] {
+        // the four actions, their titles, and phrases only the App Shortcuts have
+        for name in ["TellChiefIntent", "TodayTodosIntent", "OpenAssistantIntent", "OpenConfirmIntent",
+                     "跟总秘书说", "今天的待办", "打开助手", "打开等你确认", "转告总秘书", "今天还有什么要做", "有什么等我确认"] {
             XCTAssertTrue(text.contains(name), "\(name) is not in the App Intents metadata")
         }
     }
@@ -355,6 +382,14 @@ final class ExtrasTests: XCTestCase {
             else { return nil }
             return Note(id: id, title: row["title"] as? String ?? "", body: row["body"] as? String ?? "",
                         info: row["info"] as? [String: String] ?? [:])
+        }
+    }
+
+    /// Every line of the log: the notifications, the answers and clicks taken, the launch click.
+    private func logLines() -> [[String: Any]] {
+        guard let text = try? String(contentsOfFile: notes, encoding: .utf8) else { return [] }
+        return text.split(separator: "\n").compactMap { line in
+            try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any]
         }
     }
 

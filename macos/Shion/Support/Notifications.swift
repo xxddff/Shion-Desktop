@@ -47,10 +47,15 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     /// is JSON with the notification's id, the action and the text typed (a test cannot type into
     /// a real notification, and its runner may not write files the app can see).
     static let testAnswer = Notification.Name("dev.shion.test.answer")
-    /// A test run started as a click on a notification would start Shion: what it carried.
-    private static let testLaunch: String? = LaunchOptions.current.snapshot
-        ? UserDefaults.standard.string(forKey: "ShionLaunchNotification")
-        : nil
+    /// A test run started as a click on a notification would start Shion: what it carried, as
+    /// JSON. Read from the arguments as given: the defaults would try it as a property list first.
+    private static let testLaunch: String? = {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard LaunchOptions.current.snapshot, let flag = arguments.firstIndex(of: "-ShionLaunchNotification"),
+              flag + 1 < arguments.count
+        else { return nil }
+        return arguments[flag + 1]
+    }()
     /// What a test run's notifications carried, by id, for its answers.
     private var written: [String: [String: String]] = [:]
     private var testAnswers: (any NSObjectProtocol)?
@@ -335,14 +340,24 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         MainWindow.show()
     }
 
-    /// A test run started as a click would start Shion: the click comes once the app is up, as
-    /// the system's does.
+    /// A test run started as a click would start Shion: the click comes once the app is up, its
+    /// main window there, as the system's does. Written down when taken, for the test to wait on.
     private func clickedAtLaunch(_ json: String) {
-        guard let parsed = try? JSONValue.parse(json), case .object(let fields) = parsed else { return }
+        guard let parsed = try? JSONValue.parse(json), case .object(let fields) = parsed else {
+            append(["launched": .null, "error": .string("not JSON")])
+            return
+        }
         let info = fields.compactMapValues { $0.string }
         Task {
-            try? await Task.sleep(for: .milliseconds(500))
+            var waited = 0
+            while !NSApp.windows.contains(where: DockMode.isMain) && waited < 100 {
+                try? await Task.sleep(for: .milliseconds(100))
+                waited += 1
+            }
+            try? await Task.sleep(for: .milliseconds(300))
             self.land(info)
+            self.append(["launched": .object(info.mapValues { .string($0) }),
+                         "route": .string(self.store?.route.map { "\($0)" } ?? "")])
         }
     }
 }
