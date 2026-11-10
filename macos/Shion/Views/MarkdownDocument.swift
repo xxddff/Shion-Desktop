@@ -51,22 +51,25 @@ extension MarkdownDocument {
         blocks = MarkdownReader(code: code).blocks(in: document)
     }
 
-    /// Where a reply still arriving can be laid out up to: just after its last blank line outside a
-    /// code fence, so every block before it is whole. What follows shows as it comes.
-    static func settledEnd(of text: String) -> String.Index {
+    /// A reply still arriving, as far as it can be laid out: `end` is just after its last blank
+    /// line outside a code fence, so every block before it is whole (what follows shows as it
+    /// comes); `definitions` are the link reference definitions it holds so far, wherever they are,
+    /// so a reference in a whole block is a link as soon as its definition has come.
+    static func streaming(_ text: String) -> (end: String.Index, definitions: String) {
         let bytes = text.utf8
         var end = bytes.startIndex
+        var definitions: [String] = []
         var lineStart = bytes.startIndex
         // the open fence's character and length
         var fence: (mark: UInt8, count: Int)?
         var index = bytes.startIndex
-        while index < bytes.endIndex {
-            guard bytes[index] == UInt8(ascii: "\n") else {
+        while true {
+            let last = index == bytes.endIndex
+            guard last || bytes[index] == UInt8(ascii: "\n") else {
                 index = bytes.index(after: index)
                 continue
             }
             let line = bytes[lineStart..<index]
-            let next = bytes.index(after: index)
             if let open = fence {
                 if let close = fenceMark(line), close.mark == open.mark, close.count >= open.count, close.bare {
                     fence = nil
@@ -74,12 +77,95 @@ extension MarkdownDocument {
             } else if let open = fenceMark(line) {
                 fence = (open.mark, open.count)
             } else if line.allSatisfy({ $0 == UInt8(ascii: " ") || $0 == UInt8(ascii: "\t") || $0 == UInt8(ascii: "\r") }) {
-                end = next
+                if !last { end = bytes.index(after: index) }
+            } else if isDefinition(line) {
+                definitions.append(String(text[lineStart..<index]).trimmingCharacters(in: .newlines))
             }
-            lineStart = next
-            index = next
+            if last { break }
+            index = bytes.index(after: index)
+            lineStart = index
         }
-        return end
+        return (end, definitions.joined(separator: "\n"))
+    }
+
+    /// A link reference definition on one line: up to three spaces, `[label]:`, a destination
+    /// (`<…>` or a run without spaces), then maybe a title after a space ("…", '…' or (…)).
+    private static func isDefinition(_ line: Substring.UTF8View) -> Bool {
+        let space = UInt8(ascii: " "), tab = UInt8(ascii: "\t"), cr = UInt8(ascii: "\r")
+        let indent = line.prefix { $0 == space }.count
+        guard indent <= 3 else { return false }
+        var rest = line.dropFirst(indent)
+        // not a footnote's ([^1]:)
+        guard rest.first == UInt8(ascii: "["), rest.dropFirst().first != UInt8(ascii: "^") else { return false }
+        rest = rest.dropFirst()
+        guard let close = rest.firstIndex(of: UInt8(ascii: "]")) else { return false }
+        let label = rest[..<close]
+        guard !label.contains(UInt8(ascii: "[")), label.contains(where: { $0 != space && $0 != tab }) else { return false }
+        rest = rest[rest.index(after: close)...]
+        guard rest.first == UInt8(ascii: ":") else { return false }
+        rest = rest.dropFirst().drop { $0 == space || $0 == tab }
+        if rest.first == UInt8(ascii: "<") {
+            guard let end = rest.firstIndex(of: UInt8(ascii: ">")) else { return false }
+            rest = rest[rest.index(after: end)...]
+        } else {
+            let destination = rest.prefix { $0 > space }.count
+            guard destination > 0 else { return false }
+            rest = rest.dropFirst(destination)
+        }
+        let gap = rest.prefix { $0 == space || $0 == tab }.count
+        rest = rest.dropFirst(gap)
+        guard let open = rest.first, open != cr else { return true }
+        let closing: UInt8
+        switch open {
+        case UInt8(ascii: "\""): closing = UInt8(ascii: "\"")
+        case UInt8(ascii: "'"): closing = UInt8(ascii: "'")
+        case UInt8(ascii: "("): closing = UInt8(ascii: ")")
+        default: return false
+        }
+        rest = rest.dropFirst()
+        guard gap > 0, let end = rest.firstIndex(of: closing) else { return false }
+        return rest[rest.index(after: end)...].allSatisfy { $0 == space || $0 == tab || $0 == cr }
+    }
+
+    /// The blocks of a reply's whole part, its definitions appended (they lay nothing out), with
+    /// where its last top-level block starts (a UTF-8 offset into `text`) and how many blocks it
+    /// made: what to parse again when more of the reply is whole, since a list goes on after a
+    /// blank line.
+    static func parsing(_ text: String, definitions: String, code: AttributeContainer) -> (blocks: [MarkdownBlock], last: (offset: Int, count: Int)?) {
+        let source = definitions.isEmpty ? text : text + "\n\n" + definitions
+        let document = Document(parsing: source, options: [.disableSmartOpts])
+        let reader = MarkdownReader(code: code)
+        var blocks: [MarkdownBlock] = []
+        var last: (line: Int, count: Int)?
+        for child in document.children {
+            let made = reader.block(child)
+            guard !made.isEmpty else { continue }
+            blocks += made
+            last = child.range.map { (line: $0.lowerBound.line, count: made.count) }
+        }
+        guard let last, let offset = lineOffset(last.line, in: text) else { return (blocks, nil) }
+        return (blocks, (offset, last.count))
+    }
+
+    /// Where line `line` (from 1) of `text` starts, as a UTF-8 offset; nil past its end. A line
+    /// ends at \n, \r\n or a lone \r, as cmark counts them.
+    private static func lineOffset(_ line: Int, in text: String) -> Int? {
+        guard line >= 1 else { return nil }
+        let bytes = Array(text.utf8)
+        var seen = 1
+        var index = 0
+        while seen < line {
+            guard index < bytes.count else { return nil }
+            let byte = bytes[index]
+            index += 1
+            if byte == UInt8(ascii: "\r") {
+                if index < bytes.count, bytes[index] == UInt8(ascii: "\n") { index += 1 }
+                seen += 1
+            } else if byte == UInt8(ascii: "\n") {
+                seen += 1
+            }
+        }
+        return index < bytes.count ? index : nil
     }
 
     /// A fence line: up to three spaces, then three or more backticks or tildes. `bare` when
@@ -102,9 +188,18 @@ extension MarkdownDocument {
 /// Parsed replies by message id, kept while the text stays the same: a long chat parses each
 /// reply once, not every time its row is laid out or scrolls back into view.
 final class MarkdownCache {
+    private struct Entry {
+        var text: String
+        var definitions = ""
+        var blocks: [MarkdownBlock]
+        /// A reply still arriving: where its last top-level block starts, and how many blocks it made.
+        var last: (offset: Int, count: Int)?
+        var used: Int
+    }
+
     /// Added to inline code's runs (`MarkdownDocument(parsing:code:)`).
     private let code: AttributeContainer
-    private var entries: [String: (text: String, document: MarkdownDocument, used: Int)] = [:]
+    private var entries: [String: Entry] = [:]
     private var tick = 0
     private let limit: Int
 
@@ -117,37 +212,43 @@ final class MarkdownCache {
         tick += 1
         if let entry = entries[id], entry.text == text {
             entries[id]?.used = tick
-            return entry.document
+            return MarkdownDocument(blocks: entry.blocks)
         }
         let document = MarkdownDocument(parsing: text, code: code)
-        keep(document, of: text, as: id)
+        keep(Entry(text: text, blocks: document.blocks, used: tick), as: id)
         return document
     }
 
-    /// The whole blocks of a reply still arriving (`MarkdownDocument.settledEnd`). As the reply
-    /// grows only the newly whole part is parsed, so each block costs its own length once. They
-    /// can differ from the finished reply's (a loose list arrives as lists of one item), which is
-    /// parsed whole once it is done.
-    func settled(_ id: String, _ text: String) -> [MarkdownBlock] {
+    /// The whole blocks of a reply still arriving (`MarkdownDocument.streaming`), laid out as the
+    /// whole reply's would be: as it grows, the blocks before the last one stay and it is parsed
+    /// again from where the last one starts (a list goes on after a blank line), so each step
+    /// costs about one block. All of it is parsed again when its definitions change, since a
+    /// reference anywhere can name one.
+    func settled(_ id: String, _ text: String, definitions: String = "") -> [MarkdownBlock] {
         let key = id + "|settled"
-        guard let entry = entries[key], text.utf8.starts(with: entry.text.utf8) else {
-            return document(key, text).blocks
-        }
         tick += 1
-        guard text.utf8.count > entry.text.utf8.count else {
-            entries[key]?.used = tick
-            return entry.document.blocks
+        if let entry = entries[key], entry.definitions == definitions, text.utf8.starts(with: entry.text.utf8) {
+            if text.utf8.count == entry.text.utf8.count {
+                entries[key]?.used = tick
+                return entry.blocks
+            }
+            if let last = entry.last {
+                // a line's start, so a character boundary
+                let start = text.utf8.index(text.startIndex, offsetBy: last.offset)
+                let more = MarkdownDocument.parsing(String(text[start...]), definitions: definitions, code: code)
+                let blocks = Array(entry.blocks.dropLast(last.count)) + more.blocks
+                let next = more.last.map { (offset: last.offset + $0.offset, count: $0.count) }
+                keep(Entry(text: text, definitions: definitions, blocks: blocks, last: next, used: tick), as: key)
+                return blocks
+            }
         }
-        // the old text ends just after a line break, so this is a character boundary
-        let start = text.utf8.index(text.startIndex, offsetBy: entry.text.utf8.count)
-        let more = MarkdownDocument(parsing: String(text[start...]), code: code)
-        let document = MarkdownDocument(blocks: entry.document.blocks + more.blocks)
-        keep(document, of: text, as: key)
-        return document.blocks
+        let parsed = MarkdownDocument.parsing(text, definitions: definitions, code: code)
+        keep(Entry(text: text, definitions: definitions, blocks: parsed.blocks, last: parsed.last, used: tick), as: key)
+        return parsed.blocks
     }
 
-    private func keep(_ document: MarkdownDocument, of text: String, as id: String) {
-        entries[id] = (text, document, tick)
+    private func keep(_ entry: Entry, as id: String) {
+        entries[id] = entry
         guard entries.count > limit else { return }
         // the quarter shown longest ago goes
         let stale = entries.sorted { $0.value.used < $1.value.used }.prefix(max(1, limit / 4)).map(\.key)

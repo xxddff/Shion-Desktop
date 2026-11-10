@@ -254,6 +254,8 @@ struct QuickAskView: View {
         .frame(height: min(max(answerHeight, 1), Self.answerMax))
         // follows the reply as it grows
         .defaultScrollAnchor(.bottom)
+        // 总秘书's chat rows: the pictures and files in them are in that profile
+        .environment(\.chatBotId, store.chiefId)
         .accessibilityIdentifier("quick-answer")
     }
 

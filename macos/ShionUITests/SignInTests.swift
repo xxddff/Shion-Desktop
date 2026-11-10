@@ -104,57 +104,97 @@ final class SignInTests: XCTestCase {
         keep(app.windows.firstMatch.screenshot(), "signin-4-chat")
         XCTAssertTrue(opened, "the Bot Chat did not open")
 
+        // from here on each check reports, and the next one still runs; where things are on the
+        // screen goes in signin-positions.txt
+        continueAfterFailure = true
+        let transcript = element("transcript", in: app)
+        var positions: [String] = []
+        // the chat opens at its newest message
+        Thread.sleep(forTimeInterval: 0.5)
+        let greeting = findText("CI 替身服务器连上了", in: app)
+        positions.append("opened: the newest message at \(place(greeting)) in \(transcript.frame)")
+        XCTAssertTrue(inView(greeting, of: transcript), "the chat did not open at its newest message. \(positions.last ?? "")")
+
         let composer = element("composer", in: app)
         XCTAssertTrue(composer.waitForExistence(timeout: 5))
         composer.click()
         composer.typeText("hello")
         element("send", in: app).click()
         let replied = waitForText("收到：hello", in: app, timeout: 15)
+        Thread.sleep(forTimeInterval: 0.5)
         keep(app.windows.firstMatch.screenshot(), "signin-5-reply")
         XCTAssertTrue(replied, "no reply streamed back")
+        // the reply was followed down as it came
+        let hello = findText("收到：hello", in: app)
+        positions.append("replied: the reply at \(place(hello)) in \(transcript.frame)")
+        XCTAssertTrue(inView(hello, of: transcript), "the reply was not followed down. \(positions.last ?? "")")
 
         // 詩音's chat on the stand-in is 135 rows: it opened on the newest 50, and the older ones
         // come a page at a time as the top scrolls into view
         XCTAssertFalse(waitForText("第 1 条（你）", in: app, timeout: 1), "the whole transcript came at once")
         let window = app.windows.firstMatch
-        let transcript = element("transcript", in: app)
         XCTAssertTrue(transcript.waitForExistence(timeout: 5), "no transcript")
-        // which sign of a wheel delta scrolls up is the runner's business: nudge, and see which
-        // way a row on screen moved. Towards older messages rows move down; the chat is at its
-        // bottom, so a nudge the other way moves nothing.
-        var direction: CGFloat = 1
-        if let row = findText("第 124 条", in: app) {
-            let before = row.frame.minY
-            transcript.hover()
-            transcript.scroll(byDeltaX: 0, deltaY: 200)
-            Thread.sleep(forTimeInterval: 0.5)
-            direction = row.exists && row.frame.minY > before + 1 ? 1 : -1
-            print("wheel: +200 moved 第 124 条 from \(before) to \(row.exists ? row.frame.minY : -1); up is \(direction)")
+        // which sign of a wheel delta scrolls up is the runner's business: nudge each way, and see
+        // which moves a row on screen down (towards older messages). The wheel turns at the
+        // transcript's left margin, in no row, as BoardTests does.
+        let wheel = transcript.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.4))
+        var up = upward(wheel, watching: "第 124 条", in: app, positions: &positions)
+        XCTAssertNotNil(up, "the chat did not move on the wheel, either way. \(positions.suffix(2).joined(separator: "; "))")
+        if up == nil {
+            // to tell what holds it (numbers only): another chat and back, and the nudges again
+            element("bot-study", in: app).click()
+            _ = waitForText("课程的 Bot Chat", in: app, timeout: 10)
+            element("bot-shion", in: app).click()
+            _ = waitForText("收到：hello", in: app, timeout: 10)
+            Thread.sleep(forTimeInterval: 1)
+            up = upward(wheel, watching: "第 124 条", in: app, positions: &positions)
+            positions.append("after 课程 and back to 詩音: " + (up.map { "up is \($0)" } ?? "still does not move"))
         }
+        // a positive delta scrolls back on the runner (BoardTests): that, when no nudge told
+        let direction = up ?? 1
+        // to the first message a little at a time. An older page lands 1.5 s after it is asked for
+        // (the stand-in's network): the rows are read before each wait and after it, and the row
+        // at the top of what shows stays where it was as a page comes in above it
         var reachedTop = false
-        var sawSecondPage = false
-        for _ in 0..<24 {
-            // wheel events go where the pointer is: put it on the transcript, not the composer
-            transcript.hover()
-            transcript.scroll(byDeltaX: 0, deltaY: direction * 1200)
-            if waitForText("第 1 条（你）", in: app, timeout: 1.5) {
-                reachedTop = true
-                break
+        var landings: [Int] = []
+        // where each page starts on the stand-in, newest first: a row below the first number means
+        // the next page came in
+        var floors = [82, 32, 1]
+        for step in 1...40 where !reachedTop {
+            wheel.scroll(byDeltaX: 0, deltaY: direction * 300)
+            Thread.sleep(forTimeInterval: 0.4)
+            let before = layout(of: transcript)
+            Thread.sleep(forTimeInterval: 2.2)
+            let after = layout(of: transcript)
+            let area = transcript.frame
+            reachedTop = after.rows["第 1 条（你）"] != nil
+            let top = before.rows
+                .filter { $0.value.minY >= area.minY - 1 && $0.value.maxY <= area.maxY + 1 }
+                .min { $0.value.minY < $1.value.minY }
+            let now = top.flatMap { after.rows[$0.key]?.minY }
+            let barMoved = before.bar.flatMap { bar in after.bar.map { abs($0 - bar) > 0.001 } } ?? false
+            if let earliest = after.rows.keys.compactMap(number).min(), floors.count > 1, earliest < floors[0] {
+                floors.removeFirst()
+                landings.append(step)
+                keep(window.screenshot(), "signin-6a-page-\(landings.count + 1)")
             }
-            // the moment the second page lands: the rows that were at the top should still be there
-            if !sawSecondPage && waitForText("第 81 条", in: app, timeout: 0.2) {
-                sawSecondPage = true
-                keep(window.screenshot(), "signin-6a-second-page")
+            guard let top, barMoved || now != top.value.minY || Set(after.rows.keys) != Set(before.rows.keys) else { continue }
+            positions.append("step \(step): \(top.key) at \(top.value.minY) before the wait, \(now.map { "\($0)" } ?? "gone") after; "
+                             + "rows \(span(before)) before, \(span(after)) after; the scroll bar \(barText(before)) before, \(barText(after)) after")
+            XCTAssertEqual(now ?? .nan, top.value.minY, accuracy: 4,
+                           "the row at the top of what shows moved. \(positions.last ?? "")")
+        }
+        positions.append("older pages seen from steps \(landings) on; 第 1 条 \(reachedTop ? "reached" : "not reached")")
+        // on to the very top, for the picture: 第 1 条 is read a little before it comes into view
+        if reachedTop {
+            for _ in 0..<2 {
+                wheel.scroll(byDeltaX: 0, deltaY: direction * 1200)
+                Thread.sleep(forTimeInterval: 0.5)
             }
         }
         // the oldest page opens with a compaction that has the row_id of 第 1 条, the ask it was
         // stored on, as Hermes sends it: both rows show, with the tool calls after it in one line
-        var summarized = waitForText("更早的对话压缩成了摘要", in: app, timeout: 2)
-        if reachedTop && !summarized {
-            transcript.hover()
-            transcript.scroll(byDeltaX: 0, deltaY: direction * 1200)
-            summarized = waitForText("更早的对话压缩成了摘要", in: app, timeout: 3)
-        }
+        let summarized = waitForText("更早的对话压缩成了摘要", in: app, timeout: 3)
         keep(window.screenshot(), "signin-6-oldest")
         XCTAssertTrue(reachedTop, "older pages did not load on scrolling up")
         XCTAssertTrue(summarized, "the compaction above 第 1 条 is not shown")
@@ -169,6 +209,12 @@ final class SignInTests: XCTestCase {
         let created = waitForText("新的 Bot Chat。", in: app, timeout: 15)
         keep(window.screenshot(), "signin-7-new-chat")
         XCTAssertTrue(created, "the new Bot Chat did not open")
+        // one message: it sits at the bottom, just above the composer
+        Thread.sleep(forTimeInterval: 0.5)
+        let only = findText("新的 Bot Chat", in: app)
+        positions.append("a short chat: its message at \(place(only)) in \(transcript.frame)")
+        XCTAssertTrue(inView(only, of: transcript) && only.map { transcript.frame.maxY - $0.frame.maxY < 80 } ?? false,
+                      "a short chat does not sit at the bottom. \(positions.last ?? "")")
 
         // the board limits in Settings come from the server: unset overall (4 by its 2 GB), 1 each
         app.typeKey(",", modifierFlags: .command)
@@ -181,7 +227,98 @@ final class SignInTests: XCTestCase {
         XCTAssertTrue(says(total, "4 件（按内存推算）"), "overall: \(total.label) / \(String(describing: total.value))")
         let each = element("board-limit-assistant", in: again)
         XCTAssertTrue(says(each, "1 件"), "per assistant: \(each.label) / \(String(describing: each.value))")
+        note(positions.joined(separator: "\n"), "signin-positions")
         app.terminate()
+    }
+
+    /// Which sign of a wheel delta at `wheel` scrolls the chat back, from nudges each way watching
+    /// the row `label`; nil when none moves it. The pointer rests there first, and the nudges grow
+    /// from 40 to 80: on the runner a first nudge of 40 sometimes moves nothing, the pointer
+    /// resting there or not, where 80 then moves. The numbers go in `positions`.
+    @MainActor
+    private func upward(_ wheel: XCUICoordinate, watching label: String, in app: XCUIApplication,
+                        positions: inout [String]) -> CGFloat? {
+        guard let row = findText(label, in: app) else {
+            positions.append("wheel: no \(label) to watch")
+            return nil
+        }
+        wheel.hover()
+        Thread.sleep(forTimeInterval: 0.5)
+        for size: CGFloat in [40, 80] {
+            for sign: CGFloat in [1, -1] {
+                let before = row.exists ? row.frame.minY : -1
+                wheel.scroll(byDeltaX: 0, deltaY: sign * size)
+                Thread.sleep(forTimeInterval: 0.5)
+                let after = row.exists ? row.frame.minY : -1
+                positions.append("wheel: \(sign * size) moved \(label) from \(before) to \(after)")
+                if after > before + 1 {
+                    return sign
+                }
+            }
+        }
+        return nil
+    }
+
+    /// The 第 N 条 rows the transcript has laid out, from one snapshot of it (quick enough to read
+    /// between a wheel turn and a page landing), by their text; and where its scroll bar is.
+    @MainActor
+    private func layout(of transcript: XCUIElement) -> (rows: [String: CGRect], bar: Double?) {
+        guard let root = try? transcript.snapshot() else { return ([:], nil) }
+        var rows: [String: CGRect] = [:]
+        func visit(_ node: XCUIElementSnapshot) {
+            if node.elementType == .staticText || node.elementType == .textView,
+               let text = [node.label, node.value as? String ?? ""].first(where: { $0.hasPrefix("第 ") && $0.contains(" 条（") }),
+               rows[text] == nil {
+                rows[text] = node.frame
+            }
+            node.children.forEach(visit)
+        }
+        visit(root)
+        // its own bar, not a wide table's inside a row
+        let bar = root.children.first { $0.elementType == .scrollBar && $0.frame.height > $0.frame.width }
+        let value = bar?.value
+        return (rows, (value as? NSNumber)?.doubleValue ?? (value as? String).flatMap(Double.init))
+    }
+
+    /// N of a 第 N 条 row.
+    private func number(_ row: String) -> Int? {
+        guard let start = row.range(of: "第 "),
+              let end = row.range(of: " 条", range: start.upperBound..<row.endIndex) else { return nil }
+        return Int(row[start.upperBound..<end.lowerBound])
+    }
+
+    /// Which 第 N 条 rows were laid out, first to last.
+    private func span(_ layout: (rows: [String: CGRect], bar: Double?)) -> String {
+        let numbers = layout.rows.keys.compactMap(number)
+        guard let first = numbers.min(), let last = numbers.max() else { return "none" }
+        return "\(first)–\(last)"
+    }
+
+    private func barText(_ layout: (rows: [String: CGRect], bar: Double?)) -> String {
+        layout.bar.map { String(format: "%.3f", $0) } ?? "not there"
+    }
+
+    /// In the transcript's visible part, not above or below it.
+    @MainActor
+    private func inView(_ element: XCUIElement?, of transcript: XCUIElement) -> Bool {
+        guard let element, element.exists, transcript.exists else { return false }
+        let frame = element.frame, area = transcript.frame
+        return frame.minY >= area.minY - 2 && frame.maxY <= area.maxY + 2
+    }
+
+    /// Where an element is on the screen, top to bottom, or "gone".
+    @MainActor
+    private func place(_ element: XCUIElement?) -> String {
+        guard let element, element.exists else { return "gone" }
+        return "\(element.frame.minY)–\(element.frame.maxY)"
+    }
+
+    /// Numbers worth reading after the run, kept as a text beside the pictures (`name.txt`).
+    private func note(_ text: String, _ name: String) {
+        let attachment = XCTAttachment(string: text)
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
     }
 
     @MainActor

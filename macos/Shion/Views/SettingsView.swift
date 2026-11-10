@@ -69,6 +69,8 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+            MediaSettings()
+
             LastDataSection()
         }
         .formStyle(.grouped)
