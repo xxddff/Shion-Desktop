@@ -70,7 +70,7 @@ final class MediaTests: XCTestCase {
         let failed = waitUntil(timeout: 20) { refused.label.contains("没传上去") }
         keep(window.screenshot(), "media-3-file-refused")
         XCTAssertTrue(failed, "the file the stand-in refuses does not say so: \(refused.label)")
-        refused.click()
+        clickWhereDrawn(refused)
         let allUp = waitUntil(timeout: 30) { send.isEnabled }
         keep(window.screenshot(), "media-4-files-ready")
         XCTAssertTrue(allUp, "the files did not all go up")
@@ -109,14 +109,18 @@ final class MediaTests: XCTestCase {
         XCTAssertTrue(written, "the file named in the words is not a card")
         XCTAssertTrue(waits, "the web picture is not waiting for a click")
         XCTAssertFalse(waitForText("MEDIA:", in: app, timeout: 1), "a MEDIA: tag shows as text")
-        slides.click()
+        // the reply is taller than the window at 1×: the card is above what shows at the bottom
+        XCTAssertTrue(bringIntoView(slides, in: element("transcript", in: app)), "the PDF card cannot be scrolled to")
+        clickWhereDrawn(slides)
         let saved = waitUntil(timeout: 15) { slides.label.contains("已存到「下载」") }
         keep(window.screenshot(), "media-8-saved")
         XCTAssertTrue(saved, "the PDF was not saved: \(slides.label)")
 
         // the web picture, now that it is asked for: W3C's logo, fetched from the web itself, so
         // a runner without the web leaves it 图片没取到, which is noted rather than failed
-        element("show-web-picture", in: app).click()
+        let show = element("show-web-picture", in: app)
+        XCTAssertTrue(bringIntoView(show, in: element("transcript", in: app)), "「显示图片」 cannot be scrolled to")
+        clickWhereDrawn(show)
         let web = app.descendants(matching: .any).matching(identifier: "reply-picture")
             .matching(NSPredicate(format: "label == %@", "网上找的示例图")).firstMatch
         let fetched = waitUntil(timeout: 15) { web.exists && (web.value as? String) == "已显示" }
@@ -255,6 +259,42 @@ final class MediaTests: XCTestCase {
     private func card(_ name: String, in app: XCUIApplication) -> XCUIElement {
         app.descendants(matching: .any).matching(identifier: "file-card")
             .matching(NSPredicate(format: "label BEGINSWITH %@", name + "，")).firstMatch
+    }
+
+    /// Scrolls the transcript until `target` is drawn clear of its edges and of the composer that
+    /// floats over its foot. A wheel step's sign is the runner's business: one that moves the
+    /// content the wrong way is turned round.
+    @MainActor
+    private func bringIntoView(_ target: XCUIElement, in transcript: XCUIElement) -> Bool {
+        let area = transcript.frame
+        func clear() -> Bool {
+            target.exists && target.frame.minY >= area.minY + 8 && target.frame.maxY <= area.maxY - 130
+        }
+        var delta: CGFloat = 150
+        for _ in 0..<16 {
+            if clear() { return true }
+            guard target.exists else { return false }
+            let before = target.frame.midY
+            // above the band, the content has to come down; below it, go up
+            let down = target.frame.minY < area.minY + 8
+            transcript.hover()
+            transcript.scroll(byDeltaX: 0, deltaY: delta)
+            Thread.sleep(forTimeInterval: 0.4)
+            let moved = target.exists ? target.frame.midY - before : 0
+            if (down && moved < 0) || (!down && moved > 0) {
+                delta = -delta
+            }
+        }
+        return clear()
+    }
+
+    /// A click at the middle of where the element is drawn. XCUITest's own click hit-tests the
+    /// element first, which a SwiftUI element that folds its children in
+    /// (`.accessibilityElement(children: .ignore)`) inside a scroll view does not pass ("Unable to
+    /// find hit point"), though the mouse reaches it as it reaches anything on screen.
+    @MainActor
+    private func clickWhereDrawn(_ element: XCUIElement) {
+        element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
     }
 
     @MainActor
