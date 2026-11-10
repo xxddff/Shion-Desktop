@@ -169,7 +169,7 @@ const chats: Chat[] = [
 
 export function seedState(): AppState {
   return {
-    connection: { name: 'tokyo-vps', kind: 'cloudflare', host: 'https://hermes.example.dev', auth: 'Access service token', state: 'connected', latencyMs: 24, localMac: 'off', activityLog: true },
+    connection: { name: 'tokyo-vps', kind: 'cloudflare', host: 'https://hermes.example.com', auth: 'Access service token', state: 'connected', latencyMs: 24, localMac: 'off', activityLog: true },
     bots,
     chats: Object.fromEntries(chats.map((c) => [c.key, c])),
     todos: [

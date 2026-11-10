@@ -3,7 +3,8 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Shion: a macOS desktop console for watching Hermes Agent bots and Kanban boards",
+  "description": "Shion UI prototype: a personal secretary for macOS backed by Hermes Agent (example data only)",
+  "license": "MIT",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit -p . && vite build",
@@ -20,6 +21,6 @@
     "@types/react-dom": "18.3.1",
     "@vitejs/plugin-react": "4.3.4",
     "typescript": "5.6.3",
-    "vite": "5.4.11"
+    "vite": "6.4.6"
   }
 }

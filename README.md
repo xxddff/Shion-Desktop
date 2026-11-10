@@ -5,6 +5,8 @@ macOS 上的私人秘书。你主要和总秘书「詩音」打交道，她带�
 背后跑的是部署在 VPS 上的 [Hermes Agent](https://github.com/NousResearch/hermes-agent)，Shion 通过 Canonical Gateway Protocol 连接它，完全取代官方桌面端的 Bot Mode。
 
 > 现阶段：`prototype/` 是 UI 原型（React，示例数据，可交互），用来对齐界面和流程。正式的 App 用 SwiftUI + AppKit 写，不套浏览器，最低支持 macOS 27。
+>
+> Shion 是第三方客户端，不是 Hermes Agent 的官方项目，与 Nous Research 没有关联。文中的「官方桌面端」指 Hermes 自带的桌面端。
 
 ## 已经定下来的
 
@@ -324,9 +326,12 @@ macOS 上是 SwiftUI 加 AppKit（UIKit 是 iOS 的；Mac Catalyst 做菜单栏�
 ## 仓库结构
 
 ```
-prototype/      UI 原型（Vite + React + TypeScript，示例数据）
-  src/data/     模型、示例数据、模拟器（课后整理、核查、催促会自己播放）
-  src/views/    今天、待办、日程、日报、等你确认、Bot Chat
+prototype/          UI 原型（Vite + React + TypeScript，示例数据）
+  src/data/         模型、示例数据、模拟器（课后整理、核查、催促会自己播放）、专注检查
+  src/views/        今天、待办、日程、日报、看板、云桌面、Bot Chat
+  src/components/   窗口外壳、卡片、云桌面画面、专注检查、⌘K 面板等浮层
+  src/ui/           小控件和格式化
+LICENSE             MIT
 ```
 
 ```bash
@@ -343,3 +348,7 @@ npm run dev        # http://localhost:1420
 4. **`shion` 插件和助手团队**：插件提供待办、今天汇总、日报、应用记录；把詩音和各助手的 profile、SOUL、例行任务做成一套可一键部署的模板。
 5. **今天 / 待办 / 日程 / 日报** 接真实数据，加上 Mac 应用使用记录。
 6. 以后：接入这台 Mac 让助手在本机做事；全天录音。
+
+## 许可
+
+[MIT](LICENSE)
