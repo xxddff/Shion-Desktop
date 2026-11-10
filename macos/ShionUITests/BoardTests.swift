@@ -182,12 +182,17 @@ final class BoardTests: XCTestCase {
         XCTAssertTrue(both, "助手在做 does not list the cards running on both boards")
         XCTAssertFalse(waitForText("整理「数据结构与算法 第7回」录音", in: app, timeout: 0.5), "demo cards on 今天")
 
-        // back in 詩音's chat, a turn of three tool calls and then a reply with a table: the calls
-        // show while the turn runs and fold into one line once the reply is in, which a click
-        // opens; the table is laid out, so a cell is a text of its own, not a line with pipes
+        // back in 詩音's chat, a turn of three tool calls and then a reply with two tables: the
+        // calls show while the turn runs and fold into one line once the reply is in; the tables
+        // are laid out, so a cell is a text of its own, not a line with pipes
         element("bot-shion", in: app).click()
         XCTAssertTrue(composer.waitForExistence(timeout: 10), "詩音's chat did not open again")
         Thread.sleep(forTimeInterval: 1)
+        let transcript = element("transcript", in: app)
+        // it opens at its newest message
+        let newest = findText("课程把笔记整理好了", in: app)
+        XCTAssertTrue(newest.map { inView($0, of: transcript) } ?? false,
+                      "詩音's chat did not open at its newest message: \(say(newest.flatMap { self.minY($0) })) in \(transcript.frame)")
         composer.click()
         composer.typeText("列一下这周的作业（CI）")
         element("send", in: app).click()
@@ -202,13 +207,264 @@ final class BoardTests: XCTestCase {
         XCTAssertTrue(cell, "the reply's table is not laid out: no text is just 周三 17:00（CI）")
         XCTAssertTrue(element("markdown-table", in: app).exists, "no table in the reply")
         XCTAssertTrue(folded, "the turn's tool calls did not fold into one line once the reply was in")
+
+        // the rest of the reply's checks all report, one failing or not
+        continueAfterFailure = true
+
+        // the turn was followed down as it came: the reply's last words are in view
+        let end = findText("周三前交", in: app)
+        XCTAssertTrue(end.map { inView($0, of: transcript) } ?? false,
+                      "the reply's end is not in view: \(String(describing: end?.frame)) in \(transcript.frame)")
+
+        // the second table is wider than the reply even with its cells wrapped: it scrolls sideways
+        // in its own box until its last column shows, and the words before it stay where they are
+        let wide = element("markdown-table-scroll", in: app)
+        if wide.waitForExistence(timeout: 5), let edge = exactText("最右这列的格子（CI）", in: app),
+           let words = findText("各门课这周的情况", in: app) {
+            let past = edge.frame.maxX > wide.frame.maxX + 1
+            let wordsX = words.frame.minX
+            let revealed = scrollSideways(wide, revealing: edge)
+            keep(window.screenshot(), "board-13a-wide-table-scrolled")
+            XCTAssertTrue(past, "the wide table's last column fits already: \(edge.frame) in \(wide.frame)")
+            XCTAssertTrue(revealed, "scrolling the wide table did not bring its last column into view: \(edge.frame) in \(wide.frame)")
+            XCTAssertEqual(words.frame.minX, wordsX, accuracy: 1, "the words before the wide table moved with it")
+        } else {
+            keep(window.screenshot(), "board-13a-no-wide-table")
+            XCTFail("the wide table does not scroll on its own, or its last column or the words before it are missing")
+        }
+
+        // a code line longer than the reply scrolls sideways in its block, the same way
+        let code = element("markdown-code", in: app)
+        let either = NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", "BinaryHeap", "BinaryHeap")
+        let source = code.staticTexts.matching(either).firstMatch.exists
+            ? code.staticTexts.matching(either).firstMatch : code.textViews.matching(either).firstMatch
+        if code.waitForExistence(timeout: 5), source.exists, let words = findText("先把这一行跑通", in: app) {
+            let past = source.frame.maxX > code.frame.maxX + 1
+            let wordsX = words.frame.minX
+            let revealed = scrollSideways(code, revealing: source)
+            keep(window.screenshot(), "board-13b-code-scrolled")
+            XCTAssertTrue(past, "the long code line fits already: \(source.frame) in \(code.frame)")
+            XCTAssertTrue(revealed, "scrolling the code block did not bring the line's end into view: \(source.frame) in \(code.frame)")
+            XCTAssertEqual(words.frame.minX, wordsX, accuracy: 1, "the words before the code block moved with it")
+        } else {
+            keep(window.screenshot(), "board-13b-no-code")
+            XCTFail("no code block with the long line, or the words before it are missing")
+        }
+
+        // a click opens the folded calls below the line, which stays under the pointer while the
+        // reply below moves down by as much as they take; a second click closes them, and both are
+        // back. At the end of the chat, then scrolled back from it a little.
         let run = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "用了 3 个工具")).firstMatch
-        XCTAssertTrue(run.waitForExistence(timeout: 3), "no button for the folded tool calls")
-        run.click()
-        let opened = waitForText("read_file · syllabus（CI）", in: app, timeout: 5)
-        keep(window.screenshot(), "board-14-chat-tools-opened")
-        XCTAssertTrue(opened, "the folded tool calls did not open on a click")
+        guard run.waitForExistence(timeout: 3), let reply = findText("这周要交的有两项", in: app) else {
+            return XCTFail("no button for the folded tool calls, or no reply below it")
+        }
+        var positions: [String] = []
+        let measured = openAndClose(run, above: reply, in: app, window: window, "at the end",
+                                    shots: ("board-14-chat-tools-opened", "board-15-chat-tools-closed"), positions: &positions)
+        if measured {
+            let back = scrollBack(watching: run, at: run.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)), by: 120).moved
+            positions.append("scrolled back from the end: the line moved \(back)")
+            if back >= 90 {
+                openAndClose(run, above: reply, in: app, window: window, "scrolled back",
+                             shots: ("board-16-chat-tools-opened-midway", "board-17-chat-tools-closed-midway"), positions: &positions)
+            } else {
+                keep(window.screenshot(), "board-16-not-scrolled-back")
+                XCTFail("the chat did not scroll back from its end: the line moved \(back)")
+            }
+        }
+        stillWhileFurtherUp(in: app, window: window, transcript: transcript, positions: &positions)
+        note(positions.joined(separator: "\n"), "board-positions")
         app.terminate()
+    }
+
+    /// Sent from wherever one is, a message and its reply are followed down to the end. Read
+    /// further up, a message nobody asked for (the stand-in's comes 8 seconds after its reply)
+    /// leaves what shows where it is; back at the end, it is there.
+    @MainActor
+    private func stillWhileFurtherUp(in app: XCUIApplication, window: XCUIElement, transcript: XCUIElement,
+                                     positions: inout [String]) {
+        let composer = element("composer", in: app)
+        composer.click()
+        composer.typeText("等一会儿再说一句（CI）")
+        element("send", in: app).click()
+        let replied = waitUntil(timeout: 10) { self.findText("好，过一会儿再说一句（CI）", in: app) != nil }
+        let repliedAt = Date()
+        Thread.sleep(forTimeInterval: 0.8)
+        let reply = findText("好，过一会儿再说一句（CI）", in: app)
+        let followed = reply.map { inView($0, of: transcript) } ?? false
+        keep(window.screenshot(), "board-18-sent-followed")
+        XCTAssertTrue(replied, "no reply to 等一会儿再说一句（CI）")
+        XCTAssertTrue(followed, "the message sent and its reply were not followed down: "
+                      + "\(String(describing: reply?.frame)) in \(transcript.frame)")
+        guard let reply else { return }
+
+        // further up: the wheel at the transcript's left margin, clear of the blocks that scroll sideways
+        let margin = transcript.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.3))
+        let (back, step) = scrollBack(watching: reply, at: margin, by: 200, from: 40)
+        let watched = ["各门课这周的情况", "先把这一行跑通", "周三前交", "等一会儿再说一句（CI）"]
+            .compactMap { findText($0, in: app) }
+            .first { inView($0, of: transcript) }
+        let before = watched.flatMap { self.minY($0) }
+        // the message nobody asked for, 8 seconds after the reply
+        Thread.sleep(forTimeInterval: max(1, 11 - Date().timeIntervalSince(repliedAt)))
+        let after = watched.flatMap { self.minY($0) }
+        keep(window.screenshot(), "board-19-further-up-message-came")
+
+        // back down to the end, where it is
+        var arrived = false
+        for _ in 0..<15 where step != 0 {
+            if let came = findText("又想起一件事（CI）", in: app), inView(came, of: transcript) {
+                arrived = true
+                break
+            }
+            margin.scroll(byDeltaX: 0, deltaY: -step * 3)
+            Thread.sleep(forTimeInterval: 0.4)
+        }
+        keep(window.screenshot(), "board-20-back-at-the-end")
+        let name = watched.map { $0.label.isEmpty ? String(describing: $0.value ?? "") : $0.label } ?? "nothing"
+        let numbers = "further up: scrolled back \(back) from the end; \(name) at \(say(before)) before the message came, "
+            + "\(say(after)) after; at the end it \(arrived ? "is" : "is not") there"
+        positions.append(numbers)
+        XCTAssertGreaterThan(back, 150, "the chat did not scroll back from its end. \(numbers)")
+        XCTAssertNotNil(before, "nothing in view to watch. \(numbers)")
+        XCTAssertEqual(after ?? .nan, before ?? .nan, accuracy: 2, "a message that came moved what shows further up. \(numbers)")
+        XCTAssertTrue(arrived, "the message nobody asked for is not at the end. \(numbers)")
+    }
+
+    /// In the transcript's visible part, not above or below it.
+    @MainActor
+    private func inView(_ element: XCUIElement, of transcript: XCUIElement) -> Bool {
+        guard element.exists, transcript.exists else { return false }
+        let frame = element.frame, area = transcript.frame
+        return frame.minY >= area.minY - 2 && frame.maxY <= area.maxY + 2
+    }
+
+    /// Opens the folded calls with a click and closes them with another, measuring the line and
+    /// the reply below it each time: the line stays put, and the reply moves down by as much as
+    /// the calls take, then back. The numbers go in the failures and in `positions`; false when
+    /// the line was gone after a click, and nothing more can be measured.
+    @MainActor
+    @discardableResult
+    private func openAndClose(_ run: XCUIElement, above reply: XCUIElement, in app: XCUIApplication, window: XCUIElement,
+                              _ place: String, shots: (opened: String, closed: String), positions: inout [String]) -> Bool {
+        let last = "web_extract · moodle.example（CI）"
+        guard let line = minY(run), let below = minY(reply) else {
+            positions.append("\(place): the line (\(run.exists)) or the reply below it (\(reply.exists)) is not there")
+            XCTFail("\(place): the line or the reply below it is not there")
+            return false
+        }
+        // where the line shows: the second click goes there, as a person would click it again
+        let spot = window.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: run.frame.midX - window.frame.minX, dy: run.frame.midY - window.frame.minY))
+        run.click()
+        let opened = waitUntil(timeout: 5) { self.findText(last, in: app) != nil }
+        settle { self.minY(run).map { abs($0 - line) <= 2 } ?? true }
+        let openedLine = minY(run)
+        let openedBelow = minY(reply)
+        // from the line's foot to the last call's: what opening added
+        var calls: CGFloat?
+        if let call = findText(last, in: app), run.exists {
+            calls = call.frame.maxY - run.frame.maxY
+        }
+        keep(window.screenshot(), shots.opened)
+        guard openedLine != nil else {
+            let numbers = "\(place): the line at \(line), the reply below at \(below); after the click the line is gone "
+                + "(the chat moved elsewhere), the reply \(say(openedBelow))"
+            positions.append(numbers)
+            XCTFail(numbers)
+            return false
+        }
+        spot.click()
+        let closed = waitUntil(timeout: 5) { self.findText("read_file · syllabus（CI）", in: app) == nil }
+        settle { self.minY(run).map { abs($0 - line) <= 2 } ?? true }
+        let closedLine = minY(run)
+        let closedBelow = minY(reply)
+        keep(window.screenshot(), shots.closed)
+        let numbers = "\(place): the line at \(line), opened \(say(openedLine)), closed \(say(closedLine)); "
+            + "the reply below at \(below), opened \(say(openedBelow)), closed \(say(closedBelow)); the calls take \(say(calls))"
+        positions.append(numbers)
+        print("positions: \(numbers)")
+        XCTAssertTrue(opened, "\(place): the folded tool calls did not open on a click")
+        XCTAssertTrue(closed, "\(place): the opened tool calls did not close on a second click where the line showed")
+        XCTAssertEqual(openedLine ?? .nan, line, accuracy: 4, "\(place): the line moved as the calls opened. \(numbers)")
+        XCTAssertGreaterThan(calls ?? 0, 30, "\(place): the opened calls take no room. \(numbers)")
+        XCTAssertEqual((openedBelow ?? .nan) - below, calls ?? .nan, accuracy: 6,
+                       "\(place): the reply did not move down by as much as the calls take. \(numbers)")
+        XCTAssertEqual(closedLine ?? .nan, line, accuracy: 4, "\(place): the line moved as the calls closed. \(numbers)")
+        XCTAssertEqual(closedBelow ?? .nan, below, accuracy: 4, "\(place): the reply did not come back as the calls closed. \(numbers)")
+        return closedLine != nil
+    }
+
+    /// Where `element` starts, or nil when it is not there (asking a missing element ends the test).
+    @MainActor
+    private func minY(_ element: XCUIElement) -> CGFloat? {
+        element.exists ? element.frame.minY : nil
+    }
+
+    private func say(_ value: CGFloat?) -> String {
+        value.map { "\($0)" } ?? "gone"
+    }
+
+    /// Scrolls the chat back from its end by about `distance` with the wheel at `point` (on the
+    /// chat, not on a block that scrolls sideways): how far `handle` moved down, and the wheel
+    /// delta that scrolls back. Which sign that is, and how far a delta goes, is the runner's
+    /// business: nudges both ways, growing until one moves the chat back (at the end, the other
+    /// way moves nothing).
+    @MainActor
+    private func scrollBack(watching handle: XCUIElement, at point: XCUICoordinate, by distance: CGFloat,
+                            from size: CGFloat = 10) -> (moved: CGFloat, step: CGFloat) {
+        guard let start = minY(handle) else { return (0, 0) }
+        let moved = { (self.minY(handle) ?? start) - start }
+        var step: CGFloat = 0
+        var size = size
+        while step == 0, size <= 160, handle.exists {
+            for sign: CGFloat in [1, -1] {
+                let before = moved()
+                point.scroll(byDeltaX: 0, deltaY: sign * size)
+                Thread.sleep(forTimeInterval: 0.3)
+                if moved() > before + 1 {
+                    step = sign * size
+                    break
+                }
+            }
+            size *= 2
+        }
+        for _ in 0..<20 where step != 0 && handle.exists && moved() < distance {
+            point.scroll(byDeltaX: 0, deltaY: step)
+            Thread.sleep(forTimeInterval: 0.3)
+        }
+        Thread.sleep(forTimeInterval: 0.5)
+        return (moved(), step)
+    }
+
+    /// Waits a little at a time for `condition`, up to `timeout`, then a moment more for what
+    /// moves to come to rest.
+    @MainActor
+    private func settle(timeout: TimeInterval = 1.5, _ condition: () -> Bool) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition(), Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        Thread.sleep(forTimeInterval: 0.3)
+    }
+
+    /// Scrolls `area` sideways until `target`'s right edge is inside it. Which sign of a wheel
+    /// delta moves content left is the runner's business: at the leading edge a nudge the other
+    /// way moves nothing, so the first nudge tells.
+    @MainActor
+    private func scrollSideways(_ area: XCUIElement, revealing target: XCUIElement) -> Bool {
+        let inside = { target.frame.maxX <= area.frame.maxX + 2 }
+        let start = target.frame.minX
+        var step: CGFloat = -300
+        for attempt in 0..<10 {
+            if inside() { return true }
+            area.scroll(byDeltaX: step, deltaY: 0)
+            Thread.sleep(forTimeInterval: 0.4)
+            if attempt == 0, target.frame.minX >= start - 1 {
+                step = -step
+            }
+        }
+        return inside()
     }
 
     /// Anything labelled with `text`, a button among them.
@@ -301,6 +557,14 @@ final class BoardTests: XCTestCase {
 
     private func keep(_ screenshot: XCUIScreenshot, _ name: String) {
         let attachment = XCTAttachment(screenshot: screenshot)
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    /// Numbers worth reading after the run, kept as a text beside the pictures (`name.txt`).
+    private func note(_ text: String, _ name: String) {
+        let attachment = XCTAttachment(string: text)
         attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)
