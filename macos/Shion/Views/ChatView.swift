@@ -21,6 +21,8 @@ struct ChatView: View {
     @State private var placing = 0
     /// ⌘F (ChatControls.swift)
     @State private var find = ChatFind()
+    /// Bumped as the find bar closes: the composer takes the keys back (KeyTarget).
+    @State private var composerKeys = 0
     /// Scrolls as little as it takes to show a whole row, for the rows themselves (a failed turn's
     /// 详情 opening).
     @State private var reveal = RowReveal()
@@ -105,7 +107,11 @@ struct ChatView: View {
             }
         }
         .overlay(alignment: .top) {
-            ChatFindBar(find: find, found: found, botId: botId)
+            ChatFindBar(find: find, found: found, botId: botId) {
+                // the keys go back to the composer as the bar goes
+                composerKeys += 1
+                find.close()
+            }
         }
         .overlay {
             if let error = store.chatErrors[botId] {
@@ -134,7 +140,7 @@ struct ChatView: View {
                         follow.on = following
                     }
                 }, stop: store.turnRunning(botId) && !store.readOnly ? { store.stopReply(botId) } : nil,
-                   stopping: store.control.stopping.contains(botId))
+                   stopping: store.control.stopping.contains(botId), keys: composerKeys)
             }
             // not connected, what is said waits under the chat (AppStore+Reconnect.swift)
             .disabled(store.readOnly && !store.waits(botId))
@@ -704,6 +710,8 @@ struct Composer: View {
     /// While a turn runs: the stop button (⌘.) in place of send.
     var stop: (() -> Void)?
     var stopping = false
+    /// Bumped to give it the keys: the chat does as its find bar closes.
+    var keys = 0
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 10) {
@@ -714,6 +722,8 @@ struct Composer: View {
                 .onSubmit(send)
                 .padding(.vertical, 7)
                 .accessibilityIdentifier("composer")
+                // the keys, when the chat gives them back
+                .background(KeyTarget(request: keys))
             if let stop {
                 StopButton(stopping: stopping, action: stop)
             } else {

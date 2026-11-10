@@ -337,6 +337,55 @@ final class SignInTests: XCTestCase {
         app.terminate()
     }
 
+    /// The demo's 詩音 chat opened from the sidebar, as one does, and nothing else clicked: ⌘F and
+    /// what is typed goes into the find field; Esc closes the bar, and what is typed then goes into
+    /// the composer. Typed to the app, not to either field, so that keys going elsewhere (the
+    /// sidebar keeps them) show as what each field holds. No server.
+    @MainActor
+    func testFindTakesTheKeys() throws {
+        continueAfterFailure = true
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-ShionSnapshot", "YES",
+            "-ShionRoute", "reports",
+            "-ShionAppearance", "light",
+            "-ApplePersistenceIgnoreState", "YES",
+        ]
+        app.launch()
+        let window = app.windows.firstMatch
+        XCTAssertTrue(window.waitForExistence(timeout: 20))
+        element("bot-shion", in: app).click()
+        XCTAssertTrue(element("transcript", in: app).waitForExistence(timeout: 10), "the chat did not open")
+        Thread.sleep(forTimeInterval: 1)
+        let field = element("find-field", in: app)
+        let composer = element("composer", in: app)
+        let holds = { (element: XCUIElement) in element.exists ? "「\(element.value as? String ?? "")」" : "not there" }
+        var notes: [String] = []
+        app.typeKey("f", modifierFlags: .command)
+        guard field.waitForExistence(timeout: 5) else {
+            keep(window.screenshot(), "signin-11-no-find")
+            XCTFail("⌘F did not open the find bar")
+            app.terminate()
+            return
+        }
+        app.typeText("作业")
+        Thread.sleep(forTimeInterval: 0.5)
+        notes.append("⌘F from the sidebar, then 作业: the find field \(holds(field)), the composer \(holds(composer))")
+        keep(window.screenshot(), "signin-11-find-typed")
+        note(notes.last ?? "", "signin-find-keys")
+        XCTAssertEqual(field.value as? String, "作业", "what was typed after ⌘F is not in the find field. \(notes.last ?? "")")
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(field.waitForNonExistence(timeout: 3), "Esc did not close the find bar")
+        app.typeText("好的")
+        Thread.sleep(forTimeInterval: 0.5)
+        notes.append("Esc, then 好的: the composer \(holds(composer))")
+        keep(window.screenshot(), "signin-12-composer-typed")
+        note(notes.last ?? "", "signin-find-keys-esc")
+        XCTAssertTrue((composer.value as? String)?.contains("好的") ?? false,
+                      "what was typed after Esc is not in the composer. \(notes.last ?? "")")
+        app.terminate()
+    }
+
     /// Which sign of a wheel delta at `wheel` scrolls the chat back, from nudges each way watching
     /// the row `label`; nil when none moves it. The pointer rests there first, and the nudges grow
     /// from 40 to 80: on the runner a first nudge of 40 sometimes moves nothing, the pointer
