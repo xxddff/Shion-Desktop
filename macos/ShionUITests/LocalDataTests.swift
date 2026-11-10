@@ -210,10 +210,11 @@ final class LocalDataTests: XCTestCase {
         }
     }
 
-    /// Scrolls Settings until `element` is in full view under the toolbar (a row under the toolbar's
-    /// glass counts as hittable, but a click there lands on the toolbar); with `atTop`, until it is
-    /// just under the toolbar, so what follows it is in view too. Which sign of a wheel delta scrolls
-    /// which way is the runner's business: a step that moves the page the wrong way flips it.
+    /// Scrolls Settings until `element` is in full view under the toolbar and above the Dock (a row
+    /// under the toolbar's glass counts as hittable, but a click there lands on the toolbar); with
+    /// `atTop`, until it is just under the toolbar, so what follows it is in view too. Which sign of a
+    /// wheel delta scrolls which way is the runner's business: a step that moves the page the wrong
+    /// way flips it.
     @MainActor
     private func reveal(_ element: XCUIElement, in window: XCUIElement, atTop: Bool = false) -> Bool {
         guard element.waitForExistence(timeout: 5) else { return false }
@@ -221,9 +222,12 @@ final class LocalDataTests: XCTestCase {
         let toolbar = window.toolbars.firstMatch
         var up: CGFloat = -1  // the sign of a delta that moves the page up
         var signKnown = false
+        // the window can reach down behind the Dock (the runner's screen is small): what is there
+        // is neither seen in a picture nor clickable. Screen points, top-left origin, as XCUI's.
+        let dock: CGFloat = NSScreen.main.map { $0.frame.maxY - $0.visibleFrame.minY } ?? .greatestFiniteMagnitude
         for _ in 0..<40 {
             let top = (toolbar.exists ? toolbar.frame.maxY : window.frame.minY) + 6
-            let bottom = window.frame.maxY - 6
+            let bottom = min(window.frame.maxY, dock) - 6
             let frame = element.frame
             let inView = frame.minY >= top && frame.maxY <= bottom
             // where its top should be: under the toolbar with room for its section's header, or
