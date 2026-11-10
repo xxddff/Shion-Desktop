@@ -284,9 +284,13 @@ extension AppStore {
     }
 
     /// The message as the official desktop words it: the files' references, one a line, a blank
-    /// line, then your words; Hermes's own caption when only pictures go.
-    private func submit(_ words: String, _ drafts: [Draft], botId: String, sessionId: String, submission: String,
-                        again: Bool) async {
+    /// line, then your words; Hermes's own caption when only pictures go. Its receipt is followed
+    /// as a message of words is (AppStore+Reconnect.swift): no answer before the connection went
+    /// leaves it unsure until the server can say; a refusal, or no connection to send it on, is
+    /// 没发出去 under it, with 重发 (the same id and references; a picture cleared meanwhile goes
+    /// up again, as below).
+    func submit(_ words: String, _ drafts: [Draft], botId: String, sessionId: String, submission: String,
+                again: Bool) async {
         let refs = drafts.compactMap(\.ref).joined(separator: "\n")
         var body = [refs, words].filter { !$0.isEmpty }.joined(separator: "\n\n")
         let pictures = drafts.filter { $0.kind == .image }
@@ -302,19 +306,34 @@ extension AppStore {
                 picture.path.map { ["path": .string($0), "mime": .string(picture.mime)] }
             })
         }
+        deliveries.track(submission, botId: botId, text: words, at: Date(), drafts: drafts)
         // just after a reconnect, Hermes takes it once the chat is attached again (AppStore+Reconnect.swift)
         await waitForChat(botId)
+        guard gateway.phase == .online, sessions[botId] == sessionId else {
+            // it did not go; what it takes is up already, so 重发 sends it once connected
+            return deliveries.set(submission, .unsent(nil))
+        }
         do {
             try await gateway.call("prompt.submit", .object(params))
+            deliveries.arrived(submission)
         } catch GatewayError.rpc(_, let message, let reason) where !again && !pictures.isEmpty && (reason ?? message) == "invalid_params" {
             // a picture staged too long ago was cleared: up again from the Mac's copy, once
             guard let fresh = await uploadAgain(drafts, botId: botId) else {
-                return chatNote("没发出去：图片要重新上传，可是没传上去", in: botId)
+                return deliveries.set(submission, .unsent("图片要重新上传，可是没传上去"))
             }
-            // a new admission, so a new id: the refused one is not asked to change its pictures
-            await submit(words, fresh, botId: botId, sessionId: sessionId, submission: UUID().uuidString, again: true)
+            // a new admission, so a new id: the refused one is not asked to change its pictures.
+            // The message goes by it from here on, as the turn's end will name it
+            let renewed = UUID().uuidString
+            deliveries.untrack(submission)
+            if let index = chats[botId]?.firstIndex(where: { $0.id == submission }) {
+                chats[botId]?[index].id = renewed
+            }
+            await submit(words, fresh, botId: botId, sessionId: sessionId, submission: renewed, again: true)
+        } catch GatewayError.rpc(_, let message, let reason) {
+            deliveries.set(submission, .unsent(DeliveryCheck.refusal(reason) ?? reason ?? message))
         } catch {
-            chatNote("没发出去：\(error.localizedDescription)", in: botId)
+            // no answer before the connection went: unsure until the server can say
+            deliveries.set(submission, .unsure)
         }
     }
 
@@ -334,10 +353,6 @@ extension AppStore {
             fresh.append(draft)
         }
         return fresh
-    }
-
-    private func chatNote(_ text: String, in botId: String) {
-        chats[botId, default: []].append(ChatItem(id: UUID().uuidString, role: .system, at: Date(), text: text))
     }
 
     // MARK: the transcript
