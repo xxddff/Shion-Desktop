@@ -110,8 +110,9 @@ private struct QuickAskRoot: View {
 }
 
 /// The field, then 总秘书's answer as it comes in: the same rows as the chat (folded tool calls,
-/// cards, Markdown), and what 总秘书 asks you on the way, answered here. Sentences waiting for a
-/// server come first. Glass, since it floats over everything.
+/// cards, Markdown). Sentences waiting for a server come first. What 总秘书 asks you on the way is
+/// answered here, under the answer rather than in it, so a long one cannot scroll it out of view.
+/// Glass, since it floats over everything.
 struct QuickAskView: View {
     @Environment(AppStore.self) private var store
     let quick: QuickAsk
@@ -129,12 +130,25 @@ struct QuickAskView: View {
         let lines = ChatLine.lines(items, replying: store.replying.contains(store.chiefId))
         let asks = quick.asks(in: store)
         let state = status(answered: items.count > 1 || !asks.isEmpty)
-        let filled = !quick.waiting.isEmpty || !lines.isEmpty || !asks.isEmpty
+        let said = !quick.waiting.isEmpty || !lines.isEmpty
+        let filled = said || !asks.isEmpty
         VStack(spacing: 0) {
             bar($quick.draft, answering: quick.question(in: store) != nil)
             if filled {
                 Divider()
-                answer(lines, asks: asks)
+            }
+            if said {
+                answer(lines)
+            }
+            if !asks.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(asks) { ask in
+                        QuickAskPrompt(ask: ask)
+                    }
+                }
+                .padding(.horizontal, 18)
+                .padding(.top, said ? 0 : 14)
+                .padding(.bottom, 14)
             }
             if let state {
                 HStack(spacing: 6) {
@@ -210,7 +224,7 @@ struct QuickAskView: View {
         .accessibilityIdentifier("quick-bar")
     }
 
-    private func answer(_ lines: [ChatLine], asks: [Ask]) -> some View {
+    private func answer(_ lines: [ChatLine]) -> some View {
         let chief = store.chief
         return ScrollView {
             VStack(alignment: .leading, spacing: 12) {
@@ -226,9 +240,6 @@ struct QuickAskView: View {
                             openRuns.formSymmetricDifference([id])
                         }
                     }
-                }
-                ForEach(asks) { ask in
-                    QuickAskPrompt(ask: ask)
                 }
             }
             .padding(.horizontal, 18)
