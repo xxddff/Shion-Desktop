@@ -24,6 +24,8 @@ struct ChatView: View {
                     guard let previous, let line = lines.first(where: { line in line.items.contains { $0.id == previous } }) else { return }
                     reader.scrollTo(line.id, anchor: .top)
                 }
+                // the message a notification was about, from its top (Landing.swift)
+                .landing(botId, lines: lines) { reader.scrollTo($0, anchor: .top) }
         }
         .overlay {
             if let error = store.chatErrors[botId] {

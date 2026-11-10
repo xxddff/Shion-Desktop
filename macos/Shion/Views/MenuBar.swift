@@ -1,8 +1,9 @@
 import KeyboardShortcuts
 import SwiftUI
 
-/// The status item: 总秘书's mark in outline (a template image, like other menu bar icons) and
-/// the next thing on the calendar.
+/// The status item: 总秘书's mark in outline (a template image, like other menu bar icons), the
+/// count of what waits on you while the Dock icon is away (DockMode.swift), and the next thing on
+/// the calendar.
 struct MenuBarLabel: View {
     let store: AppStore
     @Environment(\.openWindow) private var openWindow
@@ -10,6 +11,7 @@ struct MenuBarLabel: View {
     var body: some View {
         HStack(spacing: 4) {
             Image(nsImage: MenuBarIcon.image(store.chief?.initial ?? "詩"))
+            MenuBarCount(count: store.confirmCount)
             if let next = store.nextEvent {
                 Text("\(Fmt.hm(next.start)) \(next.title.replacing(#/ 第\d+回/#, with: ""))")
             }
@@ -103,7 +105,7 @@ struct MenuBarPanel: View {
             if store.confirmCount > 0 {
                 Button {
                     store.route = .confirm
-                    NSApp.activate()
+                    MainWindow.show()
                 } label: {
                     PanelRow(systemImage: "hand.raised", text: "\(store.confirmCount) 件事等你确认") {
                         Image(systemName: "arrow.right").foregroundStyle(.secondary)
@@ -136,6 +138,9 @@ struct MenuBarPanel: View {
             }
             .buttonStyle(.plain)
             .padding(.top, 6)
+
+            // the way back to the window while the Dock icon is away
+            MenuBarOpenRow()
         }
         .padding(8)
         .frame(width: 330)

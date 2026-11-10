@@ -37,6 +37,7 @@ extension AppStore {
         pluginData = false
         todos = demoTodos
         reports = demoReports
+        forgetReports()
         todaySummary = nil
         pluginRevision = 0
     }
@@ -111,7 +112,18 @@ extension AppStore {
             loaded.append(report)
         }
         guard pluginData else { return }
+        // one written since Shion connected is a notification (AppStore+Notices.swift)
+        noticeReports(loaded)
         reports = loaded.sorted { $0.date > $1.date }
+    }
+
+    /// One report by its day and kind: a notification's, when it is no longer the newest of its
+    /// kind (Landing.swift).
+    func fetchReport(day: String, kind: ReportKind) async -> Report? {
+        guard pluginData,
+              let reply = try? await pluginCall("reports.get", ["date": .string(day), "kind": .string(kind.rawValue)])
+        else { return nil }
+        return pluginReport(from: reply["report"])
     }
 
     // MARK: writes, shown at once and confirmed by the push that follows

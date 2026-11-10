@@ -4,10 +4,13 @@ import UserNotifications
 /// System notifications for what wants you while its page is not in front of you: an approval or
 /// a question, answered in the notification itself, an assistant's reply, replied to the same
 /// way, and a board card that stopped on you (replied to the same way too: the reply goes on the
-/// card and lets it go on), was handed to you to check, or is done. Clicking one opens the page it
-/// belongs to, or the card. Screenshot and test runs post nothing and ask for no permission; a
-/// test can have them written down instead (`-ShionNotificationLog <file>`), and answer them
-/// (`-ShionNotificationAnswers <file>`).
+/// card and lets it go on), was handed to you to check, or is done, and a daily report written
+/// since Shion connected. Clicking one lands on the very thing it was about (Landing.swift): the
+/// reply in its chat, the approval or question selected in 等你确认, the card on its board, the
+/// report; a click that started Shion lands there once it has connected. Screenshot and test runs
+/// post nothing and ask for no permission; a test can have them written down instead
+/// (`-ShionNotificationLog <file>`), answer or click them (`-ShionNotificationAnswers <file>`), and
+/// start Shion as a click would (`-ShionLaunchNotification <its userInfo as JSON>`).
 final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     static let shared = Notifier()
 
@@ -32,6 +35,9 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         static let cardReply = "card-reply"
     }
 
+    /// Typed into or picked in the notification; anything else is a click on it.
+    private static let answers: Set<String> = [Action.reply, Action.once, Action.deny, Action.answer, Action.cardReply]
+
     /// A test run's file, where each notification is written down as a line of JSON.
     private static let testLog: String? = LaunchOptions.current.snapshot
         ? UserDefaults.standard.string(forKey: "ShionNotificationLog")
@@ -40,6 +46,10 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     /// action, the text typed. Each is handled as that answer from the notification would be.
     private static let testAnswers: String? = LaunchOptions.current.snapshot
         ? UserDefaults.standard.string(forKey: "ShionNotificationAnswers")
+        : nil
+    /// A test run started as a click on a notification would start Shion: what it carried.
+    private static let testLaunch: String? = LaunchOptions.current.snapshot
+        ? UserDefaults.standard.string(forKey: "ShionLaunchNotification")
         : nil
     /// What a test run's notifications carried, by id, for its answers; how many answers were read.
     private var written: [String: [String: String]] = [:]
@@ -54,6 +64,9 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         guard !LaunchOptions.current.snapshot else {
             if let path = Self.testAnswers {
                 readAnswers(path)
+            }
+            if let launch = Self.testLaunch {
+                clickedAtLaunch(launch)
             }
             return
         }
@@ -117,14 +130,25 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         post(ask.id, content, thread: ask.botId)
     }
 
-    /// An assistant's reply; a newer one from the same assistant takes its place.
-    func reply(_ text: String, from name: String, botId: String) {
+    /// An assistant's reply; a newer one from the same assistant takes its place. `row` is the row
+    /// Hermes stored it as, `item` the chat's row it streamed into: a click finds it by them.
+    func reply(_ text: String, from name: String, botId: String, row: Int? = nil, item: String? = nil) {
         let content = UNMutableNotificationContent()
         content.title = name
         content.body = text.count > 300 ? String(text.prefix(300)) + "…" : text
         content.categoryIdentifier = Category.reply
-        content.userInfo = ["bot": botId]
+        content.userInfo = Landing.replyInfo(botId: botId, text: text, row: row, item: item, at: Date())
         post("reply-\(botId)", content, thread: botId)
+    }
+
+    /// A daily report written since Shion connected (AppStore+Notices.swift); a newer one of the
+    /// same kind takes its place.
+    func report(_ report: Report, from name: String) {
+        let content = UNMutableNotificationContent()
+        content.title = "\(name) 写好了\(report.kind.label)日报"
+        content.body = report.headline.isEmpty ? report.blocks.first?.items.first ?? "" : report.headline
+        content.userInfo = Landing.reportInfo(report)
+        post("report-\(report.kind.rawValue)", content, thread: "reports")
     }
 
     /// A board card that stopped on you, was handed to you to check, or is done, unless its page
@@ -258,6 +282,10 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     }
 
     private func respond(action: String, info: [String: String], text: String) {
+        guard Self.answers.contains(action) else {
+            // clicked, not answered: where it belongs, and on it the thing it was about
+            return land(info)
+        }
         let board = info["board"] ?? ""
         let card = info["card"].map { CardRef(board: board.isEmpty ? nil : board, id: $0) }
         handle(action: action, botId: info["bot"] ?? "", askId: info["ask"], card: card, text: text)
@@ -295,22 +323,27 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
                 }
             }
         default:
-            // clicked: the card on the board, or the page it belongs to
-            if let card {
-                store.openCard(card.id, board: card.board)
-            } else {
-                store.route = askId != nil ? .confirm : .chat(botId)
-            }
-            bringToFront()
+            break
         }
     }
 
-    private func bringToFront() {
-        NSApp.activate()
-        if let window = NSApp.windows.first(where: { $0.identifier?.rawValue.contains("AppWindow") == true }) {
-            window.makeKeyAndOrderFront(nil)
-        } else {
-            openMainWindow?()
+    /// A click: its page in front, with the thing it was about on it (Landing.swift).
+    private func land(_ info: [String: String]) {
+        guard let store else { return }
+        if let landing = Landing(info: info) {
+            Landings.shared.open(landing, in: store)
+        }
+        MainWindow.show()
+    }
+
+    /// A test run started as a click would start Shion: the click comes once the app is up, as
+    /// the system's does.
+    private func clickedAtLaunch(_ json: String) {
+        guard let parsed = try? JSONValue.parse(json), case .object(let fields) = parsed else { return }
+        let info = fields.compactMapValues { $0.string }
+        Task {
+            try? await Task.sleep(for: .milliseconds(500))
+            land(info)
         }
     }
 }

@@ -26,6 +26,10 @@ hermes_cli/dashboard_auth and the Canonical Gateway Protocol:
   /api/skills, /api/tools/…,   servers, skills, toolsets, config, delete (fake_profiles.py, which
   /api/config?profile=         also answers profiles.list, profiles.create and profiles.configure)
   prompt.submit "小窗：…"       詩音's answer to the ⌥Space window, streamed slowly (fake_quick.py)
+  prompt.submit "通知：…"       turns for ExtrasTests to be notified of: a long reply with its
+                               persisted_turn, a question left pending, a daily report written
+                               (fake_extras.py, also "捷径慢：…", a reply slower than a Shortcuts
+                               action waits)
 
 Like Hermes's contracts (extra="forbid"), session.resume, session.transcript and prompt.submit
 refuse keys they do not know, so a client's wrong parameter fails here as it would on a real server.
@@ -53,6 +57,7 @@ import fake_kanban  # noqa: E402  the kanban plugin's routes (BoardTests)
 import fake_profiles  # noqa: E402  the profiles' routes and RPCs (BotsTests)
 import fake_shion  # noqa: E402  the shion plugin's RPCs
 import fake_quick  # noqa: E402  詩音's answers to the ⌥Space window (QuickAskTests)
+import fake_extras  # noqa: E402  notifications to click and slow replies (ExtrasTests)
 
 ACCESS_ID, ACCESS_SECRET = "ci-client", "ci-secret"
 USER, PASSWORD = "ci-user", "ci-pass"
@@ -630,6 +635,8 @@ class Handler(BaseHTTPRequestHandler):
         method, params, rid = request.get("method", ""), request.get("params") or {}, request.get("id")
         if method != "gateway.ping":
             log(f"  rpc {method} {json.dumps(fake_profiles.loggable(method, params), ensure_ascii=False)[:160]}")
+        if fake_extras.handles_rpc(method, params):
+            return fake_extras.rpc(self, log, method, params, rid)
         if method.startswith("plugin.shion."):
             if params.get("profile") and not fake_profiles.has_plugin(params["profile"], "shion"):
                 # the plugin is installed in 詩音's profile only: elsewhere Hermes knows no such method
@@ -668,6 +675,7 @@ class Handler(BaseHTTPRequestHandler):
             if unknown:
                 return self.refuse(rid, unknown)
             result = self.snapshot(params.get("session_id", ""), params)
+            fake_extras.on_resume(params.get("session_id", ""), result)
             if params.get("session_id") == "sess-study" and "sess-study" not in approvals_raised:
                 # 课程 wants a login on its cloud desktop, a moment after Shion attaches
                 approvals_raised.add("sess-study")
@@ -704,6 +712,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.refuse(rid, unknown)
             log(f"    answered {params.get('prompt_id')} for {params.get('profile')}: "
                 f"{params.get('choice', params.get('answer'))!r}")
+            fake_extras.answered(params.get("session_id"), params.get("prompt_id"))
             self.send_json({"jsonrpc": "2.0", "id": rid, "result": {"accepted": True}})
             kind = "approval.settled" if method == "approval.respond" else "clarify.settled"
             self.event(kind, params.get("session_id"), {"prompt_id": params.get("prompt_id")})
@@ -717,6 +726,8 @@ class Handler(BaseHTTPRequestHandler):
             session_id, text = params.get("session_id"), params.get("text", "")
             if fake_quick.handles(text):
                 return fake_quick.answer(self, log, lock, transcripts, session_id, text)
+            if fake_extras.handles(text):
+                return fake_extras.answer(self, log, lock, transcripts, session_id, text, params.get("submission_id"))
             if "派一张卡" in text:
                 return self.hand_over(session_id, text)
             if "这周的作业" in text:

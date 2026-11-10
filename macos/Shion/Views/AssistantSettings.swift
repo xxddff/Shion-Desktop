@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// The Settings window: the server, the assistants on it, and the keys (ShortcutSettings.swift).
+/// The Settings window: the server, the assistants on it, the keys (ShortcutSettings.swift), and
+/// how Shion starts and stays around (GeneralSettings.swift).
 struct SettingsTabs: View {
     var body: some View {
         TabView {
@@ -12,6 +13,9 @@ struct SettingsTabs: View {
             }
             Tab("快捷键", systemImage: "keyboard") {
                 ShortcutSettings()
+            }
+            Tab("通用", systemImage: "gearshape") {
+                GeneralSettings()
             }
         }
     }

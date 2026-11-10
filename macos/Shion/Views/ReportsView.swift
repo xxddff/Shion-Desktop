@@ -1,12 +1,15 @@
 import SwiftUI
 
-/// Daily reports written on the VPS by 「回顾」 and 「资讯」; Shion only reads them.
+/// Daily reports written on the VPS by 「回顾」 and 「资讯」; Shion only reads them. A notification's
+/// report opens on its kind; one that is no longer the newest of its kind is read for it.
 struct ReportsView: View {
     @Environment(AppStore.self) private var store
     @State private var kind: ReportKind = .life
+    /// A notification's report that is not the newest of its kind, while that kind is picked.
+    @State private var opened: Report?
 
     var body: some View {
-        let report = store.reports.first { $0.kind == kind }
+        let report = opened.flatMap { $0.kind == kind ? $0 : nil } ?? store.reports.first { $0.kind == kind }
         ScrollView {
             VStack(alignment: .leading, spacing: 26) {
                 if let report {
@@ -34,6 +37,21 @@ struct ReportsView: View {
             .frame(maxWidth: .infinity)
         }
         .navigationTitle("日报")
+        // a notification's report (Landing.swift), once the plugin's reports are here
+        .task(id: "\(String(describing: Landings.shared.pending(on: .reports)))|\(store.pluginData)") {
+            guard case .report(let id, let day, let kind)? = Landings.shared.pending(on: .reports), store.pluginData else { return }
+            self.kind = kind
+            let report = store.reports.contains { $0.id == id } ? nil : await store.fetchReport(day: day, kind: kind)
+            guard !Task.isCancelled else { return }
+            opened = report
+            // last: clearing it starts this task anew
+            Landings.shared.pending = nil
+        }
+        .onChange(of: kind) {
+            if opened?.kind != kind {
+                opened = nil
+            }
+        }
         .toolbar {
             ToolbarItem(placement: .principal) {
                 Picker("日报", selection: $kind) {
