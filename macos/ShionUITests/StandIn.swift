@@ -6,7 +6,10 @@ import XCTest
 /// the tunnel a scripted drop took down may come back (`POST /ci/tunnel/up`, ci/fake_reconnect.py).
 /// A drop keeps the tunnel down until then, so a test sees what it looks for while Shion is away
 /// (重新连接中…, 等连上后确认, what it said meanwhile waiting) however long its typing takes, and Shion
-/// is back at its next try after.
+/// is back at its next try after. The same way, the stand-in sends the message nobody asked for
+/// when BoardTests is reading further up (`POST /ci/later`), finishes the ⌥Space reply once
+/// QuickAskTests has seen it arrive (`POST /ci/quick/finish`), and marks in its log where a test
+/// got to (`POST /ci/mark/…`), which is kept when a run is cut short.
 ///
 /// The request is plain HTTP over Network.framework, which App Transport Security does not cover
 /// (the runner's Info.plist is Xcode's, without Shion's exception for 127.0.0.1). The runner's sandbox
@@ -20,14 +23,38 @@ enum StandIn {
     /// the tunnel was not down, or nothing answered.
     @discardableResult
     static func tunnelUp(_ step: String, file: StaticString = #filePath, line: UInt = #line) -> Bool {
-        switch post("/ci/tunnel/up", timeout: 45) {
+        say("/ci/tunnel/up", step, "bring the tunnel back", timeout: 45, file: file, line: line)
+    }
+
+    /// Has the stand-in send now the message nobody asked for that 「等一会儿再说一句」 kept back:
+    /// answered once it is sent. A failure naming `step` when none was kept back.
+    @discardableResult
+    static func later(_ step: String, file: StaticString = #filePath, line: UInt = #line) -> Bool {
+        say("/ci/later", step, "send the message nobody asked for", timeout: 10, file: file, line: line)
+    }
+
+    /// Has the stand-in go on with the ⌥Space reply it holds after its first part.
+    @discardableResult
+    static func finishQuickReply(_ step: String, file: StaticString = #filePath, line: UInt = #line) -> Bool {
+        say("/ci/quick/finish", step, "finish the quick window's reply", timeout: 10, file: file, line: line)
+    }
+
+    /// A mark in the stand-in's log (`fake_hermes-<test>.log`): where the test got to, should the
+    /// app stop answering and the run be cut short. Nothing fails if it does not get there.
+    static func mark(_ step: String) {
+        _ = post("/ci/mark/\(step)", timeout: 2)
+    }
+
+    private static func say(_ path: String, _ step: String, _ what: String, timeout: TimeInterval,
+                            file: StaticString, line: UInt) -> Bool {
+        switch post(path, timeout: timeout) {
         case .success(let reply) where reply.status == 200:
-            print("\(step): the tunnel is back: \(reply.body)")
+            print("\(step): \(path): \(reply.body)")
             return true
         case .success(let reply):
-            XCTFail("\(step): the stand-in did not bring the tunnel back: \(reply.status) \(reply.body)", file: file, line: line)
+            XCTFail("\(step): the stand-in did not \(what): \(reply.status) \(reply.body)", file: file, line: line)
         case .failure(let failure):
-            XCTFail("\(step): the stand-in could not be told to bring the tunnel back: \(failure.reason)", file: file, line: line)
+            XCTFail("\(step): the stand-in could not be told to \(what): \(failure.reason)", file: file, line: line)
         }
         return false
     }

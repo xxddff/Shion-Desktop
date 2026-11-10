@@ -119,6 +119,8 @@ final class QuickAskTests: XCTestCase {
         keep(XCUIScreen.main.screenshot(), "quick-3-streaming")
         XCTAssertTrue(streaming, "the reply did not stream into the window")
         XCTAssertFalse(whole, "the whole reply was there at once")
+        // the stand-in holds the rest until the test has seen it arrive, however long that took
+        StandIn.finishQuickReply("the quick window's reply")
         let replied = waitForText(reply, in: answer, timeout: 15)
         Thread.sleep(forTimeInterval: 0.5)
         keep(XCUIScreen.main.screenshot(), "quick-4-replied")

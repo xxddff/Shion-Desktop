@@ -96,6 +96,20 @@ jobs:
                 http://127.0.0.1:8765/api/status && break
               sleep 1
             done
+            # an app that stops answering holds its test, and with it the run's hour (run 146): after
+            # ten minutes what is running and how busy (ps-<test>.txt) and where the app is (five
+            # seconds of its stacks, sample-<test>.txt) go with the pictures, then the test is
+            # stopped, ^C first so xcodebuild still writes what it has, and counts as failed; the
+            # rest still run
+            ( sleep 600
+              mkdir -p build/shots
+              ps -axo pid,pcpu,rss,etime,command > "build/shots/ps-$test.txt" 2>&1 || true
+              app=$(pgrep -x Shion | head -1 || true)
+              [ -n "$app" ] && sample "$app" 5 -file "build/shots/sample-$test.txt" > /dev/null 2>&1 || true
+              pkill -INT -f "ShionUITests/$test " && echo "$test: stopped after ten minutes, the app sampled first" || true
+              sleep 30
+              pkill -KILL -f "ShionUITests/$test " || true ) &
+            watchdog=$!
             if xcodebuild test-without-building \
                  -project Shion.xcodeproj \
                  -scheme Shion \
@@ -112,6 +126,7 @@ jobs:
               xcrun xcresulttool get test-results summary --path "build/$test.xcresult" 2>/dev/null \
                 | grep -E '"(failureText|testName)"' | head -20 || true
             fi
+            kill "$watchdog" 2>/dev/null || true
             kill "$standin" 2>/dev/null || true
             wait "$standin" 2>/dev/null || true
           done

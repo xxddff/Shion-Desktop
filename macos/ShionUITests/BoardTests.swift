@@ -152,6 +152,9 @@ final class BoardTests: XCTestCase {
         element("bot-shion", in: app).click()
         let reread = waitUntil(timeout: 20) { self.chatCards("整理第8回笔记（CI）", saying: "完成", in: app) >= 2 }
         keep(window.screenshot(), "board-10-chat-reread")
+        if !reread {
+            noteRereadChat(in: app, window: window)
+        }
         XCTAssertTrue(reread, "after reading the chat again, the call and the notice are not both the card")
         XCTAssertFalse(waitForText("Kanban t_", in: app, timeout: 1), "the board's notice shows as text after reading again")
         element("nav-board", in: app).click()
@@ -218,15 +221,17 @@ final class BoardTests: XCTestCase {
 
         // the second table is wider than the reply even with its cells wrapped: it scrolls sideways
         // in its own box until its last column shows, and the words before it stay where they are
+        var positions: [String] = []
         let wide = element("markdown-table-scroll", in: app)
         if wide.waitForExistence(timeout: 5), let edge = exactText("最右这列的格子（CI）", in: app),
            let words = findText("各门课这周的情况", in: app) {
             let past = edge.frame.maxX > wide.frame.maxX + 1
             let wordsX = words.frame.minX
-            let revealed = scrollSideways(wide, revealing: edge)
+            let (revealed, how) = scrollSideways(wide, revealing: edge)
+            positions.append("the wide table: \(how)")
             keep(window.screenshot(), "board-13a-wide-table-scrolled")
             XCTAssertTrue(past, "the wide table's last column fits already: \(edge.frame) in \(wide.frame)")
-            XCTAssertTrue(revealed, "scrolling the wide table did not bring its last column into view: \(edge.frame) in \(wide.frame)")
+            XCTAssertTrue(revealed, "scrolling the wide table did not bring its last column into view: \(edge.frame) in \(wide.frame); \(how)")
             XCTAssertEqual(words.frame.minX, wordsX, accuracy: 1, "the words before the wide table moved with it")
         } else {
             keep(window.screenshot(), "board-13a-no-wide-table")
@@ -241,10 +246,11 @@ final class BoardTests: XCTestCase {
         if code.waitForExistence(timeout: 5), source.exists, let words = findText("先把这一行跑通", in: app) {
             let past = source.frame.maxX > code.frame.maxX + 1
             let wordsX = words.frame.minX
-            let revealed = scrollSideways(code, revealing: source)
+            let (revealed, how) = scrollSideways(code, revealing: source)
+            positions.append("the code block: \(how)")
             keep(window.screenshot(), "board-13b-code-scrolled")
             XCTAssertTrue(past, "the long code line fits already: \(source.frame) in \(code.frame)")
-            XCTAssertTrue(revealed, "scrolling the code block did not bring the line's end into view: \(source.frame) in \(code.frame)")
+            XCTAssertTrue(revealed, "scrolling the code block did not bring the line's end into view: \(source.frame) in \(code.frame); \(how)")
             XCTAssertEqual(words.frame.minX, wordsX, accuracy: 1, "the words before the code block moved with it")
         } else {
             keep(window.screenshot(), "board-13b-no-code")
@@ -258,7 +264,6 @@ final class BoardTests: XCTestCase {
         guard run.waitForExistence(timeout: 3), let reply = findText("这周要交的有两项", in: app) else {
             return XCTFail("no button for the folded tool calls, or no reply below it")
         }
-        var positions: [String] = []
         let measured = openAndClose(run, above: reply, in: app, window: window, "at the end",
                                     shots: ("board-14-chat-tools-opened", "board-15-chat-tools-closed"), positions: &positions)
         if measured {
@@ -273,12 +278,13 @@ final class BoardTests: XCTestCase {
             }
         }
         stillWhileFurtherUp(in: app, window: window, transcript: transcript, positions: &positions)
+        longReplyStays(in: app, window: window, transcript: transcript, positions: &positions)
         note(positions.joined(separator: "\n"), "board-positions")
         app.terminate()
     }
 
     /// Sent from wherever one is, a message and its reply are followed down to the end. Read
-    /// further up, a message nobody asked for (the stand-in's comes 8 seconds after its reply)
+    /// further up, a message nobody asked for (the stand-in sends it when told, POST /ci/later)
     /// leaves what shows where it is; back at the end, it is there.
     @MainActor
     private func stillWhileFurtherUp(in app: XCUIApplication, window: XCUIElement, transcript: XCUIElement,
@@ -288,7 +294,6 @@ final class BoardTests: XCTestCase {
         composer.typeText("等一会儿再说一句（CI）")
         element("send", in: app).click()
         let replied = waitUntil(timeout: 10) { self.findText("好，过一会儿再说一句（CI）", in: app) != nil }
-        let repliedAt = Date()
         Thread.sleep(forTimeInterval: 0.8)
         let reply = findText("好，过一会儿再说一句（CI）", in: app)
         let followed = reply.map { inView($0, of: transcript) } ?? false
@@ -305,8 +310,10 @@ final class BoardTests: XCTestCase {
             .compactMap { findText($0, in: app) }
             .first { inView($0, of: transcript) }
         let before = watched.flatMap { self.minY($0) }
-        // the message nobody asked for, 8 seconds after the reply
-        Thread.sleep(forTimeInterval: max(1, 11 - Date().timeIntervalSince(repliedAt)))
+        // the message nobody asked for, now that the chat is read further up: the stand-in answers
+        // once it has gone out, and Shion has it a moment later
+        let sent = StandIn.later("further up")
+        Thread.sleep(forTimeInterval: 1.5)
         let after = watched.flatMap { self.minY($0) }
         keep(window.screenshot(), "board-19-further-up-message-came")
 
@@ -323,12 +330,161 @@ final class BoardTests: XCTestCase {
         keep(window.screenshot(), "board-20-back-at-the-end")
         let name = watched.map { $0.label.isEmpty ? String(describing: $0.value ?? "") : $0.label } ?? "nothing"
         let numbers = "further up: scrolled back \(back) from the end; \(name) at \(say(before)) before the message came, "
-            + "\(say(after)) after; at the end it \(arrived ? "is" : "is not") there"
+            + "\(say(after)) after (the stand-in \(sent ? "sent it" : "did not send it")); at the end it \(arrived ? "is" : "is not") there"
         positions.append(numbers)
         XCTAssertGreaterThan(back, 150, "the chat did not scroll back from its end. \(numbers)")
         XCTAssertNotNil(before, "nothing in view to watch. \(numbers)")
         XCTAssertEqual(after ?? .nan, before ?? .nan, accuracy: 2, "a message that came moved what shows further up. \(numbers)")
         XCTAssertTrue(arrived, "the message nobody asked for is not at the end. \(numbers)")
+    }
+
+    /// 詩音's 第 120 条 on the stand-in is a reply some screens tall. The find bar goes to it, and
+    /// it fills what shows; then, for words found nowhere, 上一个 reads the older pages (the second,
+    /// then the third): as they come in above, the reply stays where it was. The wheel can't stop
+    /// on it as a page lands: a page is asked for as the top comes near, when a long reply leading
+    /// the page is only just laid out, and the page comes with its foot and the rows below in view.
+    @MainActor
+    private func longReplyStays(in app: XCUIApplication, window: XCUIElement, transcript: XCUIElement,
+                                positions: inout [String]) {
+        app.typeKey("f", modifierFlags: .command)
+        let field = element("find-field", in: app)
+        if !field.waitForExistence(timeout: 5) {
+            element("find", in: app).click()
+        }
+        guard field.waitForExistence(timeout: 5) else {
+            positions.append("the long reply: no find bar")
+            return XCTFail("neither ⌘F nor the toolbar's find button opened the find bar")
+        }
+        field.click()
+        // from the end it is gone to through rows not laid out yet, and may only just show; gone
+        // to again from there, it comes to the middle of what shows
+        field.typeText("很长的回复")
+        Thread.sleep(forTimeInterval: 2)
+        field.typeKey("a", modifierFlags: .command)
+        field.typeKey(.delete, modifierFlags: [])
+        Thread.sleep(forTimeInterval: 0.5)
+        field.typeText("很长的回复")
+        Thread.sleep(forTimeInterval: 1.5)
+        // words found nowhere (its paragraphs go to 48): nothing to go to, and what shows stays
+        field.typeText("，段落 99")
+        Thread.sleep(forTimeInterval: 0.5)
+        let area = transcript.frame
+        let before = longReply(in: transcript)
+        let top = before.paragraphs["第 120 条（詩音）"]?.minY
+        let foot = before.paragraphs.first { $0.key.hasPrefix("很长的回复，段落 48：") }?.value.maxY
+        let fills = (top.map { $0 < area.minY } ?? false) && (foot.map { $0 > area.maxY } ?? false)
+        keep(window.screenshot(), "board-21-long-reply")
+
+        element("find-older", in: app).click()
+        // the third page is asked for as the second comes in: it can be in by the next reading
+        let came = landed(in: transcript, from: before.bar)
+        let withSecond = longReply(in: transcript)
+        let thenThird = landed(in: transcript, from: withSecond.bar)
+        let withThird = longReply(in: transcript)
+        keep(window.screenshot(), "board-22-long-reply-pages-in")
+        app.typeKey(.escape, modifierFlags: [])
+
+        // by its topmost paragraph read each time
+        let held = before.paragraphs
+            .filter { withSecond.paragraphs[$0.key] != nil && withThird.paragraphs[$0.key] != nil }
+            .min { $0.value.minY < $1.value.minY }
+        let name = held.map { $0.key.components(separatedBy: "：").first ?? $0.key } ?? "no paragraph read each time"
+        let (was, second, third) = (held?.value.minY, held.flatMap { withSecond.paragraphs[$0.key]?.minY },
+                                    held.flatMap { withThird.paragraphs[$0.key]?.minY })
+        func bar(_ reading: (paragraphs: [String: CGRect], bar: Double?)) -> String {
+            reading.bar.map { String(format: "%.3f", $0) } ?? "not there"
+        }
+        let numbers = "the long reply (第 120 条, its top at \(say(top)), its foot at \(say(foot)) in \(area)): "
+            + "「\(name)」 at \(say(was)) before 上一个, \(say(second)) once the scroll bar moved, \(say(third)) "
+            + "\(thenThird ? "once it moved again" : "a moment later"); the scroll bar \(bar(before)), \(bar(withSecond)), \(bar(withThird))"
+        positions.append(numbers)
+        XCTAssertTrue(fills, "the long reply does not fill what shows. \(numbers)")
+        XCTAssertTrue(came, "no older page came in. \(numbers)")
+        XCTAssertEqual(second ?? .nan, was ?? .nan, accuracy: 4, "the long reply moved as an older page came in. \(numbers)")
+        XCTAssertEqual(third ?? .nan, was ?? .nan, accuracy: 4, "the long reply moved as the older pages came in. \(numbers)")
+    }
+
+    /// From one snapshot of the transcript: the paragraphs of the stand-in's long 第 120 条 laid
+    /// out, by their words, and where the transcript's own scroll bar is.
+    @MainActor
+    private func longReply(in transcript: XCUIElement) -> (paragraphs: [String: CGRect], bar: Double?) {
+        guard let root = try? transcript.snapshot() else { return ([:], nil) }
+        var paragraphs: [String: CGRect] = [:]
+        func visit(_ node: XCUIElementSnapshot) {
+            if node.elementType == .staticText || node.elementType == .textView,
+               let text = [node.label, node.value as? String ?? ""]
+                .first(where: { $0.hasPrefix("第 120 条（") || $0.hasPrefix("很长的回复，段落 ") }),
+               paragraphs[text] == nil {
+                paragraphs[text] = node.frame
+            }
+            node.children.forEach(visit)
+        }
+        visit(root)
+        // not a wide table's inside a row
+        let bar = root.children.first { $0.elementType == .scrollBar && $0.frame.height > $0.frame.width }
+        let value = bar?.value
+        return (paragraphs, (value as? NSNumber)?.doubleValue ?? (value as? String).flatMap(Double.init))
+    }
+
+    /// Waits up to 6 s for the transcript's scroll bar to move, as a page comes in above, then a
+    /// moment for the row put back; false when it did not, or there is no bar to read.
+    @MainActor
+    private func landed(in transcript: XCUIElement, from bar: Double?) -> Bool {
+        guard let bar else {
+            Thread.sleep(forTimeInterval: 2.3)
+            return false
+        }
+        let deadline = Date().addingTimeInterval(6)
+        while Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.2)
+            if let now = longReply(in: transcript).bar, abs(now - bar) > 0.005 {
+                Thread.sleep(forTimeInterval: 0.3)
+                return true
+            }
+        }
+        return false
+    }
+
+    /// The chat read again shows no cards (run 146: the transcript went blank as it was read again,
+    /// with a reply taller than what shows a little above its end): what the transcript holds,
+    /// read three times half a second apart, and again after a turn of the wheel, in
+    /// board-reread.txt.
+    @MainActor
+    private func noteRereadChat(in app: XCUIApplication, window: XCUIElement) {
+        let transcript = element("transcript", in: app)
+        var readings: [String] = []
+        for _ in 0..<3 {
+            readings.append(described(transcript))
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+        transcript.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.4)).scroll(byDeltaX: 0, deltaY: 40)
+        Thread.sleep(forTimeInterval: 1)
+        let cards = chatCards("整理第8回笔记（CI）", saying: "完成", in: app)
+        readings.append("after a turn of the wheel: \(described(transcript)); \(cards) of the two cards")
+        keep(window.screenshot(), "board-10a-chat-reread-wheel")
+        note(readings.joined(separator: "\n"), "board-reread")
+    }
+
+    /// The transcript from one snapshot: where it is, its scroll bar, and the texts laid out in
+    /// it, how many and the first few in view.
+    @MainActor
+    private func described(_ transcript: XCUIElement) -> String {
+        guard let root = try? transcript.snapshot() else { return "no transcript" }
+        var texts: [(text: String, frame: CGRect)] = []
+        func visit(_ node: XCUIElementSnapshot) {
+            if node.elementType == .staticText || node.elementType == .textView {
+                texts.append((node.label.isEmpty ? node.value as? String ?? "" : node.label, node.frame))
+            }
+            node.children.forEach(visit)
+        }
+        visit(root)
+        let area = root.frame
+        let value = root.children.first { $0.elementType == .scrollBar && $0.frame.height > $0.frame.width }?.value
+        let bar = ((value as? NSNumber)?.doubleValue ?? (value as? String).flatMap(Double.init)).map { String(format: "%.3f", $0) }
+        let shown = texts.filter { $0.frame.maxY > area.minY && $0.frame.minY < area.maxY }
+        let first = shown.prefix(3).map { "「\($0.text.prefix(16))」 at \($0.frame.minY)" }.joined(separator: ", ")
+        return "the transcript at \(area), its scroll bar \(bar ?? "not there"); \(texts.count) texts laid out, "
+            + "\(shown.count) in view: \(first.isEmpty ? "none" : first)"
     }
 
     /// In the transcript's visible part, not above or below it.
@@ -448,23 +604,55 @@ final class BoardTests: XCTestCase {
         Thread.sleep(forTimeInterval: 0.3)
     }
 
-    /// Scrolls `area` sideways until `target`'s right edge is inside it. Which sign of a wheel
-    /// delta moves content left is the runner's business: at the leading edge a nudge the other
-    /// way moves nothing, so the first nudge tells.
+    /// Scrolls `area` sideways until `target`'s right edge is inside it, as a person would: the
+    /// pointer rests on the block, then the wheel turns sideways. Which sign moves the content left
+    /// is the runner's business, and a turn now and then moves nothing (run 144: ten turns at the
+    /// block's middle, none moved it, as the first one's sign was taken for the wrong one): a turn
+    /// that moves nothing is tried with the other sign too, and once a sign has moved it, it keeps
+    /// it; a point where nothing moves at all is left for another one along the block. Failing
+    /// that, the block's own scroll bar is dragged to its end. Whether the edge came in, and how.
     @MainActor
-    private func scrollSideways(_ area: XCUIElement, revealing target: XCUIElement) -> Bool {
+    private func scrollSideways(_ area: XCUIElement, revealing target: XCUIElement) -> (Bool, String) {
         let inside = { target.frame.maxX <= area.frame.maxX + 2 }
-        let start = target.frame.minX
-        var step: CGFloat = -300
-        for attempt in 0..<10 {
-            if inside() { return true }
-            area.scroll(byDeltaX: step, deltaY: 0)
+        guard !inside() else { return (true, "in view already") }
+        var sign: CGFloat?
+        var turns = 0
+        for point: CGFloat in [0.5, 0.2, 0.8] {
+            let spot = area.coordinate(withNormalizedOffset: CGVector(dx: point, dy: 0.5))
+            spot.hover()
             Thread.sleep(forTimeInterval: 0.4)
-            if attempt == 0, target.frame.minX >= start - 1 {
-                step = -step
+            var still = 0
+            while still < 3, turns < 24, !inside() {
+                var moved = false
+                for tried in sign.map({ [$0] }) ?? [-1, 1] {
+                    let was = target.frame.minX
+                    spot.scroll(byDeltaX: tried * 300, deltaY: 0)
+                    turns += 1
+                    Thread.sleep(forTimeInterval: 0.4)
+                    if target.frame.minX < was - 1 {
+                        sign = tried
+                        moved = true
+                        break
+                    }
+                }
+                still = moved ? 0 : still + 1
+            }
+            if inside() {
+                return (true, "\(turns) turns of the wheel, the last ones at \(point) of the block (sign \(sign ?? 0))")
             }
         }
-        return inside()
+        // the block's own bar, along its bottom edge, dragged from its start to its end
+        let bar = area.scrollBars.allElementsBoundByIndex.first { $0.frame.width > $0.frame.height }
+        if let bar {
+            area.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).hover()
+            Thread.sleep(forTimeInterval: 0.3)
+            bar.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.5))
+                .press(forDuration: 0.2, thenDragTo: bar.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 0.5)))
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+        let how = "\(turns) turns of the wheel moved it \(sign == nil ? "not at all" : "only so far")"
+            + (bar == nil ? ", and no scroll bar of its own to drag" : ", then its scroll bar was dragged")
+        return (inside(), how)
     }
 
     /// Anything labelled with `text`, a button among them.
