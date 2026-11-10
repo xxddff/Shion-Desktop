@@ -27,7 +27,8 @@ struct ChatView: View {
 
     var body: some View {
         let bot = store.bot(botId)
-        let items = store.chats[botId] ?? []
+        // and under them, what was said while not connected, waiting (ChatDelivery.swift)
+        let items = store.withAskCards(store.chats[botId] ?? [], of: botId) + WaitingMessages.items(for: botId)
         let lines = ChatLine.lines(items, replying: store.replying.contains(botId))
         let found = find.found(in: lines)
         // before the rows are laid out: older rows coming in above (the row at the top of what
@@ -129,10 +130,11 @@ struct ChatView: View {
                     } else {
                         follow.on = following
                     }
-                }, stop: store.turnRunning(botId) ? { store.stopReply(botId) } : nil,
+                }, stop: store.turnRunning(botId) && !store.readOnly ? { store.stopReply(botId) } : nil,
                    stopping: store.control.stopping.contains(botId))
             }
-            .disabled(store.readOnly)
+            // not connected, what is said waits under the chat (AppStore+Reconnect.swift)
+            .disabled(store.readOnly && !store.waits(botId))
             .frame(maxWidth: 720)
             .padding(.horizontal, 40)
             .padding(.bottom, 16)
@@ -243,6 +245,8 @@ struct ChatView: View {
         switch line {
         case .item(let item):
             ChatRow(item: item, bot: bot, showHead: showsHead(lines, index))
+                // waiting, unsure or not sent (ChatDelivery.swift)
+                .modifier(DeliveryMark(item: item, botId: botId))
         case .tools(let id, let tools):
             ToolRun(tools: tools, open: openRuns.contains(id)) {
                 openRuns.formSymmetricDifference([id])
@@ -519,7 +523,10 @@ struct ChatRow: View {
         case .system:
             TurnNote(item: item, botId: bot?.id ?? "")
         case .card:
-            if let found = store.chatCard(item) {
+            if let askId = item.askId {
+                // a password or a key the assistant asked for, or what became of an ask (SecretCard.swift)
+                AskTrailCard(askId: askId)
+            } else if let found = store.chatCard(item) {
                 CardChip(card: found.card, showsStatus: found.known)
             } else if !item.text.isEmpty {
                 // the board's notice about a card it no longer lists

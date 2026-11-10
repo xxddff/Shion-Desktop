@@ -68,9 +68,11 @@ struct DemoData {
             Card(id: "c7a1", title: "整理「数据结构与算法 第7回」录音，列出要做的事", assignee: "study", status: .running, line: "读完录音，正在列待办 · 2 分钟前", updatedAt: at(0, 10, 50)),
             Card(id: "f1e0", title: "核实「东京今冬电费上涨 30%」", assignee: "news", status: .running, line: "找到公告，正在比对数字 · 12 分钟前", updatedAt: at(0, 10, 40)),
             Card(id: "m2b1", title: "回复中村老师：中期报告的提交格式", assignee: "mail", status: .waiting, line: "回复起草好了，等你确认后发出", updatedAt: at(0, 8, 44)),
+            Card(id: "g5d2", title: "下载上学期成绩单", assignee: "study", status: .waiting, line: "学校门户要两步验证码，发到你手机上了。告诉我验证码，我接着下载。", updatedAt: at(0, 10, 20)),
             Card(id: "c7b2", title: "下载第7回课件，存进 Notion", assignee: "study", status: .queued, line: "课程手上还有一件，做完就开始", updatedAt: at(0, 10, 32)),
             Card(id: "c7c3", title: "做第7回复习卡片", assignee: "study", status: .queued, line: "等「下载第7回课件」做完", updatedAt: at(0, 10, 31)),
             Card(id: "d6c3", title: "做第6回复习卡片", assignee: "study", status: .done, line: "12 张，放在 Notion「数据结构与算法」第6回下面", updatedAt: at(-1, 21, 6)),
+            Card(id: "h6a4", title: "把第6回作业的批改意见整理进 Notion", assignee: "study", status: .done, line: "批改意见 5 条，放在 Notion「数据结构与算法」第6回下面", updatedAt: at(0, 9, 24)),
         ]
     }
 

@@ -90,6 +90,15 @@ struct AskRow: View {
     let ask: Ask
 
     var body: some View {
+        // a password or a key is typed on its card, not here (SecretCard.swift)
+        if ask.kind == .secret {
+            SecretAskRow(ask: ask)
+        } else {
+            row
+        }
+    }
+
+    private var row: some View {
         HStack(spacing: 10) {
             Avatar(bot: store.bot(ask.botId), size: 24)
             VStack(alignment: .leading, spacing: 2) {
@@ -121,6 +130,15 @@ struct AskCard: View {
     let ask: Ask
 
     var body: some View {
+        // a password or a key: its own card, with the field (SecretCard.swift)
+        if ask.kind == .secret {
+            SecretCard(requestId: ask.id)
+        } else {
+            card
+        }
+    }
+
+    private var card: some View {
         Box {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 8) {

@@ -126,11 +126,15 @@ struct QuickAskView: View {
 
     var body: some View {
         @Bindable var quick = quick
-        let items = quick.exchange(in: store)
+        // what 总秘书 asked on the way stays as a line once answered (AppStore+Trail.swift); with
+        // nothing asked the window is empty, whatever was answered before
+        let items = quick.asked.map {
+            store.withAskCards(quick.exchange(in: store), of: store.chiefId, open: false, since: $0.at)
+        } ?? []
         let lines = ChatLine.lines(items, replying: store.replying.contains(store.chiefId))
         let asks = quick.asks(in: store)
         let state = status(answered: items.count > 1 || !asks.isEmpty)
-        let said = !quick.waiting.isEmpty || !lines.isEmpty
+        let said = !quick.sentences(for: nil).isEmpty || !lines.isEmpty
         let filled = said || !asks.isEmpty
         VStack(spacing: 0) {
             bar($quick.draft, answering: quick.question(in: store) != nil)
@@ -228,13 +232,14 @@ struct QuickAskView: View {
         let chief = store.chief
         return ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                ForEach(quick.waiting) { sentence in
+                ForEach(quick.sentences(for: nil)) { sentence in
                     WaitingSentence(text: sentence.text, written: QuickAskWaiting.written(sentence.at, now: Date()))
                 }
                 ForEach(lines) { line in
                     switch line {
                     case .item(let item):
                         ChatRow(item: item, bot: chief, showHead: false)
+                            .modifier(DeliveryMark(item: item, botId: store.chiefId))
                     case .tools(let id, let tools):
                         ToolRun(tools: tools, open: openRuns.contains(id)) {
                             openRuns.formSymmetricDifference([id])
@@ -309,6 +314,15 @@ struct QuickAskPrompt: View {
     let ask: Ask
 
     var body: some View {
+        // a password or a key is typed on its card in the chat (SecretCard.swift)
+        if ask.kind == .secret {
+            SecretAskRow(ask: ask)
+        } else {
+            prompt
+        }
+    }
+
+    private var prompt: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(ask.title)
                 .font(.t13.weight(.medium))

@@ -41,7 +41,7 @@ struct DetailView: View {
         case .reports: ReportsView().askToolbar()
         case .board: BoardView().askToolbar()
         case .desktop: DesktopView().askToolbar()
-        case .chat(let id): ChatView(botId: id).assistantSettingsButton(id).askToolbar(id != store.chiefId).testInspector().id(id)
+        case .chat(let id): AssistantView(botId: id).assistantSettingsButton(id).askToolbar(id != store.chiefId).testInspector().id(id)
         case .botSettings(let id): BotSettingsView(botId: id).askToolbar().id("assistant-\(id)")
         }
     }
@@ -94,7 +94,7 @@ struct Sidebar: View {
             }
             Section("助手") {
                 ForEach(store.bots) { bot in
-                    BotRow(bot: bot, waiting: store.asks.contains { $0.botId == bot.id })
+                    BotRow(bot: bot, waiting: store.waitsOnYou(bot.id))
                         .accessibilityIdentifier("bot-\(bot.id)")
                         .contextMenu { AssistantMenu(store: store, botId: bot.id) }
                         .tag(Route.chat(bot.id))
@@ -111,8 +111,9 @@ struct Sidebar: View {
     /// Warm while asks wait on you; the system's own color on the selected row, where warm would
     /// sink into the accent fill.
     private var confirmBadge: Text? {
-        guard !store.asks.isEmpty else { return nil }
-        let count = Text("\(store.asks.count)")
+        let waiting = store.confirmCount
+        guard waiting > 0 else { return nil }
+        let count = Text("\(waiting)")
         return selection == .confirm ? count : count.foregroundStyle(Palette.warm).fontWeight(.semibold)
     }
 }
@@ -146,7 +147,8 @@ struct ConnectionFooter: View {
         SettingsLink {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
-                    Circle().fill(ConnectionState.color(store.gateway.phase)).frame(width: 7, height: 7)
+                    Circle().fill(store.reconnecting ? Palette.warm : ConnectionState.color(store.gateway.phase))
+                        .frame(width: 7, height: 7)
                     Text(store.serverSettings.host.isEmpty ? "未连接服务器" : store.serverSettings.host)
                         .font(.t12)
                         .lineLimit(1)
@@ -155,13 +157,15 @@ struct ConnectionFooter: View {
                         Text("示例数据").font(.t11).foregroundStyle(.tertiary)
                     }
                 }
-                // not connected, or not any more: the server's data as it last was, from when
-                if let note = store.lastDataNote {
+                // not connected, or not any more: the server's data as it last was, from when; while a
+                // connection that had worked is being got back, that, and when it is tried again
+                if let note = store.reconnectNote ?? store.lastDataNote {
                     Text(note)
                         .font(.t11)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .padding(.leading, 13)
+                        .accessibilityIdentifier("connection-note")
                 }
             }
             .padding(.horizontal, 16)

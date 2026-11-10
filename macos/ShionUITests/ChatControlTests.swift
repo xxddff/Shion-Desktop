@@ -247,7 +247,8 @@ final class ChatControlTests: XCTestCase {
         keep(app.windows.firstMatch.screenshot(), "chatctl-8-offline-chat")
         XCTAssertTrue(kept, "the chat went back to the demo after 断开")
         XCTAssertTrue(note, "the sidebar does not say the data is the last the server gave")
-        XCTAssertFalse(element("composer", in: app).isEnabled, "the composer takes messages while not connected")
+        // what is said now waits for a connection (ReconnectTests); a todo stays read-only
+        XCTAssertTrue(element("composer", in: app).isEnabled, "the composer takes nothing to send later while not connected")
         element("nav-todos", in: app).click()
         let todos = waitForText("CI：交实验报告", in: app, timeout: 5)
         keep(app.windows.firstMatch.screenshot(), "chatctl-9-offline-todos")

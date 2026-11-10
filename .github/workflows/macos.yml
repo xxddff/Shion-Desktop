@@ -2,7 +2,8 @@ name: macOS app
 
 # Builds the app on macOS 27 / Xcode 27 and takes a screenshot of every page, light and dark,
 # then signs in through the browser sheet against a stand-in Hermes (macos/ci/fake_hermes.py) and
-# runs the board, the assistants and this Mac's own data (made-up calendars and windows) against it.
+# runs the board, the assistants, this Mac's own data (made-up calendars and windows) and the
+# passwords and keys assistants ask for against it.
 # macOS runner minutes are limited: this only runs when the app or this file changes.
 # A downloadable Release build (Shion.dmg) is made on manual runs, or when the commit message
 # contains [package].
@@ -71,6 +72,8 @@ jobs:
             -derivedDataPath build/DerivedData \
             -only-testing:ShionUITests/ScreenshotTests \
             -only-testing:ShionUITests/LocalScreenshotTests \
+            -only-testing:ShionUITests/ReconnectScreenshotTests \
+            -only-testing:ShionUITests/SecretScreenshotTests \
             -resultBundlePath build/Shots.xcresult \
             -quiet 2>&1 | tee -a build/xcodebuild.log
 
@@ -85,7 +88,7 @@ jobs:
           # would otherwise go to whichever test connects first, and BotsTests and BotPageTests change
           # its profiles
           failed=""
-          for test in SignInTests BoardTests BotsTests BotPageTests QuickAskTests ChatControlTests MediaTests LocalDataTests; do
+          for test in SignInTests BoardTests BotsTests BotPageTests QuickAskTests ChatControlTests MediaTests LocalDataTests ReconnectTests WorkTests SecretsTests; do
             python3 -u ci/fake_hermes.py --port 8765 > "build/fake_hermes-$test.log" 2>&1 &
             standin=$!
             for attempt in 1 2 3 4 5 6 7 8 9 10; do
@@ -113,9 +116,33 @@ jobs:
             wait "$standin" 2>/dev/null || true
           done
           if [ -n "$failed" ]; then
-            echo "::warning title=End to end::failed:$failed; see the signin-*, board-*, bots-*, page-*, quick-*, chatctl-*, media-* and local-* screenshots and the fake_hermes-*.log files in the shots artifact"
+            echo "::warning title=End to end::failed:$failed; see the signin-*, board-*, bots-*, page-*, quick-*, chatctl-*, media-*, local-*, reconnect-*, work-* and secrets-* screenshots and the fake_hermes-*.log files in the shots artifact"
             exit 1
           fi
+
+      # The password SecretsTests types must never be written down: not by the stand-in (it logs
+      # names and ids only), not by Shion (its preferences, Application Support). An answer must go
+      # out once.
+      - name: No password written down
+        if: always()
+        run: |
+          found=""
+          for log in build/fake_hermes-*.log; do
+            if [ -f "$log" ] && grep -qF 'ci-sudo-Pa55' "$log"; then found="$found $log"; fi
+          done
+          if defaults read dev.shion.Shion 2>/dev/null | grep -qF 'ci-sudo-Pa55'; then found="$found preferences"; fi
+          if grep -rqF 'ci-sudo-Pa55' "$HOME/Library/Application Support/dev.shion.Shion" 2>/dev/null; then
+            found="$found application-support"
+          fi
+          if [ -n "$found" ]; then
+            echo "::error title=Secrets::the password SecretsTests typed is written down in:$found"
+            exit 1
+          fi
+          if grep -qF '!! answered twice' build/fake_hermes-SecretsTests.log 2>/dev/null; then
+            echo "::error title=Secrets::Shion answered a request twice (fake_hermes-SecretsTests.log)"
+            exit 1
+          fi
+          echo "the password is in none of the stand-in logs, the preferences or Application Support"
 
       - name: Stand-in Hermes logs
         if: always()
@@ -131,7 +158,7 @@ jobs:
         if: always()
         run: |
           mkdir -p build/shots
-          for bundle in Shots SignInTests BoardTests BotsTests BotPageTests QuickAskTests ChatControlTests MediaTests LocalDataTests; do
+          for bundle in Shots SignInTests BoardTests BotsTests BotPageTests QuickAskTests ChatControlTests MediaTests LocalDataTests ReconnectTests WorkTests SecretsTests; do
             if [ -d "build/$bundle.xcresult" ]; then
               mkdir -p "build/export-$bundle"
               xcrun xcresulttool export attachments --path "build/$bundle.xcresult" --output-path "build/export-$bundle" \
@@ -144,7 +171,8 @@ jobs:
           out = 'build/shots'
           for folder in ('build/export-Shots', 'build/export-SignInTests', 'build/export-BoardTests', 'build/export-BotsTests',
                          'build/export-BotPageTests', 'build/export-QuickAskTests', 'build/export-ChatControlTests',
-                         'build/export-MediaTests', 'build/export-LocalDataTests'):
+                         'build/export-MediaTests', 'build/export-LocalDataTests',
+                         'build/export-ReconnectTests', 'build/export-WorkTests', 'build/export-SecretsTests'):
               manifest = os.path.join(folder, 'manifest.json')
               if not os.path.exists(manifest):
                   continue

@@ -68,7 +68,7 @@ nonisolated enum GatewayError: LocalizedError {
 
 /// One WebSocket to the Hermes gateway (`/api/ws`), speaking the Canonical Gateway Protocol:
 /// JSON-RPC 2.0, one object per text frame. Requests get replies; `event` notifications go to
-/// `onEvent`; server requests Shion does not handle get a -32601 answer.
+/// `onEvent`; server requests go to `onRequest`, and the ones it does not take get a -32601 answer.
 @Observable
 final class Gateway {
     enum Phase: Equatable {
@@ -82,14 +82,30 @@ final class Gateway {
     /// True when `/api/ws` is served by `hermes gateway` (the canonical wire); a standalone
     /// `hermes serve` speaks the legacy wire, which Shion does not support.
     private(set) var sessionAuthority = false
+    /// When the next automatic try is, while one waits (the sidebar says it).
+    private(set) var nextRetry: Date?
+    /// A connection that had worked is down, and being got back.
+    var reconnecting: Bool { wanted && wasOnline && phase != .online }
 
     /// (event type, session id, payload)
     @ObservationIgnored var onEvent: ((String, String?, JSONValue) -> Void)?
     /// Every event's whole params, just before `onEvent`: Hermes stamps each frame of a turn with
     /// its `execution_generation` there, beside the payload (AppStore+Control.swift keeps it).
     @ObservationIgnored var onFrame: ((JSONValue) -> Void)?
+    /// A server→client request (method, id, params): true when it was taken, to be answered with
+    /// `answer(_:_:)` (sudo and secret, AppStore+Secrets.swift).
+    @ObservationIgnored var onRequest: ((String, String, JSONValue) -> Bool)?
     /// Called after an automatic reconnect: attachments are per socket, so sessions must resume.
     @ObservationIgnored var onReconnect: (() -> Void)?
+    /// Bumped by every socket that comes up: work begun for an earlier one stops (AppStore.comeBack),
+    /// and a sudo or secret request is answered on the socket it came on, or on one a resume found
+    /// it still waiting on (AppStore+Secrets.swift).
+    @ObservationIgnored private(set) var connection = 0
+    /// Each session's newest event seen, kept across sockets (Gateway+Replay.swift).
+    @ObservationIgnored var cursors = EventCursors()
+    /// The sessions attached on this socket (`session.resume`, `session.create`): Hermes takes a
+    /// prompt, or an answer to an approval, only on a socket that has its session attached.
+    @ObservationIgnored var attached: Set<String> = []
     /// Signs each dial: the session token, or a browser sign-in's access token. `true` asks for
     /// a fresh one, after the server refused the last.
     @ObservationIgnored var credential: ((_ settings: ServerSettings, _ renew: Bool) async throws -> Credential)?
@@ -109,6 +125,7 @@ final class Gateway {
     @ObservationIgnored private var wanted = false
     @ObservationIgnored private var wasOnline = false
     @ObservationIgnored private var retries = 0
+    @ObservationIgnored private var retry: Task<Void, Never>?
 
     // MARK: connecting
 
@@ -117,12 +134,16 @@ final class Gateway {
         wanted = true
         wasOnline = false
         retries = 0
+        cursors.removeAll()
         await open(isReconnect: false)
     }
 
     func disconnect() {
         wanted = false
         attempt += 1
+        retry?.cancel()
+        nextRetry = nil
+        cursors.removeAll()
         teardown(GatewayError.offline)
         phase = .offline
     }
@@ -130,6 +151,8 @@ final class Gateway {
     private func open(isReconnect: Bool) async {
         attempt += 1
         let attempt = attempt
+        retry?.cancel()
+        nextRetry = nil
         teardown(GatewayError.offline)
         phase = .connecting
         do {
@@ -156,6 +179,7 @@ final class Gateway {
             sessionAuthority = readyPayload["session_authority"]?.bool ?? false
             _ = try await call("client.capabilities", ["server_requests": true])
             guard attempt == self.attempt else { return }
+            connection += 1
             phase = .online
             wasOnline = true
             retries = 0
@@ -239,8 +263,20 @@ final class Gateway {
     /// Sends a request and waits for its reply (30 s by default, as the Desktop does). With
     /// `keepRefusal`, a refusal comes back as `{"refusal": <the error object>}` instead of being
     /// thrown, for a caller that reads `error.data` (a revision conflict names the fresh revision).
+    /// An attach's snapshot says where its session's events go on from (Gateway+Replay.swift).
     @discardableResult
     func call(_ method: String, _ params: JSONValue = [:], timeout: Double = 30, keepRefusal: Bool = false) async throws -> JSONValue {
+        let socket = self.socket
+        let result = try await request(method, params, timeout: timeout, keepRefusal: keepRefusal)
+        if method == "session.resume" || method == "session.create", socket != nil, socket === self.socket,
+           let session = result["session_id"]?.string {
+            cursors.start(result)
+            attached.insert(session)
+        }
+        return result
+    }
+
+    private func request(_ method: String, _ params: JSONValue, timeout: Double, keepRefusal: Bool) async throws -> JSONValue {
         guard let socket else { throw GatewayError.offline }
         let id = nextId
         nextId += 1
@@ -278,6 +314,15 @@ final class Gateway {
         }
     }
 
+    /// Answers a server→client request: a JSON-RPC response, which gets no reply. Throws when the
+    /// connection is down or the frame did not go out. The frame is not kept, retried or logged.
+    func answer(_ id: String, _ result: JSONValue) async throws {
+        guard let socket, phase == .online else { throw GatewayError.offline }
+        let frame: JSONValue = ["jsonrpc": "2.0", "id": .string(id), "result": result]
+        let text = try frame.serialized()
+        try await socket.send(.string(text))
+    }
+
     // MARK: receiving
 
     private func receive(on socket: URLSessionWebSocketTask) {
@@ -313,11 +358,13 @@ final class Gateway {
                 if type == "gateway.ready" {
                     resolveReady(.success(payload))
                 } else {
-                    onFrame?(params)
-                    onEvent?(type, params["session_id"]?.string, payload)
+                    // a frame seen already goes no further (Gateway+Replay.swift)
+                    deliver(params)
                 }
             } else if let id = frame["id"] {
-                // sudo, secret and other server requests: not handled here yet, so say so at once
+                // sudo and secret wait for you (AppStore+Secrets.swift); the other server requests
+                // are not handled, so say so at once
+                if let key = id.string, onRequest?(method, key, frame["params"] ?? .null) == true { return }
                 send(["jsonrpc": "2.0", "id": id, "error": ["code": -32601, "message": .string("no handler for server request: \(method)")]])
             }
             return
@@ -351,7 +398,8 @@ final class Gateway {
             failure = GatewayError.closed(code, reason)
         }
         teardown(failure)
-        guard wanted else { return }
+        // while dialling, the dial says so itself and tries again (`open`): once, not twice
+        guard wanted, phase == .online else { return }
         phase = .failed(failure.localizedDescription)
         scheduleReconnect()
     }
@@ -375,16 +423,45 @@ final class Gateway {
     }
 
     /// Only a connection that had worked comes back on its own; a first attempt that fails (wrong
-    /// token, wrong address) stays failed with its reason until you connect again.
+    /// token, wrong address) stays failed with its reason until you connect again. Tries 1, 2, 4,
+    /// 8 s apart, then every 15 s (Backoff).
     private func scheduleReconnect() {
         guard wanted, wasOnline, settings.isConfigured else { return }
         retries += 1
-        let delay = min(15, 0.5 * pow(2, Double(min(retries, 6))))
-        Task { [weak self] in
+        let delay = Backoff.delay(afterFailures: retries)
+        nextRetry = Date().addingTimeInterval(delay)
+        retry?.cancel()
+        retry = Task { [weak self] in
             try? await Task.sleep(for: .seconds(delay))
-            guard let self, self.wanted, self.phase != .online, self.phase != .connecting else { return }
-            await self.open(isReconnect: true)
+            guard !Task.isCancelled, let self, self.wanted, self.phase != .online, self.phase != .connecting else { return }
+            // the dial gets a task of its own: open() cancels the retry, and from in here that
+            // would cancel the dial too (its requests failing at once, never sent)
+            self.redial()
         }
+    }
+
+    /// Back from sleep, or on another network (ConnectionWatch.swift): a connection that had worked
+    /// does not wait out its backoff. One that seems up is checked first: a socket from before the
+    /// sleep or from the old network is dead without knowing it, and one that has heard nothing for
+    /// longer than the heartbeat allows certainly is.
+    func reconnectNow() {
+        guard wanted, wasOnline, settings.isConfigured, phase != .connecting else { return }
+        guard phase == .online else { return redial() }
+        if Date().timeIntervalSince(lastInbound) > 20 { return redial() }
+        Task { [weak self] in
+            do {
+                _ = try await self?.call("gateway.ping", [:], timeout: 5)
+            } catch {
+                guard let self, self.phase == .online else { return }
+                self.redial()
+            }
+        }
+    }
+
+    private func redial() {
+        retry?.cancel()
+        nextRetry = nil
+        Task { await self.open(isReconnect: true) }
     }
 
     private func teardown(_ error: Error) {
@@ -392,6 +469,7 @@ final class Gateway {
         heartbeat = nil
         socket?.cancel(with: .normalClosure, reason: nil)
         socket = nil
+        attached = []
         resolveReady(.failure(error))
         let waiting = pending
         pending = [:]
