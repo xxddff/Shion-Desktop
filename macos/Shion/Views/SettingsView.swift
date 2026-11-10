@@ -76,6 +76,8 @@ struct SettingsView: View {
 
             MediaSettings()
 
+            SecretSettings()
+
             LastDataSection()
         }
         .formStyle(.grouped)

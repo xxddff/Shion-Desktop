@@ -200,6 +200,7 @@ App 里：菜单栏弹出面板的第一行就是专注检查：计划和现在�
 - **可靠提交**：客户端的 `submission_id`（或 `input_id`）和服务端的 `admission_id` 分开，以回执为准（`prompt.receipt`、`prompt.resolve_unknown`）。Hermes 按（登录的人、会话、`submission_id`）只收一次：同一个 id、同样的内容再发，回的是原来那次的回执，不会再跑一轮；同一个 id 换了内容是 `admission_conflict`。收下时马上发一帧 `session.info`，`pending` 里按 `input_id` 列出还在排队、在跑的；一轮结束的 `message.complete` 里，`persisted_turn.submission_id` 说跑的是哪一次。`prompt.submit` 只收在这条连接上接上了（resume 或 create）这个会话的，别的是 `permission_denied`。一轮还在跑时再发，排在它后面，不会打断它（要不要打断是客户端自己的事）。以上按 `hermes-agent` 的 b3746e35 核对过（`gateway/session_controls.py`、`gateway/session_authority.py`、`hermes_state_runtime.py`）。
 - **审批、提问**：回复要对准 `prompt_id` 和 `execution_generation`，也要在这条连接上接上了会话；断线重连后先 `session.events.since`，再 `session.resume`，快照的 `prompts` 列着还没回答的。
 - **断线重连**：每帧事件带会话自己的 `seq` 和 `replay_epoch`，会话留最近 512 帧（最多 4 MiB）。新连接上对每个会话问 `session.events.since {session_id, last_sequence, replay_epoch}`：回之后的帧，或者 `snapshot_required`（服务器重启过、帧已经不在了、游标比最新的还新）。在还没接上这个会话的连接上问过，接着的 `session.resume` 会先补上两次之间新发的帧再接上，中间不漏。断开的连接按孤儿处理：这一轮照常跑完，批准一直等着（`gateway/session_events.py`、`tui_gateway/event_replay.py`、`gateway/session_viewer_close.py`）。见「断线重连」。
+- **sudo 密码、技能的密钥**：不是事件，是服务器发来的 JSON-RPC 请求（`sudo`、`secret`），用响应回答，`request.cancel` 撤回，见「助手要密码和密钥时」。
 - **一次运行的编号和会话的版本**：每轮开始时会话的 `execution_generation` 加一，这一轮的每个事件帧都在 `params` 里带着它（和 `payload` 并列）；每轮结束 `revision` 加一。快照（`session.resume`、`session.create` 的回复）带当前的两个值，每轮结束的 `session.info` 也带（`gateway/session_authority.py` 的 `_publish_pending`：客户端只能从这里知道每轮之后的 `revision`）。
 - **停止**：`session.interrupt {session_id, execution_generation}`（`profile` 只管路由；参数是封闭的，多一个少一个都是 `invalid_params`）。编号不是这一轮的就拒绝（`stale_generation`），对上了就硬停这一轮的 agent（压缩也停，后台委派不停），回复是会话的 handle。停下后这一轮照常结束：`message.complete` 的 `status` 是 `interrupted`（`outcome` 是 `cancelled`），`text` 是已经流出来的部分，什么都没出来时是一句占位（`Operation interrupted: …`），随后是 `running: false` 的 `session.info`。已经出来的部分存成一行助手消息，带 `display_metadata.interrupted`；停在工具调用之后的，收尾的那行也带这个标记（没有文字时是一行隐藏的占位）。
 - **重试**：Hermes 的 `/retry` 是两步，官方桌面端的「重新生成」在 canonical 上也是这样拆的：先 `session.mutate {session_id, request_id, expected_revision, expected_generation, operation: "rewind", payload: {target_message_id}}`，把那条用户消息（`row_id`）和它后面的都收回（要空闲，在跑时是 `session_busy`；`revision` 或编号对不上是 `revision_conflict` / `stale_generation`，拒绝的 `error.data` 里带着新的两个值），回执的 `target_message.content` 是原来打的字；再 `prompt.submit` 一次。canonical 的 `prompt.submit` 没有截断参数（旧接口的 `truncate_before_row_id` 这些会被拒）；`session.branch_stored` 是另开一个会话，Bot Chat 只能有一个，不用。一轮结束时 `message.complete.persisted_turn` 给出这一轮存成的行：`user_row_id` 是提问那行，`submission_id` 是提交时带的那个，所以 Shion 用聊天里那条消息的 id 当 `submission_id`，就知道它存成了哪一行。
@@ -207,6 +208,52 @@ App 里：菜单栏弹出面板的第一行就是专注检查：计划和现在�
 - **不在 canonical 里的**：看板走 `/api/plugins/kanban/*`，例行任务列表走 `/api/cron/jobs`（canonical 里只有 `cron.submit` 立即运行和 `cron.status`）。
 - **图片和文件**（详见 `docs/files-and-images.md`）：图片先 `POST /api/chat/image-upload?profile=` 存进那个助手的 `cache/images/`，再放进 `prompt.submit` 的 `attachments: [{path, mime}]`（只认这两个键，PNG/JPEG/GIF/WebP，最多 10 张）；文件用 `file.attach` 换一个 `@file:` 引用，放在消息文字的最前面（同一条 `/api/ws` 上调，会话要先在这条连接上 resume 过）；服务器上的图和文件用 `/api/fs/read-data-url`、`/api/fs/download` 取。这几个 REST 路由都只认请求头里的凭证，没写进 Hermes 的用户文档。
 - **类型生成**：`apps/shared/src/gateway-contract.openrpc.json` 可以生成 Swift `Codable` 类型，不用手写。
+
+## 助手要密码和密钥时
+
+助手在一轮里有时要你给一样东西才能接着做：终端工具跑 `sudo` 要密码（比如 `sudo apt-get install -y ffmpeg`），或者一个技能缺它要的环境变量（比如 notion 技能的 `NOTION_API_KEY`）。Hermes 把这一步停下来，问挂在这个对话上的窗口。以前 Shion 一律回「不处理」（-32601），Hermes 当成拒绝，那一步直接失败。现在：
+
+- **卡片**：那个助手的对话里出现一张卡片，排在那次工具调用后面；「等你确认」里是同一张，侧栏、今天的「需要你」、菜单栏和 Dock 的件数都算它。卡片写着谁要、拿去做什么（工具名和那条命令；或者技能名、Hermes 的提示文字和去哪拿），要的是环境变量时写出变量名，让你知道交出去的是什么。下面一个密码框，「提交」「拒绝」，右上角是还剩多久。今天和 ⌥Space 小窗里只有一行：「填写」打开那张卡所在的对话，「拒绝」直接拒绝。
+- **同时来好几个**：每个一张卡，答一个不影响别的。Hermes 的并行工具调用会同时问。
+- **结束了**：提交、拒绝、过期，或者别的窗口先答了，卡片收成一行（见下一节），写「已提交」「已拒绝」「已过期」「在别处回答了」，离开「等你确认」，通知也撤掉。Hermes 等 2 分钟；这一轮结束了（停止、出错）也算过期。
+- **通知**：对话和「等你确认」都不在眼前时，发一条只写「课程 要一个密码」或「课程 要一个密钥」的通知，没有按钮，不能在通知里填（通知里的输入框是明文的），点了打开 Shion 的「等你确认」。
+- **断线**：卡片留着，先不能提交，写「连接中…」或「未连接服务器」；重连后先用 `session.events.since` 补上错过的帧（里面有 `request.cancel` 就照样收起卡片），再 `session.resume`：它的 `open_requests` 里还有这个请求，就又能填，没有了就算过期。在设置里断开时，还在等的先算过期，再连上时 `open_requests` 里还有就重新打开。Shion 没开着时来的、还在等的，连上后也从 `open_requests` 出现（这种不知道还剩多久，不显示倒计时）。
+
+Shion 绝对不做的：
+- **不留**：你填的值不显示、不打印、不记日志，也不存：不进 last-data.json，不进偏好设置（UserDefaults），不进钥匙串，不写进这台 Mac 上的任何文件。它只在卡片的输入框里，提交时交给连接，输入框随即清空，Shion 不留那个字符串。
+- **不进对话**：答完，对话里只有「已提交」。
+- **只发一次，只发给这台服务器**：经发来请求的那条连接发回去，不重试；没发出去就写明为什么，要你再填一次。断线重连后，要等 resume 确认它还在等，才能在新连接上答。
+- **截图和辅助功能里也没有**：密码框（`NSSecureTextField`）在屏幕上、截图里、辅助功能读到的值里都只有圆点。
+- **不接自动填充**：密码框不设 content type，系统「密码」App 不替你填，也不会在你填完后提出保存。这是服务器上的 sudo 密码和第三方服务的密钥，不是这台 Mac 上哪个网站的登录：自动填充按网站对应，Shion 没有对应的网站，能填进来的多半不对；提出保存的话又会把它存进钥匙串。存在「密码」App 里的，复制过来粘贴。没核实：不设 content type 时，macOS 27 会不会照样猜着提供自动填充，没在真机上看过。
+- **不替你回答别的**：只处理 `sudo` 和 `secret`；别的 server request（批量的 `clarify`、vault 系列、`display.install.sudo` 等）照旧回 -32601，Hermes 当成没答。
+
+**线上的样子**，按 hermes-agent `b3746e35`（2026-11-09）的源码核对：
+
+| | |
+| --- | --- |
+| 形状 | server→client 的 JSON-RPC **请求**（`tui_gateway/contracts/server_requests.py`）。没有 `sudo.request` 事件、`sudo.respond` 方法和 `sudo.expire` 事件：那是官方桌面端和 TUI 收到请求后自己内部用的名字（`tui_gateway/server_requests.py` 开头写明：no paired `*.request` notification / `*.respond` method, no per-kind `*.expire`） |
+| 谁收到 | 挂在这个对话上的窗口（`gateway/session_server_requests.py`），而且只在窗口自己开的对话里（`local_viewer_turn`：`session.create` 建的会话是 LOCAL 平台）；一个窗口都没挂着时不发，当成没答。Telegram 这类平台上的对话没有这一步 |
+| sudo | `{"jsonrpc": "2.0", "id": "srq-<12 位十六进制>", "method": "sudo", "params": {"session_id": …, "command": …}}`：`command` 是原来的命令，服务器先脱敏（`_redact_approval_command`）。工具名不在里面，Shion 用这个对话上一次 `tool.start` 的名字 |
+| secret | `"method": "secret"`，`params`：`session_id`、`env_var`（变量名）、`prompt`（技能写的提示，没写是 `Enter value for <变量名>`）、`metadata`：`skill_name`，可能还有 `help`（去哪拿，常是网址）、`required_for`（`tools/skills_tool_setup.py`） |
+| 回答 | 同一个 WebSocket 上回 JSON-RPC 响应 `{"jsonrpc": "2.0", "id": "srq-…", "result": {"value": "…"}}`，服务器不回复它（`gateway/session_controls.py` 的 `dispatch`）。只有挂在这个对话上、有 `session:respond` 权限的连接答得了（`may_settle`）；断线后还没重新 resume 就答的，服务器只按 id 记一笔，然后丢掉 |
+| 拒绝 | `"value": ""`。回 error 响应也一样当成空 |
+| 多久 | sudo 和 secret 都等 120 秒（`gateway/session_sudo_prompt.py` 的 `SUDO_TIMEOUT_S`、`gateway/session_secret_prompt.py` 的 `SECRET_TIMEOUT_S`）。请求里不带这个数，Shion 从收到时算起；这一轮被打断也就不等了 |
+| 撤回 | 事件 `request.cancel {id, method, reason}`，发给这个对话上的所有窗口：`reason` 是 `timeout`、`interrupted`；有窗口答了是 `resolved` |
+| 重连 | `session.resume`（和 `session.events.since`）的回复里有 `open_requests: [{id, method, params}]`，还在等的请求原样再给一遍 |
+
+**Hermes 拿到之后**（同一个提交）：
+- sudo 密码经 `sudo -S -p ''` 的标准输入交给那条命令，不上命令行（`tools/terminal_tool_sudo.py`）；在 gateway 进程的内存里按对话记住，这次对话里下次 sudo 不再问，sudo 说密码不对就忘掉；不写盘。
+- 密钥写进那个 profile 的 `.env`（`save_env_value_secure`），模型拿到的工具结果里只有变量名（`missing_names`、`setup_skipped`）。
+- 所以**对话记录里没有这个值**：工具调用是模型写的原命令，结果是命令的输出或变量名；服务器自己的日志里只有请求的 id（`gateway/session_server_requests.py`：Values are never published, journaled or logged）。没核实的：技能自己的代码拿到环境变量以后会不会把它打出来，那是那个技能的事。
+
+## 答完以后留在对话里的一行
+
+批准、提问、密码和密钥，答完就从「等你确认」里消失，在对话里问的那个位置留下一行（⌥Space 小窗里也是，在回复下面），写明问的是什么、结果怎样：
+- 批准：「已允许这一次」「这次对话都允许」「以后都允许」「已拒绝」；
+- 提问：「你回答：中村老师」，或者「跳过了」；
+- sudo 密码、密钥：等着的时候是卡片，结束了收成一行：「已提交」「已拒绝」「已过期」「在别处回答了」。绝不写你填的值，也不写长度。
+
+**这一行只在这次运行里有。** Hermes 的对话记录里没有这些结果（按 hermes-agent `b3746e35` 核对：`session.transcript` 和 `session.resume` 的行出自 `tui_gateway/session_history.py` 的 `_history_to_messages`，工具行只有调用（名字、`context`、参数），不带结果，只有 `write_file`、`patch`、`skill_manage` 三种例外；`display_metadata` 里只有编辑的 diff。批准选了什么、提问答了什么都只在工具的结果里；sudo、secret 的请求本身根本不进对话记录）。所以这一行是 Shion 自己记在内存里的：重连、重新打开对话、重新读对话记录都还在；按服务器分开记，换一台服务器就不显示；退出 Shion 就没了，也不写进 last-data.json。在别的窗口（官方桌面端、TUI）答的批准和提问，Shion 不知道答了什么（`approval.settled` 只带 `prompt_id`），就不留这一行；示例数据里点的批准照旧在对话里加一句你说的话。
 
 ## 连接远端：Cloudflare Tunnel + Access
 
@@ -466,8 +513,8 @@ prototype/      UI 原型（Vite + React + TypeScript，示例数据）
   src/views/    今天、待办、日程、日报、等你确认、Bot Chat
 macos/          macOS App（SwiftUI + AppKit，最低 macOS 27），project.yml 由 XcodeGen 生成工程
   Shion/        App：Model（数据和示例数据）、Local（这台 Mac 的日历、前台窗口、本机模型和它们的假数据）、Support（启动参数、格式、配色）、Views（各页面）
-  ShionUITests/ 截图测试（每个页面浅色、深色各一张），浏览器登录、看板、助手管理、⌥Space 小窗、对话控制、图片和文件、断线重连的端到端测试；这台 Mac 的数据（日历、专注检查、应用使用记录）的截图和端到端测试
-  ci/           CI 上替身用的假 Hermes（fake_hermes.py，看板 fake_kanban.py，profile fake_profiles.py，小窗的回复 fake_quick.py，停止和重试 fake_control.py，图片和文件 fake_media.py，断线和重连 fake_reconnect.py，只用标准库）；check_fake_shion.py 比较替身和插件收不收得一样
+  ShionUITests/ 截图测试（每个页面浅色、深色各一张），浏览器登录、看板、助手管理、⌥Space 小窗、对话控制、图片和文件、断线重连、助手要密码和密钥的端到端测试；这台 Mac 的数据（日历、专注检查、应用使用记录）的截图和端到端测试
+  ci/           CI 上替身用的假 Hermes（fake_hermes.py，看板 fake_kanban.py，profile fake_profiles.py，小窗的回复 fake_quick.py，停止和重试 fake_control.py，图片和文件 fake_media.py，断线和重连 fake_reconnect.py，sudo 和 secret 请求 fake_secrets.py，只用标准库）；check_fake_shion.py 比较替身和插件收不收得一样
 .github/workflows/macos.yml   在 macOS 27 runner 上编译、截图、跑登录测试
 hermes-plugin/  Hermes 的 shion 插件（服务器端）：待办、今天的汇总、日报、应用记录、专注检查；接口见 hermes-plugin/README.md
 .github/workflows/hermes-plugin.yml   在 ubuntu runner 上跑插件的 pytest
@@ -520,6 +567,7 @@ open Shion.xcodeproj
 - **助手**：设置（⌘,）的「助手」一栏选谁当总秘书、哪些助手在 Shion 里不显示（Hermes 自己的默认 profile 删不掉，不用就不显示），按服务器地址存在这台 Mac 上；没选过时名叫 `shion` 的 profile 当总秘书，没有就是默认 profile。总秘书决定今天页那段话、专注检查发给谁、shion 插件在哪个 profile 里调用；「跟…说」的按钮、今天页的输入框、⌥Space 的小窗、⌘K 和菜单栏都用总秘书的名字和头像。换成没装插件的助手，今天、待办和日报回到示例数据。这台 Mac 第一次见到一个助手时，照 Bot Mode 的 `ui_meta['hermes-bots'].hidden` 决定显示不显示，之后以这台 Mac 的选择为准。「新建助手…」（那一栏，或侧栏右键）经 `profiles.create` 建 profile：名字、显示名、简介、SOUL、模型，可以复制一个现有的；不复制时 Hermes 把服务器自己的密钥和模型给它。每个助手有自己的设置页（侧栏右键「助手设置…」，或对话页顶部的按钮）：显示名（写进 `ui_meta`，和 Bot Mode 同一处）、头像（Bot Mode 的颜色和形状，写回 `ui_meta` 前比对版本号；图片经 `profiles.set_asset`；侧栏和对话里都用它）、简介、SOUL、模型、MCP 服务器（添加、编辑网址、命令、参数和登录方式、删除、开关、测试、OAuth 登录、从目录安装，要先下载的条目在后台装完会自己出现）、技能（开关、锁定）、工具，还有危险命令的审批方式、记忆、每轮步数上限；最下面删除这个助手（默认 profile 和总秘书除外）。删除时 Hermes 没能当场清掉这个名字的会话和路由记录（`settlement_pending`）的话，设置里列在「还在清理」，同名的新建先拦住；Shion 连着服务器时经 `cli.exec` 重试 Hermes 给的 `hermes profile purge-identity`，成功了自动放行。每个请求都写明是哪个 profile：路径里带名字，或者 `?profile=`；Shion 从不调 `POST /api/profiles/active`。删除、替换 SOUL、服务器提醒要确认的模型都先问你。MCP 的令牌和环境变量用密码框输入，只发一次，Shion 不显示、不保存，也不从服务器取回（不调 `/api/env/reveal`；编辑时只合并改了的项，新的令牌和值经 `mcp.servers.set_api_key` 存进那个 profile 的 .env，config.yaml 里只留引用）。
 - **快捷键**：在任何 App 里按 ⌥Space 跟总秘书说一句话，回复在小窗里流式显示，这一轮里的批准和提问也在小窗里回答，⌘O 打开完整对话，Esc 收起；没连上服务器时说的话排队，连上后自动发出；主窗口里 ⌘1…⌘7 切页面，⌘K 快速跳转（页面、助手、待办标题），都列在「前往」菜单里；全局快捷键在「设置 → 快捷键」里改，被别的 App 占了那里会说。见「快捷呼出」。
 - **连接方式**照官方桌面端连远端的做法：`wss://<地址>/api/ws?token=<登录凭证或会话令牌>`，不带子协议，每个请求带 Cloudflare Access 的两个头；连上后等 `gateway.ready`、发 `client.capabilities`，按服务器要求每 15 秒 `gateway.ping`；连上过又断了会自动重连，从断开的地方接着收（见「断线重连」）。登录凭证被拒时先续一次再试，续不上才算登录过期。
+- **助手要密码或密钥时**：终端要 sudo 密码、技能要密钥时，对话里和「等你确认」里出现一张卡片，填了只经这条连接发一次，Shion 不留；见「助手要密码和密钥时」。答完的批准、提问、密码和密钥在对话里和小窗里留一行（只在这次运行里），见「答完以后留在对话里的一行」。
 
 ### 原生 App 的界面检查
 
@@ -531,6 +579,7 @@ open Shion.xcodeproj
 - **看板要你做的事**：`WorkTests` 也用自己新起的替身。替身里的卡带着 Hermes 卡片的全部字段，`latest_summary` 和 `current_run_started_at` 照 Hermes 从运行记录算；卡住照 `block_task` 走（`blocked` 事件带原因、类型和次数；同一种阻塞在解除后又来一次就是防循环，送去待整理、记 `block_loop_detected`），卡住的卡 `PATCH` 成 ready 就解除阻塞。有三张卡停着：等验证码（needs_input）、没有账号（capability）、网站超时（transient，通勤的）；课程今天在两块看板上都跑过卡，昨天也跑过一张；还有两张归档的：今天做完后归档的，和昨天的。`/board` 认 `include_archived`。之后的事按剧本走：第一次让「下载成绩单」继续，它又停在验证码上（过期了）；第二次，它交上来等检查，同时「整理第8回录音」做完、詩音的一张卡停下来问你；标题里带「（CI 通知）」的新卡几秒后做完。App 以 `-ShionNotificationLog <文件>` 启动时（只在截图模式下认）不发系统通知，把每条写进这个文件（连同能不能在通知里回复），测试读它；测试不能在真的通知里打字，就发一条分布式通知（`dev.shion.test.answer`，内容是哪条通知、回复的字；测试的 runner 写的文件 App 不一定看得到），App 只在截图模式、带着通知日志时收，当作你在那条通知里打字发送来处理，再在日志里记一行它收到了。`WorkTests` 登录后在「等你确认」看到两张要你回答的卡和另一块看板上的一张，看不到网站超时的那张，这时一条通知也没有；回复验证码并让它继续，卡离开，几秒后写着「又卡在同一处」回来，「等你确认」开着，所以不通知；再回复一次，到课程的工作记录：两块看板上今天跑过的卡都在，今天做完后归档的那张也在、标着「已归档」，昨天的（归档的那张也是）、通勤的、没跑过的都不在，交接摘要和出错的那次也在；等检查、做完、詩音那张卡的三条通知到了，写着卡和看板，只有詩音那条能回复；在这条通知里回复（经上面的分布式通知，等 App 在日志里记下收到了），点开另一块看板上的那张，详情里有它的评论和看板；再点开归档的那张，详情照样打开；到看板页，归档的卡不在，詩音那张回到了排队、详情里有你刚才的回复，署名是「你」；新建一张卡，它做完时看板开着，不通知；在设置里关掉「卡片做完时通知」，再建一张，离开看板等它做完，也不通知；最后「等你确认」里没有詩音那张了，点另一块看板上那张卡的「打开卡片」，看板切过去、详情打开（`work-*.png`，替身的记录是 `fake_hermes-WorkTests.log`）。截图另外有课程的工作记录（`-ShionTab work`，浅色和深色，各点开一张卡）。真去点系统通知在 CI 上做不到：通知里带的卡和看板测到了，点了以后打开卡片的那个函数和「打开卡片」是同一个，也测到了。
 - **截图模式**：日期固定在 2026 年 11 月 9 日（周一）10:52，外观对整个 App 生效（菜单栏面板也跟着变），呼吸点不动。这台 Mac 的数据也换成假的、停在那一刻：几个日历（演示的那一周）、10:45 起前台一直是猫视频（所以专注检查是「7 分钟没在做」）、今天的使用记录；不申请任何权限，不读真的日历和窗口，不存文件，也不往服务器发。`-ShionCalendarAccess none` 演还没允许读取日历的样子。`LocalScreenshotTests` 截设置里的日历、专注检查、应用使用记录三节，点开菜单栏里的专注检查，再截没允许读取日历时的日程页和设置（`settings-calendars-*`、`settings-focus-*`、`settings-usage-*`、`menubar-focus-*`、`calendar-noaccess-light`）。动画停下来 App 才算空闲，XCTest 不用干等，一次运行从 4.3 分钟降到 2.3 分钟。
 - **runner 的屏幕**：1024×768、1 倍，所以窗口截出来是 1024×674，比默认窗口小，正好看窄窗口下的布局。
+- **密码和密钥**：`SecretsTests` 也用自己新起的替身（`macos/ci/fake_secrets.py`：照 Hermes 发 `sudo`、`secret` 请求，收响应，发 `request.cancel`，resume 时给 `open_requests`）。登录后先在「等你确认」里允许课程的那个批准，课程的对话里要留下「已允许这一次」；再打开通勤的对话说「装 ffmpeg（CI）」，替身照并行的工具调用同时要 sudo 密码和 `NOTION_API_KEY`：两张卡都在对话里、都有倒计时，「等你确认」里也有；在「等你确认」里填密码、提交（密码框的值只有圆点），替身核对是不是 SecretsTests 填的那个，记录里只写来了一个值、对不对，不写值也不写长度，那条命令随后成功；回到对话，密钥那张卡还在等，点「拒绝」；再说「会过期（CI）」，这次替身只等 8 秒（Hermes 是 120 秒），卡片变成「已过期」、输入框收起；最后说「断线（CI）」，替身要了 sudo 密码就像断网那样断开连接（不发关闭帧），隧道再断 6 秒（这期间每个请求都是 502）：卡片留着、写「连接中…」、先不能填，Shion 自动重连，补上错过的帧、resume 的 `open_requests` 里还有它，才在新连接上填好提交，那条命令成功；重连后「已提交」和课程那条「已允许这一次」都还在（`secrets-*.png`）。`QuickAskTests` 答完小窗里的批准和提问后，小窗里和詩音的对话里要留下「已允许这一次」「你回答：中村老师」。接着一步在替身的记录、App 的偏好设置和 Application Support 里找这个密码，找到了，或者同一个请求答了两次，这次运行就失败。截图另有 `SecretScreenshotTests`：示例数据里课程要 sudo 密码（一张已过期、一张在等）和 `NOTION_API_KEY`，截课程的对话（答过的批准和提问各一行、过期的密码一行、两张在等的卡）、「等你确认」和今天，⌥Space 小窗里答过的那一问留下的一行，还有设置里讲这件事的那一节，浅色、深色（`secrets-chat-*`、`secrets-confirm-*`、`secrets-today-*`、`secrets-quick-*`、`settings-secrets-*`）；替身的记录是 `fake_hermes-SecretsTests.log`。
 - **看哪里**：截图打包成这次运行的 `shots` 附件（保留 14 天），文件名是「页面-外观.png」。编译失败时，最后一步会列出错误；编译警告（xcodebuild 的警告不会自己变成注解）由「Compiler warnings」一步列成这次运行的注解，所以一次运行没有注解，就是没有警告。端到端测试失败时，那一步从结果包里打出失败的断言和消息（`-quiet` 不打）；XCTest 在找不到元素时存的界面层级（「App UI hierarchy」）也在附件里，同名的按新旧编号，不互相覆盖。
 - **省时间**：macOS runner 的分钟数有限，攒够一批改动再推；只改 README 这类文件不会触发。
 
