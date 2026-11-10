@@ -124,7 +124,9 @@ struct WorkLogView: View {
         }
         .overlay {
             if entries.isEmpty {
-                ContentUnavailableView("今天还没做过卡片", systemImage: "list.bullet.rectangle")
+                // the last data keeps the board's cards, not their runs
+                let title: String = store.board.active || store.showsDemo ? "今天还没做过卡片" : "连上服务器后显示"
+                ContentUnavailableView(title, systemImage: "list.bullet.rectangle")
             }
         }
         .accessibilityIdentifier("work-log")

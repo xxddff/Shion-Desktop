@@ -8,6 +8,8 @@ extension AppStore {
     /// Settings, which Shion does not follow.
     var cardAsks: [BoardAsk] {
         guard board.active else {
+            // the last data keeps no questions: they can only be answered live
+            guard showsDemo else { return [] }
             let blocks = DemoData(now: demoClock).blocks
             return cards.compactMap { card in
                 guard card.status == .waiting, let ask = blocks[card.id] else { return nil }
@@ -33,6 +35,8 @@ extension AppStore {
     /// The cards an assistant ran today, on every board, the latest first.
     func workLog(for botId: String) -> [WorkLogEntry] {
         guard board.active else {
+            // the last data keeps the board's cards, not their runs
+            guard showsDemo else { return [] }
             let runs = DemoData(now: demoClock).runs
             let start = BoardWork.today(now)
             return cards.compactMap { card -> WorkLogEntry? in
@@ -78,6 +82,7 @@ extension AppStore {
     /// Your answer on a card that waits on you; with `resume` it goes on. Its notification goes.
     /// Returns why it did not go through.
     func answerCard(_ ask: BoardAsk, text: String, resume: Bool) async -> String? {
+        guard !readOnly else { return "没有连上服务器" }
         Notifier.shared.withdrawCard(ask.cardId, board: ask.board)
         guard board.active else {
             if resume, let index = cards.firstIndex(where: { $0.id == ask.cardId }) {
@@ -96,7 +101,7 @@ extension AppStore {
     func replyToCard(_ id: String, board slug: String?, text: String) async -> String? {
         let words = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !words.isEmpty else { return nil }
-        guard board.active else { return "没有连上服务器" }
+        guard board.active, !readOnly else { return "没有连上服务器" }
         Notifier.shared.withdrawCard(id, board: slug)
         let waiting = board.task(id, on: slug).map { $0.status == "blocked" || BoardWork.looped($0) } ?? true
         return await board.answer(id, on: slug, text: words, resume: waiting)

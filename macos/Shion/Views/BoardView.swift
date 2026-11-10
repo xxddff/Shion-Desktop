@@ -392,6 +392,8 @@ struct BoardInspector: View {
                     .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     .accessibilityIdentifier("card-comment-send")
             }
+            // the last data, or the connection down: a comment waits for the server
+            .disabled(store.readOnly)
         }
     }
 
