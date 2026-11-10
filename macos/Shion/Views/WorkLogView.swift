@@ -24,40 +24,43 @@ struct AssistantView: View {
 
     var body: some View {
         let entries = tab == .work ? store.workLog(for: botId) : []
-        VStack(spacing: 0) {
-            tabs
-            ChatView(botId: botId)
-                .disabled(tab == .work)
-                .accessibilityHidden(tab == .work)
-                .overlay {
-                    if tab == .work {
-                        WorkLogView(entries: entries, selection: selection) { open($0) }
-                            .background(.background)
+        ChatView(botId: botId)
+            .disabled(tab == .work)
+            .accessibilityHidden(tab == .work)
+            .overlay {
+                if tab == .work {
+                    WorkLogView(entries: entries, selection: selection) { open($0) }
+                        .background(.background)
+                }
+            }
+            // over the top of the page, which runs under them as it runs under the toolbar: the
+            // chat keeps the geometry its paging was made for (a VStack cut it off below the tabs,
+            // and older pages stopped coming after the second)
+            .safeAreaInset(edge: .top, spacing: 0) {
+                tabs
+            }
+            // archived cards that ran today are read only while the log is up
+            .task(id: tab == .work && store.board.active) {
+                guard tab == .work, store.board.active else { return }
+                await store.board.followArchived()
+            }
+            .inspector(isPresented: $showInspector) {
+                if let entry = entries.first(where: { $0.id == selection }) {
+                    BoardInspector(item: store.workItem(entry)) { id in
+                        store.openCard(id, board: entry.board)
                     }
                 }
-        }
-        // archived cards that ran today are read only while the log is up
-        .task(id: tab == .work && store.board.active) {
-            guard tab == .work, store.board.active else { return }
-            await store.board.followArchived()
-        }
-        .inspector(isPresented: $showInspector) {
-            if let entry = entries.first(where: { $0.id == selection }) {
-                BoardInspector(item: store.workItem(entry)) { id in
-                    store.openCard(id, board: entry.board)
+            }
+            .alert("没能完成", isPresented: actionFailed) {
+                Button("好") {}
+            } message: {
+                Text(store.board.actionError ?? "")
+            }
+            .onChange(of: tab) { _, now in
+                if now == .chat {
+                    showInspector = false
                 }
             }
-        }
-        .alert("没能完成", isPresented: actionFailed) {
-            Button("好") {}
-        } message: {
-            Text(store.board.actionError ?? "")
-        }
-        .onChange(of: tab) { _, now in
-            if now == .chat {
-                showInspector = false
-            }
-        }
     }
 
     private var tabs: some View {
@@ -72,6 +75,8 @@ struct AssistantView: View {
         .frame(maxWidth: .infinity)
         .padding(.top, 10)
         .padding(.bottom, 6)
+        // what scrolls under it does not show through
+        .background(.background)
     }
 
     private func open(_ entry: WorkLogEntry) {

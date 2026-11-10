@@ -79,6 +79,7 @@ struct TurnNote: View {
     let item: ChatItem
     let botId: String
     @State private var details = false
+    @Environment(\.rowReveal) private var reveal
 
     var body: some View {
         if let failure = item.failure {
@@ -135,6 +136,12 @@ struct TurnNote: View {
             .background(Palette.fill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("turn-failed")
+            // 详情 opened: the chat scrolls as far as it takes to show all of the line
+            .onChange(of: details) { _, open in
+                if open {
+                    reveal?.show(item.id)
+                }
+            }
         } else {
             VStack(spacing: 4) {
                 FoundText(item.text)

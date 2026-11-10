@@ -177,6 +177,8 @@ final class WorkTests: XCTestCase {
         let toggle = switchOf("board-notify-done", in: prefs)
         reveal(toggle, in: prefs)
         let off = turnOff(toggle)
+        // the switch slides over: the picture once it has
+        Thread.sleep(forTimeInterval: 0.8)
         keep(prefs.screenshot(), "work-7-settings")
         XCTAssertNotEqual(off, false, "the setting did not turn off: \(toggle.elementType.rawValue) \(String(describing: toggle.value))")
         app.typeKey("w", modifierFlags: .command)
