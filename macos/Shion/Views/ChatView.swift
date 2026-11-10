@@ -18,11 +18,17 @@ struct ChatView: View {
     @State private var spots = RowSpots()
     /// Bumped as the transcript is made: once its rows are laid out, it goes to the newest one.
     @State private var placing = 0
+    /// ⌘F (ChatControls.swift)
+    @State private var find = ChatFind()
+    /// Scrolls as little as it takes to show a whole row, for the rows themselves (a failed turn's
+    /// 详情 opening).
+    @State private var reveal = RowReveal()
 
     var body: some View {
         let bot = store.bot(botId)
         let items = store.chats[botId] ?? []
         let lines = ChatLine.lines(items, replying: store.replying.contains(botId))
+        let found = find.found(in: lines)
         // older rows coming in above: where the row at the top of what shows was, from the layout
         // before they came
         let _ = spots.note(first: items.first?.id)
@@ -33,10 +39,11 @@ struct ChatView: View {
                 Color.clear
             } else {
                 ScrollViewReader { reader in
-                    transcript(lines, bot: bot)
+                    transcript(lines, bot: bot, found: found)
                         // made with its rows: at the newest one, now and once they are laid out;
                         // older pages wait until then
                         .onAppear {
+                            reveal.proxy = reader
                             follow.placed = false
                             toEnd(lines, with: reader)
                             placing += 1
@@ -61,7 +68,7 @@ struct ChatView: View {
                         // a message came, a reply grew or finished, a call was made: followed down
                         // while the reader is at the end. Opening or closing a run changes none of
                         // this, so the transcript keeps its top and the run's line stays put.
-                        .onChange(of: TranscriptEnd(lines)) {
+                        .onChange(of: TranscriptEnd(lines, retry: store.retryTarget(botId))) {
                             guard follow.on, let last = lines.last else { return }
                             follow.until = Date().addingTimeInterval(1)
                             reader.scrollTo(last.id, anchor: .bottom)
@@ -79,8 +86,26 @@ struct ChatView: View {
                                 reader.scrollTo(last.id, anchor: .bottom)
                             }
                         }
+                        // the hit in view, its folded tool calls open; what comes next is not
+                        // followed down from there. After this update's own scrolling: when the
+                        // hit came with an older page (finding reads them), that page's row is
+                        // put back first, and the hit is where the reader goes
+                        .onChange(of: found.focus) { _, line in
+                            guard let line else { return }
+                            follow.on = false
+                            if line.hasPrefix("tools-") {
+                                openRuns.insert(line)
+                            }
+                            Task {
+                                reader.scrollTo(line, anchor: .center)
+                            }
+                        }
+                        .environment(\.rowReveal, reveal)
                 }
             }
+        }
+        .overlay(alignment: .top) {
+            ChatFindBar(find: find, found: found, botId: botId)
         }
         .overlay {
             if let error = store.chatErrors[botId] {
@@ -96,22 +121,29 @@ struct ChatView: View {
             await store.openChat(botId)
         }
         .safeAreaInset(edge: .bottom) {
-            Composer(placeholder: "跟\(bot?.name ?? "")说…", text: $draft) {
+            Composer(placeholder: "跟\(bot?.name ?? "")说…", text: $draft, send: {
                 // what one sends, and the reply to it, are followed down from wherever one was
                 follow.on = true
                 store.send(draft, to: botId)
                 draft = ""
-            }
+            }, stop: store.turnRunning(botId) ? { store.stopReply(botId) } : nil,
+               stopping: store.control.stopping.contains(botId))
+            .disabled(store.readOnly)
             .frame(maxWidth: 720)
             .padding(.horizontal, 40)
             .padding(.bottom, 16)
         }
         .navigationTitle(bot?.name ?? "")
         .navigationSubtitle(bot?.title ?? "")
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                FindButton(find: find)
+            }
+        }
     }
 
     /// The rows, newest at the bottom. Older pages load as the top comes into view.
-    private func transcript(_ lines: [ChatLine], bot: Bot?) -> some View {
+    private func transcript(_ lines: [ChatLine], bot: Bot?, found: Found) -> some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 14) {
                 if store.olderPages[botId] != nil || store.olderErrors[botId] != nil {
@@ -119,6 +151,7 @@ struct ChatView: View {
                 }
                 ForEach(Array(lines.enumerated()), id: \.element.id) { index, line in
                     row(line, at: index, of: lines, bot: bot)
+                        .environment(\.findMarks, found.marks(line))
                         // the margin below the newest line is part of it, so following it down
                         // shows the margin too
                         .padding(.bottom, index == lines.count - 1 ? 24 : 0)
@@ -232,20 +265,51 @@ final class RowSpots {
 }
 
 /// What changes at the end of a transcript as a turn goes on: a line comes, the last one grows
-/// (a reply streaming in, its todos) or finishes. Older pages arriving above leave it as it is.
+/// (a reply streaming in, its todos) or finishes, 已停止 or 重试 comes under it. Older pages
+/// arriving above leave it as it is.
 private nonisolated struct TranscriptEnd: Equatable {
     let last: String?
     let length: Int
     let streaming: Bool
     let todos: Int
+    let stopped: Bool
+    /// The line 重试 goes under (AppStore.retryTarget).
+    let retry: String?
 
     @MainActor
-    init(_ lines: [ChatLine]) {
+    init(_ lines: [ChatLine], retry: String?) {
         last = lines.last?.id
         let item = lines.last?.items.last
         length = item?.text.utf8.count ?? 0
         streaming = item?.streaming ?? false
         todos = item?.todoIds.count ?? 0
+        stopped = item?.stopped ?? false
+        self.retry = retry
+    }
+}
+
+/// Scrolls a chat as little as it takes to show a whole row. ChatView hands it to its rows;
+/// elsewhere, as in the ⌥Space window, there is none. Not observed.
+final class RowReveal {
+    var proxy: ScrollViewProxy?
+
+    /// After the update that changed the row, so the whole of it is laid out.
+    func show(_ id: String) {
+        Task {
+            self.proxy?.scrollTo(id)
+        }
+    }
+}
+
+nonisolated private struct RowRevealKey: EnvironmentKey {
+    static let defaultValue: RowReveal? = nil
+}
+
+nonisolated extension EnvironmentValues {
+    /// Set on a chat's transcript (ChatView).
+    var rowReveal: RowReveal? {
+        get { self[RowRevealKey.self] }
+        set { self[RowRevealKey.self] = newValue }
     }
 }
 
@@ -291,16 +355,13 @@ struct ChatRow: View {
     var body: some View {
         switch item.role {
         case .system:
-            Text(item.text)
-                .font(.t12)
-                .foregroundStyle(.tertiary)
-                .frame(maxWidth: .infinity)
+            TurnNote(item: item, botId: bot?.id ?? "")
         case .card:
             if let found = store.chatCard(item) {
                 CardChip(card: found.card, showsStatus: found.known)
             } else if !item.text.isEmpty {
                 // the board's notice about a card it no longer lists
-                Text(item.text)
+                FoundText(item.text)
                     .font(.t12)
                     .foregroundStyle(.tertiary)
                     .frame(maxWidth: .infinity)
@@ -308,7 +369,7 @@ struct ChatRow: View {
         case .user:
             HStack {
                 Spacer(minLength: 80)
-                Text(item.text)
+                FoundText(item.text)
                     .font(.t13)
                     .foregroundStyle(Palette.onAccent)
                     .textSelection(.enabled)
@@ -329,10 +390,14 @@ struct ToolLine: View {
     let text: String
 
     var body: some View {
-        Label(text, systemImage: "wrench.adjustable")
-            .font(.t12)
-            .foregroundStyle(.secondary)
-            .lineLimit(2)
+        Label {
+            FoundText(text)
+        } icon: {
+            Image(systemName: "wrench.adjustable")
+        }
+        .font(.t12)
+        .foregroundStyle(.secondary)
+        .lineLimit(2)
     }
 }
 
@@ -393,6 +458,7 @@ struct AssistantMessage: View {
                 MarkdownView(blocks: MarkdownCache.shared.document(item.id, item.text).blocks)
                     .textSelection(.enabled)
             }
+            ReplyFooter(item: item, botId: bot?.id ?? "")
             if !todos.isEmpty {
                 VStack(spacing: 0) {
                     ForEach(todos) { todo in
@@ -411,6 +477,9 @@ struct Composer: View {
     let placeholder: String
     @Binding var text: String
     let send: () -> Void
+    /// While a turn runs: the stop button (⌘.) in place of send.
+    var stop: (() -> Void)?
+    var stopping = false
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 10) {
@@ -421,16 +490,20 @@ struct Composer: View {
                 .onSubmit(send)
                 .padding(.vertical, 7)
                 .accessibilityIdentifier("composer")
-            Button(action: send) {
-                Image(systemName: "arrow.up")
-                    .font(.system(size: 13, weight: .bold))
-                    .frame(width: 18, height: 18)
+            if let stop {
+                StopButton(stopping: stopping, action: stop)
+            } else {
+                Button(action: send) {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 13, weight: .bold))
+                        .frame(width: 18, height: 18)
+                }
+                .buttonStyle(.glassProminent)
+                .buttonBorderShape(.circle)
+                .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .accessibilityLabel("发送")
+                .accessibilityIdentifier("send")
             }
-            .buttonStyle(.glassProminent)
-            .buttonBorderShape(.circle)
-            .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            .accessibilityLabel("发送")
-            .accessibilityIdentifier("send")
         }
         .padding(.leading, 16)
         .padding(.trailing, 6)
