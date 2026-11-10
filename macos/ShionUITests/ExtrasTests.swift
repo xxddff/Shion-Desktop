@@ -96,8 +96,10 @@ final class ExtrasTests: XCTestCase {
 
         // a long reply, asked for in 詩音's chat and come a few seconds later, after you went to 今天
         element("bot-shion", in: app).click()
+        // her chat from the server, open and read, before anything is sent into it
+        XCTAssertTrue(waitForText("CI 替身服务器连上了", in: app, timeout: 15), "詩音's chat did not open")
         let composer = element("composer", in: app)
-        XCTAssertTrue(composer.waitForExistence(timeout: 10), "詩音's chat did not open")
+        XCTAssertTrue(composer.waitForExistence(timeout: 10), "no composer in 詩音's chat")
         composer.click()
         composer.typeText("通知：讲长一点")
         element("send", in: app).click()
