@@ -16,7 +16,7 @@ struct ChatView: View {
 
     var body: some View {
         let bot = store.bot(botId)
-        let items = store.withSecretCards(store.chats[botId] ?? [], of: botId)
+        let items = store.withAskCards(store.chats[botId] ?? [], of: botId)
         let lines = ChatLine.lines(items, replying: store.replying.contains(botId))
         let found = find.found(in: lines)
         ScrollViewReader { reader in
@@ -179,9 +179,9 @@ struct ChatRow: View {
         case .system:
             TurnNote(item: item, botId: bot?.id ?? "")
         case .card:
-            if let secretId = item.secretId {
-                // a password or a key the assistant asked for (SecretCard.swift)
-                SecretCard(requestId: secretId)
+            if let askId = item.askId {
+                // a password or a key the assistant asked for, or what became of an ask (SecretCard.swift)
+                AskTrailCard(askId: askId)
             } else if let found = store.chatCard(item) {
                 CardChip(card: found.card, showsStatus: found.known)
             } else if !item.text.isEmpty {

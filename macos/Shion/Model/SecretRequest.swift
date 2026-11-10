@@ -31,6 +31,8 @@ struct SecretRequest: Identifiable, Hashable {
     let kind: Kind
     let botId: String
     let sessionId: String
+    /// The server it came from (`ServerSettings.signInServer`): another one shows none of them.
+    var server = ""
     /// When it came.
     let at: Date
     /// When Hermes stops waiting; unknown for one first seen on a resume.
@@ -77,9 +79,9 @@ struct SecretRequest: Identifiable, Hashable {
     }
 }
 
-/// The requests seen since connecting, oldest first: the open ones, and the ones answered,
-/// declined or expired, whose cards stay in their chats until Shion disconnects. Kept in memory
-/// only, and only what was asked: nothing here is saved, and no answer is ever in it.
+/// The requests seen since Shion started, oldest first: the open ones, and the ones answered,
+/// declined or expired, whose lines stay in their chats. Kept in memory only, and only what was
+/// asked: nothing here is saved, and no answer is ever in it.
 @Observable
 final class Secrets {
     var requests: [SecretRequest] = []

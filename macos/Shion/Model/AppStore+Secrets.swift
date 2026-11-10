@@ -30,12 +30,20 @@ extension AppStore {
         }
         guard LaunchOptions.current.snapshot, UserDefaults.standard.bool(forKey: "ShionSecretsDemo") else { return }
         let demo = DemoData(now: demoClock)
-        secrets.requests = demo.secretRequests
+        secrets.requests = demo.secretRequests.map { request in
+            var request = request
+            request.server = serverKey
+            return request
+        }
+        trail.answered = demo.answeredAsks(server: serverKey)
         chats[demo.secretChatBot, default: []] += demo.secretChat
         for request in demo.secretRequests where request.isOpen {
             asks.insert(secretAsk(request), at: 0)
         }
     }
+
+    /// Which server the requests and answers belong to.
+    var serverKey: String { serverSettings.trimmed.signInServer }
 
     /// A server request: sudo and secret are taken, anything else is left to the gateway's -32601.
     /// One for a chat Shion does not know yet is being attached right now (its resume brings it
@@ -77,20 +85,6 @@ extension AppStore {
         MainWindow.show()
     }
 
-    /// A chat's rows with its requests' cards among them, each after what came before it.
-    func withSecretCards(_ items: [ChatItem], of botId: String) -> [ChatItem] {
-        let requests = secrets.requests.filter { $0.botId == botId }
-        // a chat on its way in: its rows first, the cards land among them
-        guard !requests.isEmpty, !(items.isEmpty && openingChats.contains(botId)) else { return items }
-        var merged = items
-        for request in requests {
-            let card = ChatItem(id: "secret-\(request.id)", role: .card, at: request.at, secretId: request.id)
-            let index = merged.lastIndex { $0.at <= request.at }.map { $0 + 1 } ?? 0
-            merged.insert(card, at: index)
-        }
-        return merged
-    }
-
     // MARK: what the chat's events say
 
     /// From `apply`: the tool a password is for, a request Hermes withdrew, a turn that ended with
@@ -123,11 +117,22 @@ extension AppStore {
                   method == "sudo" || method == "secret"
             else { continue }
             listed.insert(id)
-            if secrets.request(id) != nil {
+            if let known = secrets.request(id) {
                 let connection = gateway.connection
                 secrets.update(id) { request in
                     request.connection = connection
                     request.problem = nil
+                    // Shion gave up on it (a disconnect, its two minutes by this clock) or its answer
+                    // never landed (sent before the resume): Hermes still waits, so it is open again
+                    if !request.isOpen && request.state != .elsewhere {
+                        request.state = .waiting
+                    }
+                }
+                if !known.isOpen && known.state != .elsewhere && !asks.contains(where: { $0.id == id }) {
+                    asks.insert(secretAsk(known), at: 0)
+                    if let deadline = known.deadline, deadline > Date() {
+                        expire(id, at: deadline)
+                    }
                 }
             } else {
                 take(secretRequest(method, id: id, params: entry["params"] ?? .null, botId: botId, sessionId: sessionId, timed: false))
@@ -139,18 +144,18 @@ extension AppStore {
         }
     }
 
-    /// From `resetPages`: the connection is gone for good, or a new one starts. The cards go with
-    /// the chats they were in.
+    /// From `resetPages`: the connection is gone for good, or a new one starts. What still waited
+    /// cannot be answered from here any more (a resume that finds it still waiting opens it again);
+    /// what is over keeps its line in the chat.
     func endSecrets() {
         for timer in secrets.timers.values {
             timer.cancel()
         }
         secrets.timers = [:]
         secrets.tools = [:]
-        let gone = Set(secrets.requests.filter { !$0.demo }.map(\.id))
-        guard !gone.isEmpty else { return }
-        secrets.requests.removeAll { gone.contains($0.id) }
-        asks.removeAll { gone.contains($0.id) }
+        for request in secrets.requests where request.isOpen && !request.demo {
+            close(request.id, as: .expired)
+        }
     }
 
     /// From `forgetChat`: an assistant Shion no longer follows.
@@ -171,6 +176,7 @@ extension AppStore {
                                     sessionId: sessionId, at: now,
                                     deadline: timed ? now.addingTimeInterval(Self.secretWait) : nil)
         request.connection = gateway.connection
+        request.server = serverKey
         switch request.kind {
         case .password:
             request.command = params["command"]?.string ?? ""

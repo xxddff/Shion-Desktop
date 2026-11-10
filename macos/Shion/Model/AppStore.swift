@@ -27,6 +27,8 @@ final class AppStore {
     let gateway = Gateway()
     /// Passwords and keys assistants ask for (AppStore+Secrets.swift); what was asked, never the answer.
     let secrets = Secrets()
+    /// What you answered, the line that stays where it was asked (AppStore+Trail.swift).
+    let trail = AskTrail()
     // screenshot runs never touch the keychain (a locked one would put up a password prompt)
     var serverSettings = LaunchOptions.current.snapshot ? AppStore.snapshotSettings : ServerSettings.load()
     /// The browser sign-in, when that is how Shion logs in.
@@ -173,6 +175,7 @@ final class AppStore {
         guard !readOnly else { return }
         asks.removeAll { $0.id == ask.id }
         Notifier.shared.withdraw(ask.id)
+        keepAnswer(ask, with: option)
         if let remote = ask.remote {
             respond(to: ask, remote: remote, with: option)
             return

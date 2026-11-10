@@ -55,9 +55,26 @@ final class SecretsTests: XCTestCase {
         // from here a check that fails is kept and the rest still runs; only a missing card stops it
         continueAfterFailure = true
 
-        // 1. 通勤's chat (created on the stand-in), and a turn that asks for both at once
+        // 0. 课程's approval (raised once Shion attaches its chat): answered in 等你确认, it leaves
+        // there and stays in 课程's chat as a line saying what was chosen
         let commute = element("bot-commute", in: app)
         guard commute.waitForExistence(timeout: 10) else { return XCTFail("no assistants from the server") }
+        element("nav-confirm", in: app).click()
+        let allow = app.buttons["允许这一次"].firstMatch
+        if allow.waitForExistence(timeout: 15) {
+            allow.click()
+            let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: allow)
+            XCTAssertEqual(XCTWaiter().wait(for: [gone], timeout: 10), .completed, "the approval stayed in 等你确认")
+            element("bot-study", in: app).click()
+            XCTAssertTrue(waitForLabel(element("ask-outcome-ap-moodle", in: app), "已允许这一次", timeout: 15),
+                          "课程's chat has no line for the approval")
+            Thread.sleep(forTimeInterval: 0.5)
+            keep(window.screenshot(), "secrets-0-approved")
+        } else {
+            XCTFail("课程's approval did not reach 等你确认")
+        }
+
+        // 1. 通勤's chat (created on the stand-in), and a turn that asks for both at once
         commute.click()
         XCTAssertTrue(waitForText("新的 Bot Chat。", in: app, timeout: 15), "通勤's chat did not open")
         say("装 ffmpeg（CI）", in: app)
@@ -95,12 +112,12 @@ final class SecretsTests: XCTestCase {
 
         // 3. back in the chat: the password went, the key still waits; it is declined there
         commute.click()
-        XCTAssertTrue(waitForLabel(element("secret-state-\(sudoId)", in: app), "已提交", timeout: 10), "the sudo card does not say 已提交")
+        XCTAssertTrue(waitForLabel(element("ask-outcome-\(sudoId)", in: app), "已提交", timeout: 10), "the sudo card does not say 已提交")
         XCTAssertFalse(app.secureTextFields["secret-field-\(sudoId)"].exists, "the sudo card kept its field")
         let keyField = app.secureTextFields["secret-field-\(keyId)"]
         XCTAssertTrue(keyField.exists && keyField.isEnabled, "the key's field went with the password")
         element("secret-deny-\(keyId)", in: app).click()
-        XCTAssertTrue(waitForLabel(element("secret-state-\(keyId)", in: app), "已拒绝", timeout: 10), "the key's card does not say 已拒绝")
+        XCTAssertTrue(waitForLabel(element("ask-outcome-\(keyId)", in: app), "已拒绝", timeout: 10), "the key's card does not say 已拒绝")
         // the turn goes on: the command ran with the password, the skill went without its key
         XCTAssertTrue(waitForText("ffmpeg 装好了（CI）", in: app, timeout: 15), "the sudo command did not go through")
         XCTAssertTrue(waitForText("没有 NOTION_API_KEY", in: app, timeout: 5), "the declined key did not reach the stand-in")
@@ -114,7 +131,7 @@ final class SecretsTests: XCTestCase {
         let came = late.waitForExistence(timeout: 15)
         keep(window.screenshot(), "secrets-5-waiting")
         guard came else { return XCTFail("no card for the request that expires") }
-        XCTAssertTrue(waitForLabel(element("secret-state-\(lateId)", in: app), "已过期", timeout: 25), "the card does not say 已过期")
+        XCTAssertTrue(waitForLabel(element("ask-outcome-\(lateId)", in: app), "已过期", timeout: 25), "the card does not say 已过期")
         XCTAssertFalse(late.exists, "the expired card kept its field")
         XCTAssertTrue(waitForText("没等到 sudo 密码", in: app, timeout: 10), "the turn did not end after the request expired")
         Thread.sleep(forTimeInterval: 0.5)
@@ -138,10 +155,17 @@ final class SecretsTests: XCTestCase {
         dropField.click()
         dropField.typeText(password)
         element("secret-submit-\(dropId)", in: app).click()
-        XCTAssertTrue(waitForLabel(element("secret-state-\(dropId)", in: app), "已提交", timeout: 10), "the card does not say 已提交 after the reconnect")
+        XCTAssertTrue(waitForLabel(element("ask-outcome-\(dropId)", in: app), "已提交", timeout: 10), "the card does not say 已提交 after the reconnect")
         XCTAssertTrue(waitForText("sox 装好了（CI）", in: app, timeout: 15), "the password given after the reconnect did not reach the stand-in")
         Thread.sleep(forTimeInterval: 0.5)
         keep(window.screenshot(), "secrets-8-reconnected")
+        // the chat was read again after the reconnect; the lines are Shion's own and stay
+        XCTAssertTrue(waitForLabel(element("ask-outcome-\(sudoId)", in: app), "已提交", timeout: 5),
+                      "the sudo password's line went with the reconnect")
+        element("bot-study", in: app).click()
+        XCTAssertTrue(waitForLabel(element("ask-outcome-ap-moodle", in: app), "已允许这一次", timeout: 10),
+                      "the approval's line went with the reconnect")
+        commute.click()
 
         // 等你确认 holds none of them now
         element("nav-confirm", in: app).click()

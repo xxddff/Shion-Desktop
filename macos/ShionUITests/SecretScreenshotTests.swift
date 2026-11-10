@@ -37,6 +37,33 @@ final class SecretScreenshotTests: XCTestCase {
         }
     }
 
+    /// The ⌥Space window's exchange with what 詩音 asked on the way, answered: its line stays under
+    /// the reply (你回答：好). Whole screen, as the window floats over the others.
+    @MainActor
+    func testQuickWindowLines() throws {
+        continueAfterFailure = true
+        for appearance in ["light", "dark"] {
+            let app = XCUIApplication()
+            app.launchArguments = [
+                "-ShionSnapshot", "YES",
+                "-ShionRoute", "today",
+                "-ShionAppearance", appearance,
+                "-ShionQuickDemo", "YES",
+                "-ShionSecretsDemo", "YES",
+                "-ApplePersistenceIgnoreState", "YES",
+            ]
+            app.launch()
+            _ = app.windows.firstMatch.waitForExistence(timeout: 20)
+            let line = app.descendants(matching: .any).matching(identifier: "ask-outcome-demo-reminder").firstMatch
+            if !line.waitForExistence(timeout: 10) {
+                XCTFail("No line for the answered question in the ⌥Space window (\(appearance))")
+            }
+            Thread.sleep(forTimeInterval: 1)
+            keep(XCUIScreen.main.screenshot(), name: "secrets-quick-\(appearance)")
+            app.terminate()
+        }
+    }
+
     /// Settings → 服务器, scrolled to what it says about passwords and keys, light and dark.
     @MainActor
     func testSecretSettings() throws {

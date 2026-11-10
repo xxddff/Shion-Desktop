@@ -186,22 +186,78 @@ struct SecretCountdown: View {
     }
 }
 
+/// What was asked in a chat, where it was asked (ChatRow, the ⌥Space window): a password or a key
+/// still waiting is its card; anything over, answered or not, is one line saying what became of it.
+struct AskTrailCard: View {
+    @Environment(AppStore.self) private var store
+    let askId: String
+
+    var body: some View {
+        if let request = store.secrets.request(askId) {
+            if request.isOpen {
+                SecretCard(requestId: askId)
+            } else {
+                AskLine(id: askId, symbol: request.kind == .password ? "lock" : "key",
+                        title: request.asking, outcome: SecretOutcome.words(request.state))
+            }
+        } else if let answered = store.trail.answer(askId) {
+            AskLine(id: askId, symbol: answered.kind == .approval ? "hand.raised" : "questionmark.bubble",
+                    title: answered.title, outcome: answered.outcome)
+        }
+    }
+}
+
+/// One line for an ask that is over: what it was, then what became of it (已允许这一次, 你回答：…,
+/// 已提交). Never a value typed for a password or a key: only that it went.
+struct AskLine: View {
+    let id: String
+    let symbol: String
+    let title: String
+    let outcome: String
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: symbol)
+                .foregroundStyle(.tertiary)
+                .accessibilityHidden(true)
+            Text(title)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .layoutPriority(-1)
+            Text("·").foregroundStyle(.tertiary).accessibilityHidden(true)
+            Text(outcome)
+                .fontWeight(.medium)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+                .accessibilityIdentifier("ask-outcome-\(id)")
+            Spacer(minLength: 0)
+        }
+        .font(.t12)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("ask-line-\(id)")
+    }
+}
+
 /// What became of a request once it is over.
 struct SecretOutcome: View {
     let state: SecretRequest.State
 
     var body: some View {
+        if state == .sent {
+            Label(Self.words(state), systemImage: "checkmark").font(.t12).foregroundStyle(.secondary)
+        } else if !Self.words(state).isEmpty {
+            Text(Self.words(state)).font(.t12).foregroundStyle(.secondary)
+        }
+    }
+
+    /// 已提交, 已拒绝, 已过期, 在别处回答了; nothing while it waits.
+    static func words(_ state: SecretRequest.State) -> String {
         switch state {
-        case .sent:
-            Label("已提交", systemImage: "checkmark").font(.t12).foregroundStyle(.secondary)
-        case .declined:
-            Text("已拒绝").font(.t12).foregroundStyle(.secondary)
-        case .expired:
-            Text("已过期").font(.t12).foregroundStyle(.secondary)
-        case .elsewhere:
-            Text("在别处回答了").font(.t12).foregroundStyle(.secondary)
-        case .waiting, .sending:
-            EmptyView()
+        case .sent: return "已提交"
+        case .declined: return "已拒绝"
+        case .expired: return "已过期"
+        case .elsewhere: return "在别处回答了"
+        case .waiting, .sending: return ""
         }
     }
 }
