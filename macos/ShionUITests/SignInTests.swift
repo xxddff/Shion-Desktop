@@ -157,6 +157,7 @@ final class SignInTests: XCTestCase {
         // at the top of what shows stays where it was as a page comes in above it
         var reachedTop = false
         var landings: [Int] = []
+        var tallLanding: Int?
         // where each page starts on the stand-in, newest first: a row below the first number means
         // the next page came in
         var floors = [82, 32, 1]
@@ -173,10 +174,29 @@ final class SignInTests: XCTestCase {
                 .min { $0.value.minY < $1.value.minY }
             let now = top.flatMap { after.rows[$0.key]?.minY }
             let barMoved = before.bar.flatMap { bar in after.bar.map { abs($0 - bar) > 0.001 } } ?? false
+            var landed = false
             if let earliest = after.rows.keys.compactMap(number).min(), floors.count > 1, earliest < floors[0] {
                 floors.removeFirst()
                 landings.append(step)
+                landed = true
                 keep(window.screenshot(), "signin-6a-page-\(landings.count + 1)")
+            }
+            // 第 82 条, the oldest of the first page, is a reply some screens tall on the stand-in:
+            // the second page is asked for while it fills what shows (no 第 N 条 wholly in view),
+            // and it stays where it was as the page comes in (the scroll bar jumps, the rows above
+            // are new). Read by its first paragraph, or another, laid out before the wait and after
+            let paragraphs = { (read: Layout) in read.rows.filter { $0.key.hasPrefix("第 82 条") }.merging(read.long) { first, _ in first } }
+            let (longBefore, longAfter) = (paragraphs(before), paragraphs(after))
+            if let held = longBefore.filter({ longAfter[$0.key] != nil }).min(by: { $0.value.minY < $1.value.minY }),
+               let heldNow = longAfter[held.key]?.minY, landed || barMoved || abs(heldNow - held.value.minY) > 1 {
+                if landed || barMoved, top == nil {
+                    tallLanding = step
+                }
+                let paragraph = held.key.components(separatedBy: "：").first ?? held.key
+                positions.append("step \(step): the long 第 82 条\(top == nil ? " filling what shows" : ""), its 「\(paragraph)」 at "
+                                 + "\(held.value.minY) before the wait, \(heldNow) after; rows \(span(before)) before, \(span(after)) after; "
+                                 + "the scroll bar \(barText(before)) before, \(barText(after)) after")
+                XCTAssertEqual(heldNow, held.value.minY, accuracy: 4, "the long reply moved as a page came in. \(positions.last ?? "")")
             }
             guard let top, barMoved || now != top.value.minY || Set(after.rows.keys) != Set(before.rows.keys) else { continue }
             positions.append("step \(step): \(top.key) at \(top.value.minY) before the wait, \(now.map { "\($0)" } ?? "gone") after; "
@@ -185,6 +205,7 @@ final class SignInTests: XCTestCase {
                            "the row at the top of what shows moved. \(positions.last ?? "")")
         }
         positions.append("older pages seen from steps \(landings) on; 第 1 条 \(reachedTop ? "reached" : "not reached")")
+        XCTAssertNotNil(tallLanding, "no older page came in while the long 第 82 条 filled what shows, or none of its paragraphs was read")
         // on to the very top, for the picture: 第 1 条 is read a little before it comes into view
         if reachedTop {
             for _ in 0..<2 {
@@ -341,17 +362,25 @@ final class SignInTests: XCTestCase {
         return nil
     }
 
-    /// The 第 N 条 rows the transcript has laid out, from one snapshot of it (quick enough to read
-    /// between a wheel turn and a page landing), by their text; and where its scroll bar is.
+    /// The 第 N 条 rows the transcript has laid out, by their text; where its scroll bar is; and the
+    /// paragraphs after the first of the stand-in's long 第 82 条 laid out, by theirs.
+    private typealias Layout = (rows: [String: CGRect], bar: Double?, long: [String: CGRect])
+
+    /// From one snapshot of the transcript, quick enough to read between a wheel turn and a page
+    /// landing.
     @MainActor
-    private func layout(of transcript: XCUIElement) -> (rows: [String: CGRect], bar: Double?) {
-        guard let root = try? transcript.snapshot() else { return ([:], nil) }
+    private func layout(of transcript: XCUIElement) -> Layout {
+        guard let root = try? transcript.snapshot() else { return ([:], nil, [:]) }
         var rows: [String: CGRect] = [:]
+        var long: [String: CGRect] = [:]
         func visit(_ node: XCUIElementSnapshot) {
-            if node.elementType == .staticText || node.elementType == .textView,
-               let text = [node.label, node.value as? String ?? ""].first(where: { $0.hasPrefix("第 ") && $0.contains(" 条（") }),
-               rows[text] == nil {
-                rows[text] = node.frame
+            if node.elementType == .staticText || node.elementType == .textView {
+                let texts = [node.label, node.value as? String ?? ""]
+                if let text = texts.first(where: { $0.hasPrefix("第 ") && $0.contains(" 条（") }), rows[text] == nil {
+                    rows[text] = node.frame
+                } else if let text = texts.first(where: { $0.hasPrefix("很长的回复，段落 ") }), long[text] == nil {
+                    long[text] = node.frame
+                }
             }
             node.children.forEach(visit)
         }
@@ -359,7 +388,7 @@ final class SignInTests: XCTestCase {
         // its own bar, not a wide table's inside a row
         let bar = root.children.first { $0.elementType == .scrollBar && $0.frame.height > $0.frame.width }
         let value = bar?.value
-        return (rows, (value as? NSNumber)?.doubleValue ?? (value as? String).flatMap(Double.init))
+        return (rows, (value as? NSNumber)?.doubleValue ?? (value as? String).flatMap(Double.init), long)
     }
 
     /// N of a 第 N 条 row.
@@ -370,13 +399,13 @@ final class SignInTests: XCTestCase {
     }
 
     /// Which 第 N 条 rows were laid out, first to last.
-    private func span(_ layout: (rows: [String: CGRect], bar: Double?)) -> String {
+    private func span(_ layout: Layout) -> String {
         let numbers = layout.rows.keys.compactMap(number)
         guard let first = numbers.min(), let last = numbers.max() else { return "none" }
         return "\(first)–\(last)"
     }
 
-    private func barText(_ layout: (rows: [String: CGRect], bar: Double?)) -> String {
+    private func barText(_ layout: Layout) -> String {
         layout.bar.map { String(format: "%.3f", $0) } ?? "not there"
     }
 

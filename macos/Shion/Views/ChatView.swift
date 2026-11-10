@@ -390,9 +390,14 @@ final class TranscriptPlace {
     private func put(_ restore: Restore, _ lines: [ChatLine]) {
         switch restore {
         case .row(let id, let frame):
-            guard lines.contains(where: { $0.id == id }), viewport > frame.height + 1 else { return }
-            proxy?.scrollTo(id, anchor: UnitPoint(x: 0, y: frame.minY / (viewport - frame.height)))
-            restoring = (id, frame.minY, 0)
+            guard lines.contains(where: { $0.id == id }) else { return }
+            // scrollTo puts the row's unit point y on the same point of what shows, so its top goes
+            // to y·(viewport − height): back where it was, a row taller than what shows (a long
+            // reply) too. One as tall as what shows (within a point) can only go to the top
+            let room = viewport - frame.height
+            let top = abs(room) > 1 ? frame.minY : 0
+            proxy?.scrollTo(id, anchor: UnitPoint(x: 0, y: abs(room) > 1 ? frame.minY / room : 0))
+            restoring = (id, top, 0)
         case .line(let item):
             guard let line = lines.first(where: { line in line.items.contains { $0.id == item } }) else { return }
             proxy?.scrollTo(line.id, anchor: .top)
@@ -416,11 +421,14 @@ final class TranscriptPlace {
         frame.maxY > 0 && frame.minY < viewport
     }
 
-    /// The topmost row wholly below the top of what shows, and where it is.
+    /// The topmost row starting in what shows, and where it is; none starting there (a reply taller
+    /// than what shows), the one across its top.
     private func topInView() -> (id: String, frame: CGRect)? {
-        frames.filter { $0.value.minY >= 0 }
+        let starting = frames.filter { $0.value.minY >= 0 && $0.value.minY < viewport }
             .min { $0.value.minY < $1.value.minY }
-            .map { (id: $0.key, frame: $0.value) }
+        let across = frames.filter { $0.value.minY < 0 && $0.value.maxY > 0 }
+            .min { $0.value.minY < $1.value.minY }
+        return (starting ?? across).map { (id: $0.key, frame: $0.value) }
     }
 }
 
