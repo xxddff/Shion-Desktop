@@ -261,6 +261,24 @@ final class SignInTests: XCTestCase {
                 notes.append("inspector \(inspector), opening \(round): the scroll bar at \(bar.map { String(format: "%.3f", $0) } ?? "not there")")
                 XCTAssertTrue(opened, "the chat did not open (inspector \(inspector))")
                 XCTAssertGreaterThan(bar ?? 0, 0.98, "the chat did not open at its newest message. \(notes.last ?? "")")
+                if (bar ?? 0) <= 0.98 {
+                    // not at its end (runs 152 and 153, without the anchor where the transcript
+                    // starts): where it is later, and whether a scroll of the app's own reaches the
+                    // end, the find bar going to words of the newest reply
+                    let shown = { (bar: Double?) in bar.map { String(format: "%.3f", $0) } ?? "not there" }
+                    Thread.sleep(forTimeInterval: 2)
+                    let later = layout(of: transcript).bar
+                    app.typeKey("f", modifierFlags: .command)
+                    let field = element("find-field", in: app)
+                    var found: Double?
+                    if field.waitForExistence(timeout: 3) {
+                        field.typeText("至少覆盖")
+                        Thread.sleep(forTimeInterval: 1.5)
+                        found = layout(of: transcript).bar
+                        app.typeKey(.escape, modifierFlags: [])
+                    }
+                    notes.append("  3.5 s after opening \(shown(later)); the find bar gone to 至少覆盖 (the newest reply) \(shown(found))")
+                }
                 element("nav-reports", in: app).click()
                 Thread.sleep(forTimeInterval: 1)
             }
