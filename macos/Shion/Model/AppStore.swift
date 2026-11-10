@@ -116,9 +116,8 @@ final class AppStore {
             self?.noteDelivery(params)
         }
         startLastData()
-        if !LaunchOptions.current.snapshot {
-            Notifier.shared.start(self)
-        }
+        // screenshot and test runs post nothing and ask for no permission: Notifier sees to that
+        Notifier.shared.start(self)
         if canConnect(serverSettings) && !LaunchOptions.current.snapshot {
             Task { await connect() }
         }

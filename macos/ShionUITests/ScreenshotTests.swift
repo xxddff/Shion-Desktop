@@ -102,6 +102,33 @@ final class ScreenshotTests: XCTestCase {
         app.terminate()
     }
 
+    /// 课程's 工作记录 on the demo day (`-ShionTab work`), light and dark, and a card of it opened
+    /// on the side.
+    @MainActor
+    func testWorkLog() throws {
+        continueAfterFailure = true
+        for appearance in ["light", "dark"] {
+            let app = launch(route: "chat-study", appearance: appearance, extra: ["-ShionTab", "work"])
+            let window = app.windows.firstMatch
+            guard window.waitForExistence(timeout: 20) else {
+                XCTFail("No window for 工作记录 (\(appearance))")
+                app.terminate()
+                continue
+            }
+            Thread.sleep(forTimeInterval: 1)
+            keep(window.screenshot(), name: "work-study-\(appearance)")
+            let row = window.descendants(matching: .any).matching(identifier: "work-g5d2").firstMatch
+            if row.waitForExistence(timeout: 5) {
+                row.click()
+                Thread.sleep(forTimeInterval: 1)
+                keep(window.screenshot(), name: "work-study-detail-\(appearance)")
+            } else {
+                XCTFail("No card in 工作记录 (\(appearance))")
+            }
+            app.terminate()
+        }
+    }
+
     /// The demo's long code line and wide table, scrolled sideways in their own boxes: a picture of
     /// each, and a line saying whether the right end came into view and the words before stayed.
     /// BoardTests asserts the same on the stand-in's reply; a failure here would fail this step and
