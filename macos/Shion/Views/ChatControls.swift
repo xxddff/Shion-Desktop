@@ -331,7 +331,8 @@ struct ChatFindBar: View {
     @Bindable var find: ChatFind
     let found: Found
     let botId: String
-    @FocusState private var focused: Bool
+    /// Esc, or the close button: the chat gives the keys back to its composer as the bar goes.
+    let close: () -> Void
 
     var body: some View {
         if find.shown {
@@ -339,13 +340,12 @@ struct ChatFindBar: View {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
                     .accessibilityHidden(true)
-                TextField("在对话里查找", text: $find.query)
-                    .textFieldStyle(.plain)
-                    .font(.t13)
+                // takes the keys itself as the bar comes up, and again on ⌘F, from wherever they
+                // were: opened with the keys in the sidebar (the chat picked there), a SwiftUI
+                // field asked for them did not get them (run 157)
+                KeyField(text: $find.query, placeholder: "在对话里查找", size: 13, identifier: "find-field",
+                         onSubmit: older, onCancel: close, focus: find.asked)
                     .frame(width: 180)
-                    .focused($focused)
-                    .onSubmit(older)
-                    .accessibilityIdentifier("find-field")
                 if find.digging {
                     ProgressView().controlSize(.small)
                 }
@@ -372,9 +372,7 @@ struct ChatFindBar: View {
                 .keyboardShortcut("g", modifiers: [.command, .shift])
                 .accessibilityLabel("下一个")
                 .accessibilityIdentifier("find-newer")
-                Button {
-                    find.close()
-                } label: {
+                Button(action: close) {
                     Image(systemName: "xmark")
                 }
                 .keyboardShortcut(.cancelAction)
@@ -387,8 +385,6 @@ struct ChatFindBar: View {
             .padding(.vertical, 7)
             .glassEffect(.regular, in: .capsule)
             .padding(.top, 10)
-            .onAppear { focused = true }
-            .onChange(of: find.asked) { focused = true }
             .onChange(of: find.query) { find.current = nil }
         }
     }

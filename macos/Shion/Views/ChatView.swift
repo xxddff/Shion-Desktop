@@ -21,6 +21,8 @@ struct ChatView: View {
     @State private var placing = 0
     /// ⌘F (ChatControls.swift)
     @State private var find = ChatFind()
+    /// The composer has the keys: given back to it as the find bar closes.
+    @FocusState private var composing: Bool
     /// Scrolls as little as it takes to show a whole row, for the rows themselves (a failed turn's
     /// 详情 opening).
     @State private var reveal = RowReveal()
@@ -99,7 +101,11 @@ struct ChatView: View {
             }
         }
         .overlay(alignment: .top) {
-            ChatFindBar(find: find, found: found, botId: botId)
+            ChatFindBar(find: find, found: found, botId: botId) {
+                // the keys go back to the composer, still from the find field: then the bar goes
+                composing = true
+                Task { find.close() }
+            }
         }
         .overlay {
             if let error = store.chatErrors[botId] {
@@ -128,7 +134,7 @@ struct ChatView: View {
                         follow.on = following
                     }
                 }, stop: store.turnRunning(botId) && !store.readOnly ? { store.stopReply(botId) } : nil,
-                   stopping: store.control.stopping.contains(botId))
+                   stopping: store.control.stopping.contains(botId), focus: $composing)
             }
             // not connected, what is said waits under the chat (AppStore+Reconnect.swift)
             .disabled(store.readOnly && !store.waits(botId))
@@ -674,6 +680,8 @@ struct Composer: View {
     /// While a turn runs: the stop button (⌘.) in place of send.
     var stop: (() -> Void)?
     var stopping = false
+    /// Whether it has the keys: the chat gives them back to it as its find bar closes.
+    let focus: FocusState<Bool>.Binding
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 10) {
@@ -682,6 +690,7 @@ struct Composer: View {
                 .font(.system(size: 14))
                 .lineLimit(1...6)
                 .onSubmit(send)
+                .focused(focus)
                 .padding(.vertical, 7)
                 .accessibilityIdentifier("composer")
             if let stop {

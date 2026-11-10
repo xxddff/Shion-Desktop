@@ -1,9 +1,10 @@
 import AppKit
 import SwiftUI
 
-/// The one-line field of the floating inputs (the ⌥Space window, ⌘K). It hands Return, Esc and
-/// ↑↓ to its owner, so a list can follow the arrows. While an input method is composing, those
-/// keys stay with the input method: picking a candidate neither sends nor moves.
+/// The one-line field of the floating inputs (the ⌥Space window, ⌘K) and of the chat's find bar.
+/// It hands Return, Esc and ↑↓ to its owner, so a list can follow the arrows. While an input
+/// method is composing, those keys stay with the input method: picking a candidate neither sends
+/// nor moves.
 struct KeyField: NSViewRepresentable {
     @Binding var text: String
     let placeholder: String
@@ -12,6 +13,8 @@ struct KeyField: NSViewRepresentable {
     var onSubmit: () -> Void = {}
     var onCancel: () -> Void = {}
     var onMove: (Int) -> Void = { _ in }
+    /// Bumped to take the keys again while it is up (⌘F with the chat's find bar showing).
+    var focus = 0
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -34,6 +37,7 @@ struct KeyField: NSViewRepresentable {
         field.setAccessibilityIdentifier(identifier)
         field.setContentHuggingPriority(.defaultLow, for: .horizontal)
         field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        context.coordinator.focus = focus
         return field
     }
 
@@ -47,6 +51,11 @@ struct KeyField: NSViewRepresentable {
         if field.stringValue != text && !Coordinator.composing(field) {
             field.stringValue = text
         }
+        if context.coordinator.focus != focus {
+            context.coordinator.focus = focus
+            // after this update: the keys moving updates the views that had them
+            Task { field.window?.makeFirstResponder(field) }
+        }
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: FocusField, context: Context) -> CGSize? {
@@ -56,6 +65,8 @@ struct KeyField: NSViewRepresentable {
 
     final class Coordinator: NSObject, NSTextFieldDelegate {
         var parent: KeyField
+        /// The request to take the keys last acted on (`focus`).
+        var focus = 0
 
         init(_ parent: KeyField) {
             self.parent = parent
