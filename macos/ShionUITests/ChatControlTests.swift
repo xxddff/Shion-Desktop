@@ -208,6 +208,7 @@ final class ChatControlTests: XCTestCase {
         let transcript = element("transcript", in: app)
         var places: [String] = []
         let before = topRow(of: transcript)
+        mark("find-older")
         element("find-older", in: app).click()
         Thread.sleep(forTimeInterval: 2.3)
         let reading = before.flatMap { row in rows(of: transcript)[row.label] }
@@ -219,6 +220,7 @@ final class ChatControlTests: XCTestCase {
         let dug = waitForText("第 3 条（你）", in: app, timeout: 30)
         Thread.sleep(forTimeInterval: 0.5)
         keep(app.windows.firstMatch.screenshot(), "chatctl-6-find-older")
+        mark("found")
         XCTAssertTrue(dug, "older pages were not read for the hit")
         let found = rows(of: transcript)["第 3 条（你）"]
         let area = transcript.frame
@@ -233,18 +235,23 @@ final class ChatControlTests: XCTestCase {
         let prefs = settingsWindow(app)
         XCTAssertTrue(prefs.waitForExistence(timeout: 5))
         tab("服务器", in: prefs).click()
+        mark("disconnect")
         prefs.buttons["断开"].click()
         let offline = element("connection-state", in: prefs)
         XCTAssertEqual(XCTWaiter().wait(for: [phase("未连接，现在是上次的数据", of: offline)], timeout: 10), .completed,
                        "after 断开: \(offline.label) / \(String(describing: offline.value))")
         keep(prefs.screenshot(), "chatctl-7-settings-offline")
+        mark("disconnected")
         app.typeKey("w", modifierFlags: .command)
         // opened again, the chat starts at its newest row
         element("nav-today", in: app).click()
+        mark("reopen")
         element("bot-shion", in: app).click()
+        mark("reopened")
         let kept = waitForText("（重试）明天晴，最高 18 度，傍晚起风", in: app, timeout: 5)
         let note = waitForText("上次的数据 · ", in: app, timeout: 5)
         keep(app.windows.firstMatch.screenshot(), "chatctl-8-offline-chat")
+        mark("reopened-shot")
         XCTAssertTrue(kept, "the chat went back to the demo after 断开")
         XCTAssertTrue(note, "the sidebar does not say the data is the last the server gave")
         // what is said now waits for a connection (ReconnectTests); a todo stays read-only
@@ -252,12 +259,25 @@ final class ChatControlTests: XCTestCase {
         element("nav-todos", in: app).click()
         let todos = waitForText("CI：交实验报告", in: app, timeout: 5)
         keep(app.windows.firstMatch.screenshot(), "chatctl-9-offline-todos")
+        mark("todos")
         XCTAssertTrue(todos, "the plugin's todos are not kept")
         XCTAssertFalse(element("todo-toggle-td_ci_report", in: app).isEnabled, "a todo can be ticked while not connected")
         app.terminate()
     }
 
     // MARK: helpers
+
+    /// A mark in the stand-in's log (fake_hermes-ChatControlTests.log, kept even when the run is
+    /// cut short): where the test got to, if the app stops answering (run 146).
+    private func mark(_ step: String) {
+        guard let url = URL(string: "\(server)/ci/mark/\(step)") else { return }
+        var request = URLRequest(url: url, timeoutInterval: 1)
+        request.setValue("ci-client", forHTTPHeaderField: "CF-Access-Client-Id")
+        request.setValue("ci-secret", forHTTPHeaderField: "CF-Access-Client-Secret")
+        let done = DispatchSemaphore(value: 0)
+        URLSession.shared.dataTask(with: request) { _, _, _ in done.signal() }.resume()
+        _ = done.wait(timeout: .now() + 1.5)
+    }
 
     @MainActor
     private func settingsWindow(_ app: XCUIApplication) -> XCUIElement {

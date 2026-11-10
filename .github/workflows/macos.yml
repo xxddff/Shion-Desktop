@@ -96,6 +96,12 @@ jobs:
                 http://127.0.0.1:8765/api/status && break
               sleep 1
             done
+            # an app that stops answering holds its test, and with it the run's hour (run 146): after
+            # ten minutes the test is stopped, ^C first so xcodebuild still writes what it has, and
+            # counts as failed; the rest still run
+            ( sleep 600; pkill -INT -f "ShionUITests/$test " && echo "$test: stopped after ten minutes"
+              sleep 30; pkill -KILL -f "ShionUITests/$test " ) &
+            watchdog=$!
             if xcodebuild test-without-building \
                  -project Shion.xcodeproj \
                  -scheme Shion \
@@ -112,6 +118,7 @@ jobs:
               xcrun xcresulttool get test-results summary --path "build/$test.xcresult" 2>/dev/null \
                 | grep -E '"(failureText|testName)"' | head -20 || true
             fi
+            kill "$watchdog" 2>/dev/null || true
             kill "$standin" 2>/dev/null || true
             wait "$standin" 2>/dev/null || true
           done

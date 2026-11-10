@@ -33,7 +33,7 @@ struct ChatView: View {
         let found = find.found(in: lines)
         // before the rows are laid out: older rows coming in above (the row at the top of what
         // shows is noted, from the layout before them), or a new hit of the find bar
-        let _ = place.note(first: items.first?.id, focus: found.focus)
+        let _ = place.note(first: items.first?.id, focus: found.focus, following: follow.on)
         Group {
             // the transcript is made once there is something in it: it starts at its newest
             // message with the rows there, and nothing has to be followed down to get there
@@ -223,6 +223,11 @@ struct ChatView: View {
     /// (TranscriptPlace). A hit opens its folded tool calls, and what comes next is not followed
     /// down from it.
     private func settle(_ lines: [ChatLine]) {
+        // followed at its end, rows changing at the top (a page read there, the chat read again
+        // on reconnecting) leave it at its end, with the follow
+        if place.keepsEnd(), let reader = place.proxy {
+            toEnd(lines, with: reader)
+        }
         guard let hit = place.settle(lines) else { return }
         follow.on = false
         if hit.hasPrefix("tools-") {
@@ -269,8 +274,9 @@ final class Follow {
 }
 
 /// Where a transcript shows, between updates, and in what order it is moved there. Older rows
-/// coming in above put the row that was at the top of what showed back where it was; a new hit of
-/// the find bar is gone to. When both come in one update the hit is gone to and nothing is put
+/// coming in above put the row that was at the top of what showed back where it was, unless it
+/// was followed at its end, where it stays (the chat read again on reconnecting is such a change
+/// at the top, and the end changes with it); a new hit of the find bar is gone to. When both come in one update the hit is gone to and nothing is put
 /// back; a hit that comes while a row is on its way back waits until that row is laid out where
 /// it was (or the scroll geometry has changed a few times without it). A hit gone to is looked
 /// for in the layouts after: not in view (going a long way through rows not laid out yet can land
@@ -298,10 +304,12 @@ final class TranscriptPlace {
         case row(String, CGRect)
         /// No row was laid out: the line holding the old first item goes to the top.
         case line(holding: String)
+        /// Followed at its end, it stays there (ChatView's settle).
+        case end
     }
 
     /// Called as the transcript is made, before its rows are laid out.
-    func note(first: String?, focus: String?) {
+    func note(first: String?, focus: String?, following: Bool) {
         if focus != self.focus {
             self.focus = focus
             hit = focus
@@ -317,7 +325,15 @@ final class TranscriptPlace {
             restore = nil
             return
         }
-        restore = topInView().map { .row($0.id, $0.frame) } ?? .line(holding: previous)
+        restore = following ? .end : topInView().map { .row($0.id, $0.frame) } ?? .line(holding: previous)
+    }
+
+    /// Whether the transcript is to stay at its end as rows changed at its top: then that is
+    /// taken, and settle puts nothing back.
+    func keepsEnd() -> Bool {
+        guard case .end? = restore else { return false }
+        restore = nil
+        return true
     }
 
     /// From the update's onChange handlers, both: whichever runs first does it. The row put back,
@@ -401,6 +417,8 @@ final class TranscriptPlace {
         case .line(let item):
             guard let line = lines.first(where: { line in line.items.contains { $0.id == item } }) else { return }
             proxy?.scrollTo(line.id, anchor: .top)
+        case .end:
+            break
         }
     }
 

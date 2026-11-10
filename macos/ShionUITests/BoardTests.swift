@@ -152,6 +152,9 @@ final class BoardTests: XCTestCase {
         element("bot-shion", in: app).click()
         let reread = waitUntil(timeout: 20) { self.chatCards("整理第8回笔记（CI）", saying: "完成", in: app) >= 2 }
         keep(window.screenshot(), "board-10-chat-reread")
+        if !reread {
+            noteRereadChat(in: app, window: window)
+        }
         XCTAssertTrue(reread, "after reading the chat again, the call and the notice are not both the card")
         XCTAssertFalse(waitForText("Kanban t_", in: app, timeout: 1), "the board's notice shows as text after reading again")
         element("nav-board", in: app).click()
@@ -437,6 +440,48 @@ final class BoardTests: XCTestCase {
             }
         }
         return false
+    }
+
+    /// The chat read again shows no cards (run 146: the transcript went blank as it was read again,
+    /// with a reply taller than what shows a little above its end): what the transcript holds,
+    /// read three times half a second apart, and again after a turn of the wheel, in
+    /// board-reread.txt.
+    @MainActor
+    private func noteRereadChat(in app: XCUIApplication, window: XCUIElement) {
+        let transcript = element("transcript", in: app)
+        var readings: [String] = []
+        for _ in 0..<3 {
+            readings.append(described(transcript))
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+        transcript.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.4)).scroll(byDeltaX: 0, deltaY: 40)
+        Thread.sleep(forTimeInterval: 1)
+        let cards = chatCards("整理第8回笔记（CI）", saying: "完成", in: app)
+        readings.append("after a turn of the wheel: \(described(transcript)); \(cards) of the two cards")
+        keep(window.screenshot(), "board-10a-chat-reread-wheel")
+        note(readings.joined(separator: "\n"), "board-reread")
+    }
+
+    /// The transcript from one snapshot: where it is, its scroll bar, and the texts laid out in
+    /// it, how many and the first few in view.
+    @MainActor
+    private func described(_ transcript: XCUIElement) -> String {
+        guard let root = try? transcript.snapshot() else { return "no transcript" }
+        var texts: [(text: String, frame: CGRect)] = []
+        func visit(_ node: XCUIElementSnapshot) {
+            if node.elementType == .staticText || node.elementType == .textView {
+                texts.append((node.label.isEmpty ? node.value as? String ?? "" : node.label, node.frame))
+            }
+            node.children.forEach(visit)
+        }
+        visit(root)
+        let area = root.frame
+        let value = root.children.first { $0.elementType == .scrollBar && $0.frame.height > $0.frame.width }?.value
+        let bar = ((value as? NSNumber)?.doubleValue ?? (value as? String).flatMap(Double.init)).map { String(format: "%.3f", $0) }
+        let shown = texts.filter { $0.frame.maxY > area.minY && $0.frame.minY < area.maxY }
+        let first = shown.prefix(3).map { "「\($0.text.prefix(16))」 at \($0.frame.minY)" }.joined(separator: ", ")
+        return "the transcript at \(area), its scroll bar \(bar ?? "not there"); \(texts.count) texts laid out, "
+            + "\(shown.count) in view: \(first.isEmpty ? "none" : first)"
     }
 
     /// In the transcript's visible part, not above or below it.
