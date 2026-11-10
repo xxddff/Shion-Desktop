@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 import SwiftUI
@@ -120,36 +121,53 @@ struct LandingRoot: ViewModifier {
 }
 
 /// A chat's part of a landing: once its rows are there, the message the notification was about
-/// comes into view from its top, rather than the chat's newest line. `scroll` brings a line into
-/// view (ChatView's ScrollViewReader).
+/// comes into view from its top, rather than the chat's newest line, and it stays there while the
+/// chat settles, until you click, scroll or type in the window. The transcript is lazy: the rows
+/// above it take their real heights only when they are laid out, an older page can come in above,
+/// and the content's top stays put as they do, so without this the message slides away by what
+/// they add. `scroll` brings a line to the top (ChatView's ScrollViewReader).
 struct LandingScroll: ViewModifier {
     @Environment(AppStore.self) private var store
     let botId: String
     let lines: [ChatLine]
     let scroll: (String) -> Void
+    @State private var hold = LandingHold()
 
     func body(content: Content) -> some View {
         let pending = Landings.shared.pending(on: .chat(botId))
-        content.task(id: "\(String(describing: pending))|\(lines.count)|\(loaded)") {
-            guard case .message(_, let row, let item, let words, let at)? = pending else { return }
-            guard let line = Self.line(in: lines, row: row, item: item, words: words, at: at) else {
-                // read and not there (an older page, or gone): the chat stays at its newest line
-                if loaded {
+        content
+            .task(id: "\(String(describing: pending))|\(lines.count)|\(loaded)") {
+                guard case .message(_, let row, let item, let words, let at)? = pending else { return }
+                guard let line = Self.line(in: lines, row: row, item: item, words: words, at: at) else {
+                    // read and not there (an older page, or gone): the chat stays at its newest line
+                    if loaded {
+                        Landings.shared.pending = nil
+                    }
+                    return
+                }
+                // after the transcript went to its newest line, and once more as the rows above
+                // take their real heights; held from the first time on
+                for delay in [250, 350] {
+                    try? await Task.sleep(for: .milliseconds(delay))
+                    guard !Task.isCancelled else { return }
+                    scroll(line)
+                    hold.start(line)
+                }
+                if Landings.shared.pending == pending {
                     Landings.shared.pending = nil
                 }
-                return
             }
-            // after the transcript went to its newest line, and once more as the rows above take
-            // their real heights
-            for delay in [250, 350] {
-                try? await Task.sleep(for: .milliseconds(delay))
-                guard !Task.isCancelled else { return }
-                scroll(line)
+            // the transcript grew or shrank while the message is held: back to the top with it
+            .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                geometry.contentSize.height
+            } action: { _, _ in
+                if let line = hold.line {
+                    scroll(line)
+                }
             }
-            if Landings.shared.pending == pending {
-                Landings.shared.pending = nil
+            .onDisappear {
+                hold.release()
             }
-        }
     }
 
     /// The server's rows are in: connected, the chat opened and its newest page read.
@@ -171,6 +189,35 @@ struct LandingScroll: ViewModifier {
             }
         guard let found else { return nil }
         return lines.first { line in line.items.contains { $0.id == found.id } }?.id
+    }
+}
+
+/// The line a landing holds at the top of its chat, until the reader takes over: a click, a
+/// scroll or a key in a main window. Not in Settings, which can be in front as Shion connects.
+/// Not observed: read in callbacks only.
+final class LandingHold {
+    private(set) var line: String?
+    private var monitor: Any?
+
+    func start(_ line: String) {
+        self.line = line
+        guard monitor == nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel, .keyDown]
+        ) { [weak self] event in
+            if let window = event.window, DockMode.isMain(window) {
+                self?.release()
+            }
+            return event
+        }
+    }
+
+    func release() {
+        line = nil
+        if let monitor {
+            NSEvent.removeMonitor(monitor)
+        }
+        monitor = nil
     }
 }
 

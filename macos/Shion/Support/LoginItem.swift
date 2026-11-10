@@ -2,7 +2,7 @@ import AppKit
 import Observation
 import ServiceManagement
 
-/// Settings → 通用 → 开机启动: Shion as a login item of this Mac (`SMAppService.mainApp`). It is
+/// Settings → 这台 Mac → 开机启动: Shion as a login item of this Mac (`SMAppService.mainApp`). It is
 /// off until you turn it on. The system keeps the state, and you can change it in System
 /// Settings → 通用 → 登录项 too, so it is read again each time Shion comes to the front.
 /// Screenshot and test runs never touch it: they keep a state of their own in memory, off unless

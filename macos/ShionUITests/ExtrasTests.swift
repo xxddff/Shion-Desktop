@@ -361,7 +361,8 @@ final class ExtrasTests: XCTestCase {
     }
 
     /// The long reply's first paragraph is in view and its last is not: the chat opened at the
-    /// reply's top, not at its newest line.
+    /// reply's top, not at its newest line. Looked at again after the picture: reading the window
+    /// lays out the rows above, which take their real heights then, and the reply stays put.
     @MainActor
     private func checkAtTop(_ app: XCUIApplication, _ window: XCUIElement, _ shot: String) {
         let transcript = element("transcript", in: app)
@@ -377,10 +378,15 @@ final class ExtrasTests: XCTestCase {
         keep(window.screenshot(), shot)
         let first = text(longFirst, in: app)
         let last = text(longLast, in: app)
-        print("transcript \(transcript.frame); first \(String(describing: first?.frame)); last \(String(describing: last?.frame))")
-        XCTAssertTrue(landed, "the reply's first paragraph is not in view")
+        let place = "transcript \(transcript.frame); first \(String(describing: first?.frame)); last \(String(describing: last?.frame))"
+        print(place)
+        XCTAssertTrue(landed, "the reply's first paragraph is not in view: \(place)")
+        if landed {
+            XCTAssertTrue(first.map { inView($0, transcript) } ?? false,
+                          "the reply's first paragraph was in view, then slid away: \(place)")
+        }
         if let last {
-            XCTAssertFalse(inView(last, transcript), "the chat is at the reply's end, not its top")
+            XCTAssertFalse(inView(last, transcript), "the chat is at the reply's end, not its top: \(place)")
         }
     }
 

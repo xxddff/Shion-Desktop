@@ -2,7 +2,7 @@ import AppKit
 import Observation
 import SwiftUI
 
-/// Settings → 通用 → 关窗后只留在菜单栏, off unless you turn it on (then Shion behaves as before
+/// Settings → 这台 Mac → 关窗后只留在菜单栏, off unless you turn it on (then Shion behaves as before
 /// it existed: the Dock icon stays). On, closing the last main window takes the Dock icon away
 /// too (the accessory activation policy), and the count of what waits on you moves from the Dock
 /// to the menu bar, next to 总秘书's mark (MenuBarCount). The icon comes back as soon as a main

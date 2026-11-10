@@ -3,7 +3,7 @@ import Foundation
 
 // Shion's actions for Shortcuts, Spotlight and Siri (App Intents), with Chinese phrases for Siri
 // (ShionAppShortcuts). Each runs on the app's own store through ShionShortcuts.swift; test runs
-// call their perform() themselves (IntentHook.swift). Settings → 通用 says what each does.
+// call their perform() themselves (IntentHook.swift). Settings → 这台 Mac says what each does.
 //
 // The intents are not declared nonisolated (their @Parameter storage cannot be), so what the
 // protocol reads without an actor is marked nonisolated: the title, description and modes, and
