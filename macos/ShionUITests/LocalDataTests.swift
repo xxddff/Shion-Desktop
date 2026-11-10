@@ -210,21 +210,44 @@ final class LocalDataTests: XCTestCase {
         }
     }
 
-    /// Scrolls Settings until `element` can be clicked. Which sign of a wheel delta scrolls down is
-    /// the runner's business: one way, then the other.
+    /// Scrolls Settings until `element` is in full view under the toolbar (a row under the toolbar's
+    /// glass counts as hittable, but a click there lands on the toolbar); with `atTop`, until it is
+    /// just under the toolbar, so what follows it is in view too. Which sign of a wheel delta scrolls
+    /// which way is the runner's business: a step that moves the page the wrong way flips it.
     @MainActor
-    private func reveal(_ element: XCUIElement, in window: XCUIElement) -> Bool {
+    private func reveal(_ element: XCUIElement, in window: XCUIElement, atTop: Bool = false) -> Bool {
         guard element.waitForExistence(timeout: 5) else { return false }
         let area = window.scrollViews.firstMatch.exists ? window.scrollViews.firstMatch : window
-        for delta in [-300.0, 300.0] {
-            for _ in 0..<10 {
-                if element.isHittable { return true }
-                area.hover()
-                area.scroll(byDeltaX: 0, deltaY: delta)
-                Thread.sleep(forTimeInterval: 0.2)
+        let toolbar = window.toolbars.firstMatch
+        var up: CGFloat = -1  // the sign of a delta that moves the page up
+        var signKnown = false
+        for _ in 0..<40 {
+            let top = (toolbar.exists ? toolbar.frame.maxY : window.frame.minY) + 6
+            let bottom = window.frame.maxY - 6
+            let frame = element.frame
+            let inView = frame.minY >= top && frame.maxY <= bottom
+            // where its top should be: under the toolbar with room for its section's header, or
+            // wherever it is fully in view
+            let target = atTop ? top + 48 : min(max(frame.minY, top), bottom - frame.height)
+            let distance = frame.minY - target  // more than 0: the page has to move up
+            if inView, abs(distance) <= (atTop ? 16 : 0.5) { return true }
+            area.hover()
+            area.scroll(byDeltaX: 0, deltaY: (distance > 0 ? up : -up) * max(16, min(240, abs(distance))))
+            Thread.sleep(forTimeInterval: 0.25)
+            let moved = element.frame.minY - frame.minY
+            if abs(moved) < 1 {
+                // nothing moved: the wrong way at an end of the page, or the end it has to go to
+                if !signKnown {
+                    up = -up
+                    signKnown = true
+                    continue
+                }
+                return inView
             }
+            signKnown = true
+            if (distance > 0) != (moved < 0) { up = -up }
         }
-        return element.isHittable
+        return false
     }
 
     @MainActor
