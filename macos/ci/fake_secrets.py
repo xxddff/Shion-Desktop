@@ -32,6 +32,8 @@ import struct
 import threading
 import time
 
+import fake_words
+
 try:  # how the stand-in drops a socket and keeps the tunnel down (ReconnectTests' module)
     import fake_reconnect
 except ImportError:
@@ -107,8 +109,8 @@ def answer(handler, log, lock_, transcripts, session_id, text):
     """prompt.submit has been accepted: keep the turn in the transcript, then play it."""
     with lock_:
         rows = transcripts.setdefault(session_id, [])
-        rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "user", "text": text,
-                     "timestamp": time.time()})
+        rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "user",
+                     "text": fake_words.sent(text), "timestamp": time.time()})
     note_viewer(session_id, handler)
     turn = install_turn if INSTALL in text else late_turn if LATE in text else drop_turn
     threading.Thread(target=turn, args=(log, lock_, transcripts, session_id), daemon=True).start()

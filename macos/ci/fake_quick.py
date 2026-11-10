@@ -13,6 +13,8 @@ answer was. Stdlib only.
 import threading
 import time
 
+import fake_words
+
 PREFIX = "小窗："
 ASKS = "实验报告"
 CHUNK = 3  # characters per message.delta
@@ -31,7 +33,7 @@ def handles(text):
 def answer(handler, log, lock, transcripts, session_id, text):
     """prompt.submit has been accepted: keep the turn, then stream it on a thread of its own."""
     with lock:
-        keep(transcripts, session_id, "user", text)
+        keep(transcripts, session_id, "user", fake_words.sent(text))
     if ASKS in text:
         threading.Thread(target=ask, args=(handler, log, session_id), daemon=True).start()
         return

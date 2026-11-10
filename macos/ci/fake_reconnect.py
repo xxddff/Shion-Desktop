@@ -69,8 +69,9 @@ import os
 import socket
 import threading
 import time
-import unicodedata
 import uuid
+
+import fake_words
 
 try:  # the run and revision a turn bumps, kept with the stop and retry module's where it is there
     import fake_control
@@ -299,7 +300,7 @@ def receipt(params):
     exact retry is known, and published as pending first, as every admission is. Its turn runs at
     once and is over before anything else comes."""
     admission = admit(params.get("session_id"), params.get("submission_id") or params.get("input_id"),
-                      params.get("text", ""), params.get("profile"))
+                      fake_words.sent(params.get("text", "")), params.get("profile"))
     publish_pending(admission["session_id"])
     answer = receipt_of(admission)
     admission.update(status="terminal", outcome="completed")
@@ -310,7 +311,9 @@ def submit(handler, params, rid):
     """prompt.submit. True when answered here: a refusal, an exact retry, a scripted turn, or a
     sentence that waits behind the turn under way. False leaves an ordinary sentence to the
     stand-in's own answers, whose reply is receipt()."""
+    # the words as the scripts read them (fake_hermes.py); what was sent is what Hermes keeps
     session_id, text, profile = params.get("session_id"), params.get("text", ""), params.get("profile")
+    original = fake_words.sent(text)
     submission = params.get("submission_id") or params.get("input_id")
     if not isinstance(submission, str) or not submission:
         return refuse(handler, rid, "invalid_params", fields=["submission_id"])
@@ -322,15 +325,13 @@ def submit(handler, params, rid):
         log(f"    {session_id} is not attached on this connection")
         return refuse(handler, rid, "permission_denied")
     if known is not None:
-        if known["text"] != text:
+        if known["text"] != original:
             return refuse(handler, rid, "admission_conflict", field="request_id",
                           detail="this request id was already admitted with another payload")
         log(f"    exact retry of {submission}: the same admission ({known['status']}), no second turn")
         handler.send_json({"jsonrpc": "2.0", "id": rid, "result": receipt_of(known)})
         return True
-    # read as written: XCUI's typing can give a character's compatibility ideograph (不 as U+F967)
-    plain = unicodedata.normalize("NFC", text)
-    words = said(plain)
+    words = said(text)
     if words == PREFIX + "图和文件" and words not in gone:
         # sent as the connection went, before Hermes had it; its picture cleared meanwhile, so the
         # same submission sent again finds it gone, and the picture goes up again, a new submission
@@ -338,13 +339,13 @@ def submit(handler, params, rid):
         expire(params.get("attachments"))
         drop(handler, f"before {words!r} with its picture and file was admitted")
         return True
-    if plain.startswith(PREFIX) and submission not in dropped:
-        what = plain[len(PREFIX):].strip()
+    if text.startswith(PREFIX) and submission not in dropped:
+        what = text[len(PREFIX):].strip()
         if what in SCRIPTS:
-            return scripted(handler, what, session_id, submission, text, profile, rid)
+            return scripted(handler, what, session_id, submission, original, profile, rid)
     if session_id in running:
-        admission = admit(session_id, submission, text, profile)
-        log(f"    {text!r} waits behind the turn under way")
+        admission = admit(session_id, submission, original, profile)
+        log(f"    {original!r} waits behind the turn under way")
         handler.send_json({"jsonrpc": "2.0", "id": rid, "result": receipt_of(admission)})
         with bus:
             waiting[session_id].append(admission)
@@ -450,7 +451,8 @@ def plain(turn):
     """A sentence that waited behind a turn: answered 「收到：…」, as the stand-in answers any other."""
     time.sleep(0.2)
     begin(turn)
-    reply = "收到：" + turn["text"]
+    # the answer echoes the words as read; the user's row keeps them as sent
+    reply = "收到：" + fake_words.read(turn["text"])
     for start in range(0, len(reply), CHUNK):
         time.sleep(0.2)
         say(turn, reply[start:start + CHUNK])
@@ -480,7 +482,8 @@ def finished(turn):
 def unacked(turn):
     time.sleep(0.5)
     begin(turn)
-    reply = "收到：" + turn["text"]
+    # the answer echoes the words as read; the user's row keeps them as sent
+    reply = "收到：" + fake_words.read(turn["text"])
     for start in range(0, len(reply), CHUNK):
         time.sleep(0.3)
         say(turn, reply[start:start + CHUNK])

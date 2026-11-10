@@ -63,6 +63,7 @@ import fake_media  # noqa: E402  pictures and files (MediaTests)
 import fake_shion  # noqa: E402  the shion plugin's RPCs
 import fake_quick  # noqa: E402  詩音's answers to the ⌥Space window (QuickAskTests)
 import fake_reconnect  # noqa: E402  frames, replay and dropped sockets (ReconnectTests)
+import fake_words  # noqa: E402  a prompt's words as the scripts read them, and as sent
 import fake_secrets  # noqa: E402  sudo and secret requests (SecretsTests)
 
 ACCESS_ID, ACCESS_SECRET = "ci-client", "ci-secret"
@@ -504,8 +505,8 @@ class Handler(BaseHTTPRequestHandler):
         reply = "交给课程了。"
         with lock:
             rows = transcripts.setdefault(session_id, [])
-            rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "user", "text": text,
-                         "timestamp": time.time()})
+            rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "user",
+                         "text": fake_words.sent(text), "timestamp": time.time()})
             rows.append({"row_kind": "message", "role": "tool", "name": "kanban_create", "context": title,
                          "args": args, "tool_call_id": call, "timestamp": time.time()})
             rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "assistant", "text": reply,
@@ -547,8 +548,8 @@ class Handler(BaseHTTPRequestHandler):
         the chat meanwhile, and the new message must not pull it down to the end."""
         with lock:
             rows = transcripts.setdefault(session_id, [])
-            rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "user", "text": text,
-                         "timestamp": time.time()})
+            rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "user",
+                         "text": fake_words.sent(text), "timestamp": time.time()})
             rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "assistant",
                          "text": self.LATER_NOW, "timestamp": time.time()})
         self.event("message.start", session_id, {})
@@ -602,8 +603,8 @@ class Handler(BaseHTTPRequestHandler):
         The transcript keeps the calls, without row ids or results, as Hermes's does."""
         with lock:
             rows = transcripts.setdefault(session_id, [])
-            rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "user", "text": text,
-                         "timestamp": time.time()})
+            rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "user",
+                         "text": fake_words.sent(text), "timestamp": time.time()})
             for call, name, context in self.HOMEWORK_CALLS:
                 rows.append({"row_kind": "message", "role": "tool", "name": name, "context": context,
                              "tool_call_id": call, "timestamp": time.time()})
@@ -724,6 +725,10 @@ class Handler(BaseHTTPRequestHandler):
             log(f"  rpc {method} {json.dumps(fake_profiles.loggable(method, params), ensure_ascii=False)[:160]}")
         if method == "prompt.submit" and set(params) - SUBMIT_KEYS:
             return self.refuse(rid, sorted(set(params) - SUBMIT_KEYS))
+        if method == "prompt.submit" and isinstance(params.get("text"), str):
+            # every module's scripts read the words as written (XCUI's typing can give a compatibility
+            # ideograph, 不 as U+F967); what is stored stays as sent (fake_words.py)
+            params = {**params, "text": fake_words.read(params["text"])}
         if fake_reconnect.answer(self, method, params, rid):
             return
         if fake_control.handles(method, params):
@@ -841,8 +846,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.later(session_id, text)
             with lock:
                 rows = transcripts.setdefault(session_id, [])
-                rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "user", "text": text,
-                             "timestamp": time.time()})
+                rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "user",
+                             "text": fake_words.sent(text), "timestamp": time.time()})
                 rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "assistant",
                              "text": "收到：" + text, "timestamp": time.time()})
             self.event("message.start", session_id, {})
