@@ -65,6 +65,9 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.shion.ShionUITests
         GENERATE_INFOPLIST_FILE: YES
+        # outgoing connections for the runner's sandbox, to tell the CI stand-in when the tunnel
+        # comes back (ShionUITests/StandIn.swift)
+        CODE_SIGN_ENTITLEMENTS: ShionUITests.entitlements
         TEST_TARGET_NAME: Shion
         SWIFT_VERSION: "5.0"
 schemes:

@@ -32,31 +32,56 @@ Shaped like Hermes main at b3746e35 (2026-11-09):
 - `approval.respond {session_id, execution_generation, prompt_id, choice}`: a closed key set, from a
   connection that has the session attached; another run's generation is refused stale_generation
   (gateway/session_controls.py respond, gateway/session_authority.py respond).
+- A connection that cannot keep up loses its subscription, not its socket: the owner retires the
+  viewer and writes it one `session.replay_gap {replay_epoch, latest_seq}` (no seq of its own) in
+  place of the frame that overflowed, and the turn runs on. The socket still answers; the session is
+  no longer attached on it until a session.resume (gateway/session_events.py publish's overflow,
+  gateway/session_authority.py _retire_overflowed).
 
 The scripted turns, in 詩音's chat, are sentences that start 「断线：」. Each drops Shion's socket at
-one moment, as a network does (no close frame); then for a few seconds (OUTAGE, unless said) the
-tunnel is down and every request gets Cloudflare's 502:
+one moment, as a network does (no close frame), and the tunnel goes down: every request gets
+Cloudflare's 502 until the test brings it back with `POST /ci/tunnel/up` (StandIn.swift), a word no
+real tunnel has, which comes through whatever the tunnel's state. The test says it once it has seen
+what it looks for while Shion is away, so nothing hangs on how fast it types or on when Shion's tries
+fall; the word is answered once what the script does meanwhile is done (the end of a reply that ends
+while Shion is away, the parts its replay will have), and Shion is back at its next try. Only if
+nobody says it does the tunnel come back by itself, after NOBODY seconds, so that a step that failed
+before saying so does not take the rest of the test with it:
 
-  讲到一半   80 parts 0.3 s apart; the socket drops after the 5th and the tunnel stays down 8 s (time
-             to say something meanwhile); the reply is still going when Shion is back, so the rest
-             streams into the same bubble
-  讲完了     10 parts 0.2 s apart, dropped after the 3rd: the reply ends while the tunnel is down
-  还没回执   admitted, then dropped before its receipt went out; the frames that follow are kept
+  讲到一半   80 parts 0.3 s apart; the socket drops after the 5th, the 6th to the 20th come while
+             Shion is away, and the reply waits at the 20th until Shion is back and asks what it
+             missed, as a reply longer than the outage would: the rest streams into the same bubble
+  讲完了     10 parts 0.2 s apart, dropped after the 3rd: the reply ends while Shion is away (the
+             tunnel comes back only after it has)
+  还没回执   admitted, then dropped before its receipt went out; the answer's frames that follow are
+             kept, and the tunnel comes back once the answer is over
   没收到     dropped before it was admitted, the first time its submission id comes; sent again with
              that id, it is admitted like any other sentence
   等你批准   asks for an approval, then drops while it waits; answered once Shion is back, the turn
              finishes
-  说很多     600 one-character parts while the tunnel is down, more than the session keeps: the
-             replay cannot reach back, so Shion reads the newest page instead
+  说很多     600 one-character parts while Shion is away (the tunnel comes back once they are all
+             out), more than the session keeps: the replay cannot reach back, so Shion reads the
+             newest page instead
+  图和文件   said with a picture and a file (the words after the file's reference): dropped before it
+             was admitted, the first time; the picture is cleared from the staging folder meanwhile,
+             as Hermes's cache does, so the same submission comes back refused (fake_media.py) and
+             the picture goes up again, under a new id
+  跟不上     40 parts 0.25 s apart; the 6th does not fit: the socket's subscription is retired and
+             it gets a session.replay_gap instead, the socket kept. Nothing drops; the 6th part is
+             only in the kept frames, so Shion has it from its replay on the same socket
 
 Stdlib only.
 """
 import collections
 import itertools
+import json
+import os
 import socket
 import threading
 import time
 import uuid
+
+import fake_words
 
 try:  # the run and revision a turn bumps, kept with the stop and retry module's where it is there
     import fake_control
@@ -64,7 +89,9 @@ except ImportError:
     fake_control = None
 
 PREFIX = "断线："
-OUTAGE = 4.0  # seconds the tunnel stays down after a drop
+CONTROL = "/ci/tunnel/up"  # the test's word that brings the tunnel back (StandIn.swift)
+NOBODY = 60.0  # seconds a tunnel waits for that word before it comes back by itself
+MEANWHILE = 30.0  # seconds the word waits for what a script does while Shion is away
 KEPT = 512  # frames a session keeps (tui_gateway/event_replay.py _REPLAY_BUFFER_MAX)
 APPROVAL = {"kind": "approval", "prompt_id": "ap-reconnect", "command": "df -h /",
             "description": "要看一下服务器的磁盘还剩多少吗？", "choices": ["once", "session", "always", "deny"]}
@@ -84,7 +111,10 @@ prompts = {}  # session id -> {prompt id: the approval still waiting}
 running = {}  # session id -> the turn under way here
 waiting = collections.defaultdict(list)  # session id -> admissions queued behind it
 dropped = set()  # submission ids whose socket was dropped before they were admitted
-down = {"until": 0.0}
+gone = set()  # the words of messages with pictures and files dropped once, whatever their id
+tunnel = threading.Lock()
+down = {"held": False, "since": 0.0, "why": "", "meanwhile": None}
+awaited = {}  # session id -> set once a connection asks for it again (Shion is back): a reply waits
 local_fences = {}
 row_ids = itertools.count(7000)
 
@@ -107,8 +137,18 @@ def fence(session_id):
 # ---- the tunnel --------------------------------------------------------------------------------
 
 def tunnel_down(handler):
-    """While the tunnel is down every request gets Cloudflare's 502. True when answered so."""
-    if time.time() >= down["until"]:
+    """What the tunnel answers before the stand-in sees a request: while it is down, Cloudflare's 502
+    to every request; and the test's word that brings it back (POST /ci/tunnel/up), whatever the
+    tunnel's state. True when answered here."""
+    if handler.command == "POST" and handler.path.split("?")[0] == CONTROL:
+        bring_up(handler)
+        return True
+    with tunnel:
+        held = down["held"]
+        if held and time.time() - down["since"] >= NOBODY:
+            down["held"] = held = False
+            log(f"  -> nobody brought the tunnel back: it is up again by itself after {NOBODY:.0f} s")
+    if not held:
         return False
     log(f"{handler.command} {handler.path.split('?')[0]} -> 502 (the tunnel is down)")
     body = b"<h1>502 Bad Gateway</h1><p>CI stand-in: the tunnel is down.</p>"
@@ -122,13 +162,46 @@ def tunnel_down(handler):
     return True
 
 
-def drop(handler, why, outage=OUTAGE):
-    """Shion's socket goes as it does when the network goes, without a close frame; the tunnel
-    then stays down a while. The sessions it had attached lose it, as Hermes detaches an orphan."""
-    down["until"] = time.time() + outage
+def bring_up(handler):
+    """POST /ci/tunnel/up: the test has seen what it looks for while Shion is away. Answered once what
+    the script does meanwhile is done, with how long the tunnel was down; 409 when it is not down."""
+    with tunnel:
+        held, since, why, meanwhile = down["held"], down["since"], down["why"], down["meanwhile"]
+    if not held:
+        log(f"POST {CONTROL} -> 409 (the tunnel is not down)")
+        return word(handler, 409, {"down": False})
+    done = meanwhile is None or meanwhile.wait(MEANWHILE)
+    with tunnel:
+        down["held"] = False
+    took = time.time() - since
+    log(f"POST {CONTROL} -> the tunnel is back after {took:.1f} s (dropped {why})"
+        + ("" if done else f"; what the script does meanwhile was not done after {MEANWHILE:.0f} s"))
+    word(handler, 200, {"down": True, "seconds": round(took, 1), "meanwhile": "done" if done else "not done"})
+
+
+def word(handler, status, answer):
+    """The stand-in's own answer to the test's word, then the connection closes: it is no Hermes
+    route, so none of the Access gate's headers go with it."""
+    body = json.dumps(answer).encode()
+    handler.close_connection = True
+    handler.send_response(status)
+    handler.send_header("Content-Type", "application/json")
+    handler.send_header("Content-Length", str(len(body)))
+    handler.send_header("Connection", "close")
+    handler.end_headers()
+    handler.wfile.write(body)
+
+
+def drop(handler, why, meanwhile=None):
+    """Shion's socket goes as it does when the network goes, without a close frame, and the tunnel
+    goes down until the test brings it back (POST /ci/tunnel/up), not before `meanwhile` is set if
+    there is one: what the script does while Shion is away. The sessions the socket had attached
+    lose it, as Hermes detaches an orphan."""
+    with tunnel:
+        down.update(held=True, since=time.time(), why=why, meanwhile=meanwhile)
     with bus:
         forget(handler)
-    log(f"  -> dropped the socket {why}; the tunnel is down for {outage:.0f} s")
+    log(f"  -> dropped the socket {why}; the tunnel is down until the test brings it back")
     try:
         handler.connection.shutdown(socket.SHUT_RDWR)
     except OSError:
@@ -143,6 +216,21 @@ def stream(session_id):
         found = streams[session_id] = {"epoch": uuid.uuid4().hex, "seq": 0, "kept": collections.deque(),
                                        "evicted": 0}
     return found
+
+
+def back_for(session_id):
+    """An event set once a connection asks for the session again, after a drop: Shion is back."""
+    with bus:
+        event = awaited[session_id] = threading.Event()
+    return event
+
+
+def asked_again(session_id):
+    """events.since or session.resume for a session: a reply waiting for Shion goes on. The caller
+    holds the bus."""
+    event = awaited.pop(session_id, None)
+    if event is not None:
+        event.set()
 
 
 def forget(handler):
@@ -190,6 +278,7 @@ def attach(handler, session_id):
     cursor its events.since answered, then the session's frames as they come. Returns what the
     snapshot adds."""
     with bus:
+        asked_again(session_id)
         found = stream(session_id)
         cursor = cursors.get(handler, {}).pop(session_id, None)
         caught = 0
@@ -225,6 +314,7 @@ def events_since(handler, params, rid):
     if not known:
         return refuse(handler, rid, "not_found")
     with bus:
+        asked_again(session_id)
         found = stream(session_id)
         latest, current = found["seq"], found["epoch"]
         missing = epoch != current or after > latest or after < found["evicted"]
@@ -284,7 +374,7 @@ def receipt(params):
     exact retry is known, and published as pending first, as every admission is. Its turn runs at
     once and is over before anything else comes."""
     admission = admit(params.get("session_id"), params.get("submission_id") or params.get("input_id"),
-                      params.get("text", ""), params.get("profile"))
+                      fake_words.sent(params.get("text", "")), params.get("profile"))
     publish_pending(admission["session_id"])
     answer = receipt_of(admission)
     admission.update(status="terminal", outcome="completed")
@@ -295,7 +385,9 @@ def submit(handler, params, rid):
     """prompt.submit. True when answered here: a refusal, an exact retry, a scripted turn, or a
     sentence that waits behind the turn under way. False leaves an ordinary sentence to the
     stand-in's own answers, whose reply is receipt()."""
+    # the words as the scripts read them (fake_hermes.py); what was sent is what Hermes keeps
     session_id, text, profile = params.get("session_id"), params.get("text", ""), params.get("profile")
+    original = fake_words.sent(text)
     submission = params.get("submission_id") or params.get("input_id")
     if not isinstance(submission, str) or not submission:
         return refuse(handler, rid, "invalid_params", fields=["submission_id"])
@@ -307,19 +399,27 @@ def submit(handler, params, rid):
         log(f"    {session_id} is not attached on this connection")
         return refuse(handler, rid, "permission_denied")
     if known is not None:
-        if known["text"] != text:
+        if known["text"] != original:
             return refuse(handler, rid, "admission_conflict", field="request_id",
                           detail="this request id was already admitted with another payload")
         log(f"    exact retry of {submission}: the same admission ({known['status']}), no second turn")
         handler.send_json({"jsonrpc": "2.0", "id": rid, "result": receipt_of(known)})
         return True
+    words = said(text)
+    if words == PREFIX + "图和文件" and words not in gone:
+        # sent as the connection went, before Hermes had it; its picture cleared meanwhile, so the
+        # same submission sent again finds it gone, and the picture goes up again, a new submission
+        gone.add(words)
+        expire(params.get("attachments"))
+        drop(handler, f"before {words!r} with its picture and file was admitted")
+        return True
     if text.startswith(PREFIX) and submission not in dropped:
         what = text[len(PREFIX):].strip()
         if what in SCRIPTS:
-            return scripted(handler, what, session_id, submission, text, profile, rid)
+            return scripted(handler, what, session_id, submission, original, profile, rid)
     if session_id in running:
-        admission = admit(session_id, submission, text, profile)
-        log(f"    {text!r} waits behind the turn under way")
+        admission = admit(session_id, submission, original, profile)
+        log(f"    {original!r} waits behind the turn under way")
         handler.send_json({"jsonrpc": "2.0", "id": rid, "result": receipt_of(admission)})
         with bus:
             waiting[session_id].append(admission)
@@ -354,13 +454,14 @@ def scripted(handler, what, session_id, submission, text, profile, rid):
         drop(handler, f"before {text!r} was admitted")
         return True
     admission = admit(session_id, submission, text, profile)
+    # meanwhile: set once what the turn does while Shion is away is done (the tunnel waits for it)
     turn = {"what": what, "session_id": session_id, "text": text, "admission": admission, "handler": handler,
-            "said": "", "answered": threading.Event(), "choice": None}
+            "said": "", "answered": threading.Event(), "choice": None, "meanwhile": threading.Event()}
     with bus:
         running[session_id] = turn
     if what == "还没回执":
         # admitted, and the socket gone before the receipt: what comes now is kept for the replay
-        drop(handler, f"after admitting {text!r}, before its receipt")
+        drop(handler, f"after admitting {text!r}, before its receipt", turn["meanwhile"])
         publish_pending(session_id)
     else:
         publish_pending(session_id)
@@ -425,7 +526,8 @@ def plain(turn):
     """A sentence that waited behind a turn: answered 「收到：…」, as the stand-in answers any other."""
     time.sleep(0.2)
     begin(turn)
-    reply = "收到：" + turn["text"]
+    # the answer echoes the words as read; the user's row keeps them as sent
+    reply = "收到：" + fake_words.read(turn["text"])
     for start in range(0, len(reply), CHUNK):
         time.sleep(0.2)
         say(turn, reply[start:start + CHUNK])
@@ -438,7 +540,14 @@ def halfway(turn):
         time.sleep(0.3)
         say(turn, f"第{n}段。")
         if n == 5:
-            drop(turn["handler"], "half way through a reply", outage=8.0)
+            back = back_for(turn["session_id"])
+            drop(turn["handler"], "half way through a reply", turn["meanwhile"])
+        elif n == 20:
+            # as long a reply as the outage: the 6th to the 20th are Shion's replay, and the rest
+            # goes on once Shion is back and asks what it missed, so it streams in live
+            turn["meanwhile"].set()
+            if not back.wait(NOBODY + MEANWHILE):
+                log("  -> Shion did not come back to 讲到一半: the rest goes on anyway")
     end(turn)
 
 
@@ -448,18 +557,21 @@ def finished(turn):
         time.sleep(0.2)
         say(turn, f"第{n}句。")
         if n == 3:
-            drop(turn["handler"], "three parts into a short reply")
+            drop(turn["handler"], "three parts into a short reply", turn["meanwhile"])
     end(turn)
+    turn["meanwhile"].set()  # the reply ended while Shion was away: only now may the tunnel come back
 
 
 def unacked(turn):
     time.sleep(0.5)
     begin(turn)
-    reply = "收到：" + turn["text"]
+    # the answer echoes the words as read; the user's row keeps them as sent
+    reply = "收到：" + fake_words.read(turn["text"])
     for start in range(0, len(reply), CHUNK):
         time.sleep(0.3)
         say(turn, reply[start:start + CHUNK])
     end(turn)
+    turn["meanwhile"].set()  # answered while Shion was away: its replay has all of it
 
 
 def approval(turn):
@@ -490,15 +602,68 @@ def approval(turn):
 def flood(turn):
     begin(turn)
     time.sleep(0.3)
-    drop(turn["handler"], "before a reply longer than the session keeps")
+    drop(turn["handler"], "before a reply longer than the session keeps", turn["meanwhile"])
     sentence = "长长的回复。"
     for n in range(600):
         say(turn, sentence[n % len(sentence)])
     end(turn)
+    turn["meanwhile"].set()  # all 600 out while Shion was away: more than its replay can reach
+
+
+def lagging(turn):
+    begin(turn)
+    for n in range(1, 41):
+        time.sleep(0.25)
+        if n == 6:
+            # the 6th does not fit: the subscription goes in its place, and the part reaches only the
+            # kept frames, so Shion has it from its replay or not at all
+            with bus:
+                watchers.get(turn["session_id"], {}).pop(turn["handler"], None)
+        say(turn, f"第{n}节。")
+        if n == 6:
+            retire(turn["handler"], turn["session_id"])
+    end(turn)
+
+
+def retire(handler, session_id):
+    """The owner gives up on a viewer that cannot keep up: its subscription goes, its socket stays,
+    and it gets one session.replay_gap in place of the frame that did not fit, naming the newest
+    (gateway/session_events.py publish's overflow)."""
+    with bus:
+        watchers.get(session_id, {}).pop(handler, None)
+        found = stream(session_id)
+        gap = {"type": "session.replay_gap", "session_id": session_id,
+               "payload": {"replay_epoch": found["epoch"], "latest_seq": found["seq"]}}
+    log(f"  -> {session_id}'s subscription on this socket retired, the socket kept: session.replay_gap at {gap['payload']['latest_seq']}")
+    try:
+        handler.send_json({"jsonrpc": "2.0", "method": "event", "params": gap})
+    except (OSError, ValueError):
+        pass
+
+
+def said(text):
+    """A message's words: what follows the `@file:` lines its files' references are."""
+    lines = text.split("\n")
+    while lines and (lines[0].startswith("@file:") or lines[0].startswith("@folder:")):
+        lines.pop(0)
+    return "\n".join(lines).strip()
+
+
+def expire(attachments):
+    """Clears a message's staged pictures, as Hermes's cache does after a while (fake_media.py)."""
+    try:
+        import fake_media
+    except ImportError:
+        return
+    for item in attachments if isinstance(attachments, list) else []:
+        target = fake_media.real(item.get("path", "")) if isinstance(item, dict) else None
+        if target and os.path.isfile(target):
+            os.remove(target)
+            log(f"    cleared the staged picture {item['path']}")
 
 
 SCRIPTS = {"讲到一半": halfway, "讲完了": finished, "还没回执": unacked, "没收到": None, "等你批准": approval,
-           "说很多": flood}
+           "说很多": flood, "跟不上": lagging}
 
 
 def respond(handler, params, rid):

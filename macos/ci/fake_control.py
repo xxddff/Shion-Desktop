@@ -39,6 +39,8 @@ import itertools
 import threading
 import time
 
+import fake_words
+
 STORY = "讲一个长故事"
 STORY_PARTS = ["从前有一座山，", "山里有座庙，", "庙里有个老和尚，", "在给小和尚讲故事。"] * 25
 RETRIED = "（重试）故事讲完了：山里有座庙。"
@@ -151,7 +153,8 @@ def story(conn, params, rid):
         current["generation"] += 1
         user_row = next(row_ids)
         state["transcripts"].setdefault(session_id, []).append(
-            {"row_id": user_row, "row_kind": "message", "role": "user", "text": text, "timestamp": time.time()})
+            {"row_id": user_row, "row_kind": "message", "role": "user", "text": fake_words.sent(text),
+             "timestamp": time.time()})
         turn = {"generation": current["generation"], "stop": threading.Event(), "user_row": user_row,
                 "submission": params.get("submission_id")}
         running[session_id] = turn
@@ -203,7 +206,8 @@ def fail(conn, params, rid):
         current["generation"] += 1
         user_row = next(row_ids)
         state["transcripts"].setdefault(session_id, []).append(
-            {"row_id": user_row, "row_kind": "message", "role": "user", "text": text, "timestamp": time.time()})
+            {"row_id": user_row, "row_kind": "message", "role": "user", "text": fake_words.sent(text),
+             "timestamp": time.time()})
         turn = {"generation": current["generation"], "stop": threading.Event(), "user_row": user_row,
                 "submission": params.get("submission_id")}
         running[session_id] = turn
@@ -258,7 +262,8 @@ def tooled(conn, params, rid):
         current["generation"] += 1
         user_row = next(row_ids)
         state["transcripts"].setdefault(session_id, []).append(
-            {"row_id": user_row, "row_kind": "message", "role": "user", "text": text, "timestamp": time.time()})
+            {"row_id": user_row, "row_kind": "message", "role": "user", "text": fake_words.sent(text),
+             "timestamp": time.time()})
         turn = {"generation": current["generation"], "stop": threading.Event(), "user_row": user_row,
                 "submission": params.get("submission_id")}
         running[session_id] = turn

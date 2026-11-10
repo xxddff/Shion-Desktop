@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Xcode signs the UI tests' runner with its XCTRunner template's entitlements, which sandbox it,
+     merged with these: outgoing connections, so that a test can tell the CI stand-in itself when
+     the tunnel a drop took down comes back (ShionUITests/StandIn.swift). Nothing else changes:
+     the sandbox key and the template's exceptions stay the template's. -->
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.network.client</key>
+	<true/>
+</dict>
+</plist>

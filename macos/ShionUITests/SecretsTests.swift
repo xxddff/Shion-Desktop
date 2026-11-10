@@ -139,13 +139,15 @@ final class SecretsTests: XCTestCase {
 
         // 5. the connection drops right after a request: the card stays but cannot be answered until
         // the reconnect's resume finds the request still waiting (open_requests); then the password
-        // goes on the new connection, once
+        // goes on the new connection, once. The tunnel stays down until the card has been seen
+        // waiting (StandIn.tunnelUp)
         say("断线（CI）", in: app)
         let dropCard = element("secret-card-\(dropId)", in: app)
         guard dropCard.waitForExistence(timeout: 15) else { return XCTFail("no card for the request asked before the drop") }
         let offline = waitForText("连接", in: dropCard, timeout: 8)
         keep(window.screenshot(), "secrets-7-offline")
         XCTAssertTrue(offline, "the card did not say the connection was down")
+        StandIn.tunnelUp("5. the connection drops right after a request")
         let dropField = app.secureTextFields["secret-field-\(dropId)"]
         let back = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isEnabled == true"), object: dropField)
         guard XCTWaiter().wait(for: [back], timeout: 40) == .completed else {

@@ -7,9 +7,10 @@ A prompt with 「装 ffmpeg（CI）」 plays a turn whose two tool calls run at 
 parallel tools: the terminal tool needs the sudo password for `sudo apt-get install -y ffmpeg`, and
 the notion skill asks for NOTION_API_KEY. A prompt with 「会过期（CI）」 asks for a sudo password that
 nobody gives in time. With 「断线（CI）」 the socket goes down right after the request goes out, as
-a network drop does (no close frame), and the tunnel stays down a few seconds (fake_reconnect.py's
-drop, DROP_OUTAGE): the card is seen waiting for the connection; then the window reconnects, finds
-the request in session.resume's open_requests, and answers it on the new socket.
+a network drop does (no close frame), and the tunnel stays down (fake_reconnect.py's drop) until
+SecretsTests has seen the card wait for the connection and brings it back (POST /ci/tunnel/up);
+then the window reconnects, finds the request in session.resume's open_requests, and answers it on
+the new socket.
 
 On the wire, as on Hermes:
   request   {"jsonrpc": "2.0", "id": "srq-<12 hex>", "method": "sudo", "params": {"session_id",
@@ -32,6 +33,8 @@ import struct
 import threading
 import time
 
+import fake_words
+
 try:  # how the stand-in drops a socket and keeps the tunnel down (ReconnectTests' module)
     import fake_reconnect
 except ImportError:
@@ -46,7 +49,6 @@ COMMAND = "sudo apt-get install -y ffmpeg"
 LATE_COMMAND = "sudo systemctl restart hermes-ci"
 DROP_COMMAND = "sudo apt-get install -y sox"
 WAIT = 120.0  # Hermes's REQUEST_TIMEOUT_S
-DROP_OUTAGE = 6.0  # seconds the tunnel stays down after 「断线（CI）」 drops the socket
 LATE_WAIT = 8.0  # the one that expires: shorter than Hermes's, to keep the test short
 # fixed ids, so the test can find each card (Hermes's are random: srq- and 12 hex digits)
 SUDO_ID, KEY_ID, LATE_ID, DROP_ID = "srq-00000000c101", "srq-00000000c102", "srq-00000000c103", "srq-00000000c104"
@@ -107,8 +109,8 @@ def answer(handler, log, lock_, transcripts, session_id, text):
     """prompt.submit has been accepted: keep the turn in the transcript, then play it."""
     with lock_:
         rows = transcripts.setdefault(session_id, [])
-        rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "user", "text": text,
-                     "timestamp": time.time()})
+        rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "user",
+                     "text": fake_words.sent(text), "timestamp": time.time()})
     note_viewer(session_id, handler)
     turn = install_turn if INSTALL in text else late_turn if LATE in text else drop_turn
     threading.Thread(target=turn, args=(log, lock_, transcripts, session_id), daemon=True).start()
@@ -232,10 +234,10 @@ def late_turn(log, lock_, transcripts, session_id):
 
 
 def hang_up(log, viewer):
-    """The socket goes down as a network drop does: no close frame, and the tunnel down a few
-    seconds (every request a 502), so the card is seen waiting before the window gets back."""
+    """The socket goes down as a network drop does: no close frame, and the tunnel down (every
+    request a 502) until the test has seen the card wait and brings it back."""
     if fake_reconnect is not None:
-        return fake_reconnect.drop(viewer, "while a sudo password is asked for", outage=DROP_OUTAGE)
+        return fake_reconnect.drop(viewer, "while a sudo password is asked for")
     log("  -> the socket goes down while the request waits")
     try:
         viewer.send_frame(8, struct.pack(">H", 1001))

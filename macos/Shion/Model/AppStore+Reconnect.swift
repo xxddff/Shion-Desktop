@@ -110,16 +110,23 @@ extension AppStore {
     }
 
     /// 重发: the same words under the same submission id, so that, should Hermes have them after
-    /// all, it answers with that admission and runs nothing twice. The message moves to the bottom,
-    /// after what Hermes has, as Hermes puts it.
+    /// all, it answers with that admission and runs nothing twice; its pictures and files by the
+    /// same references (a picture the server cleared meanwhile goes up again, under a new id:
+    /// AppStore+Media.swift). The message moves to the bottom, after what Hermes has, as Hermes
+    /// puts it.
     func resend(_ id: String, in botId: String) {
         guard let sent = deliveries.sent[id], sent.state.unsent, canResend(botId), let sessionId = sessions[botId]
         else { return }
         let written = Date()
+        let media = chats[botId]?.first(where: { $0.id == id })?.media ?? sent.drafts.map(\.media)
         chats[botId]?.removeAll { $0.id == id }
-        chats[botId, default: []].append(Self.userItem(id: id, at: written, text: sent.text))
+        var item = Self.userItem(id: id, at: written, text: sent.text)
+        item.media = media
+        chats[botId, default: []].append(item)
         Task {
-            if await !submit(sent.text, id: id, to: botId, sessionId: sessionId) {
+            if !sent.drafts.isEmpty {
+                await submit(sent.text, sent.drafts, botId: botId, sessionId: sessionId, submission: id, again: false)
+            } else if await !submit(sent.text, id: id, to: botId, sessionId: sessionId) {
                 requeue(id, text: sent.text, at: written, to: botId)
             }
         }
@@ -274,9 +281,11 @@ extension AppStore {
                 deliveries.arrived(id)
             } else {
                 deliveries.set(id, .unsent(nil))
-                // a page read in its place: it goes back at the bottom
+                // a page read in its place: it goes back at the bottom, with what went with it
                 if chats[botId]?.contains(where: { $0.id == id }) != true {
-                    chats[botId, default: []].append(row)
+                    var back = row
+                    back.media += sent.drafts.map(\.media)
+                    chats[botId, default: []].append(back)
                 }
             }
         }
