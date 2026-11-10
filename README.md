@@ -4,7 +4,7 @@ macOS 上的私人秘书。你主要和总秘书「詩音」打交道，她带�
 
 背后跑的是部署在 VPS 上的 [Hermes Agent](https://github.com/NousResearch/hermes-agent)，Shion 通过 Canonical Gateway Protocol 连接它，完全取代官方桌面端的 Bot Mode。
 
-> 现阶段：`prototype/` 是 UI 原型（React，示例数据，可交互），用来对齐界面和流程。正式的 App 用 SwiftUI + AppKit 写，不套浏览器，最低支持 macOS 27。
+> 现在：原生 App 在 `macos/`（SwiftUI + AppKit，不套浏览器，最低支持 macOS 27），已经能连上 Hermes 日常使用，怎么装见下面「装测试版，连自己的服务器」；服务器上的 shion 插件在 `hermes-plugin/`；`prototype/` 是早先用来对齐界面和流程的 UI 原型（React，示例数据）。测试版安装包在 Actions 里「macOS app」工作流手动运行的结果中（`Shion-macOS-<编号>`）。
 
 ## 已经定下来的
 
