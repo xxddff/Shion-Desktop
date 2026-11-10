@@ -32,6 +32,11 @@ Shaped like Hermes main at b3746e35 (2026-11-09):
 - `approval.respond {session_id, execution_generation, prompt_id, choice}`: a closed key set, from a
   connection that has the session attached; another run's generation is refused stale_generation
   (gateway/session_controls.py respond, gateway/session_authority.py respond).
+- A connection that cannot keep up loses its subscription, not its socket: the owner retires the
+  viewer and writes it one `session.replay_gap {replay_epoch, latest_seq}` (no seq of its own) in
+  place of the frame that overflowed, and the turn runs on. The socket still answers; the session is
+  no longer attached on it until a session.resume (gateway/session_events.py publish's overflow,
+  gateway/session_authority.py _retire_overflowed).
 
 The scripted turns, in 詩音's chat, are sentences that start 「断线：」. Each drops Shion's socket at
 one moment, as a network does (no close frame); then for a few seconds (OUTAGE, unless said) the
@@ -48,11 +53,18 @@ tunnel is down and every request gets Cloudflare's 502:
              finishes
   说很多     600 one-character parts while the tunnel is down, more than the session keeps: the
              replay cannot reach back, so Shion reads the newest page instead
+  图和文件   said with a picture and a file (the words after the file's reference): dropped before it
+             was admitted, the first time; the picture is cleared from the staging folder meanwhile,
+             as Hermes's cache does, so the same submission comes back refused (fake_media.py) and
+             the picture goes up again, under a new id
+  跟不上     40 parts 0.25 s apart; after the 5th the socket's subscription is retired with a
+             session.replay_gap, the socket kept: nothing drops, Shion catches up on the same socket
 
 Stdlib only.
 """
 import collections
 import itertools
+import os
 import socket
 import threading
 import time
@@ -84,6 +96,7 @@ prompts = {}  # session id -> {prompt id: the approval still waiting}
 running = {}  # session id -> the turn under way here
 waiting = collections.defaultdict(list)  # session id -> admissions queued behind it
 dropped = set()  # submission ids whose socket was dropped before they were admitted
+gone = set()  # the words of messages with pictures and files dropped once, whatever their id
 down = {"until": 0.0}
 local_fences = {}
 row_ids = itertools.count(7000)
@@ -313,6 +326,14 @@ def submit(handler, params, rid):
         log(f"    exact retry of {submission}: the same admission ({known['status']}), no second turn")
         handler.send_json({"jsonrpc": "2.0", "id": rid, "result": receipt_of(known)})
         return True
+    words = said(text)
+    if words == PREFIX + "图和文件" and words not in gone:
+        # sent as the connection went, before Hermes had it; its picture cleared meanwhile, so the
+        # same submission sent again finds it gone, and the picture goes up again, a new submission
+        gone.add(words)
+        expire(params.get("attachments"))
+        drop(handler, f"before {words!r} with its picture and file was admitted")
+        return True
     if text.startswith(PREFIX) and submission not in dropped:
         what = text[len(PREFIX):].strip()
         if what in SCRIPTS:
@@ -497,8 +518,54 @@ def flood(turn):
     end(turn)
 
 
+def lagging(turn):
+    begin(turn)
+    for n in range(1, 41):
+        time.sleep(0.25)
+        say(turn, f"第{n}节。")
+        if n == 5:
+            retire(turn["handler"], turn["session_id"])
+    end(turn)
+
+
+def retire(handler, session_id):
+    """The owner gives up on a viewer that cannot keep up: its subscription goes, its socket stays,
+    and it gets one session.replay_gap in place of what it missed (gateway/session_events.py)."""
+    with bus:
+        watchers.get(session_id, {}).pop(handler, None)
+        found = stream(session_id)
+        gap = {"type": "session.replay_gap", "session_id": session_id,
+               "payload": {"replay_epoch": found["epoch"], "latest_seq": found["seq"]}}
+    log(f"  -> {session_id}'s subscription on this socket retired, the socket kept: session.replay_gap at {gap['payload']['latest_seq']}")
+    try:
+        handler.send_json({"jsonrpc": "2.0", "method": "event", "params": gap})
+    except (OSError, ValueError):
+        pass
+
+
+def said(text):
+    """A message's words: what follows the `@file:` lines its files' references are."""
+    lines = text.split("\n")
+    while lines and (lines[0].startswith("@file:") or lines[0].startswith("@folder:")):
+        lines.pop(0)
+    return "\n".join(lines).strip()
+
+
+def expire(attachments):
+    """Clears a message's staged pictures, as Hermes's cache does after a while (fake_media.py)."""
+    try:
+        import fake_media
+    except ImportError:
+        return
+    for item in attachments if isinstance(attachments, list) else []:
+        target = fake_media.real(item.get("path", "")) if isinstance(item, dict) else None
+        if target and os.path.isfile(target):
+            os.remove(target)
+            log(f"    cleared the staged picture {item['path']}")
+
+
 SCRIPTS = {"讲到一半": halfway, "讲完了": finished, "还没回执": unacked, "没收到": None, "等你批准": approval,
-           "说很多": flood}
+           "说很多": flood, "跟不上": lagging}
 
 
 def respond(handler, params, rid):

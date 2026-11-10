@@ -14,9 +14,13 @@ final class Deliveries {
 
     struct Sent: Equatable {
         let botId: String
+        /// The words, as typed (a message's files are references before them, AppStore+Media.swift).
         let text: String
         let at: Date
         var state: Delivery
+        /// The pictures and files that went with the words, up on the server already: 重发 sends
+        /// them again.
+        var drafts: [Draft] = []
     }
 
     private static let seenKept = 500
@@ -24,8 +28,8 @@ final class Deliveries {
     func state(_ id: String) -> Delivery? { sent[id]?.state }
 
     /// Sent now, as the chat's item `id`; the server has not said it has it yet.
-    func track(_ id: String, botId: String, text: String, at: Date) {
-        sent[id] = seen.contains(id) ? nil : Sent(botId: botId, text: text, at: at, state: .sending)
+    func track(_ id: String, botId: String, text: String, at: Date, drafts: [Draft] = []) {
+        sent[id] = seen.contains(id) ? nil : Sent(botId: botId, text: text, at: at, state: .sending, drafts: drafts)
     }
 
     func set(_ id: String, _ state: Delivery) {

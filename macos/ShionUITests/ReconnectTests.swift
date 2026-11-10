@@ -18,7 +18,12 @@ import XCTest
 /// 5. while an approval waits: once back it is still in 等你确认, and answering it there lets the
 ///    turn finish in the same bubble;
 /// 6. before a reply longer than the session keeps: the replay cannot reach back, the newest page
-///    stands in, and the reply is there whole, once, with nothing still replying.
+///    stands in, and the reply is there whole, once, with nothing still replying;
+/// 7. not a drop: Hermes ends the subscription of a socket that cannot keep up (session.replay_gap)
+///    and keeps the socket; what was missed comes back on it, and the reply is whole in one bubble;
+/// 8. a picture and a file, before Hermes had them: once back, 没发出去 with 重发. The server
+///    cleared the picture meanwhile, so the same submission is refused, and the picture goes up
+///    again from the Mac under a new one; answered once, with both.
 /// A picture at each step (reconnect-*.png).
 final class ReconnectTests: XCTestCase {
     private let server = "http://127.0.0.1:8765"
@@ -158,6 +163,53 @@ final class ReconnectTests: XCTestCase {
         XCTAssertTrue(page, "the reply longer than the session keeps did not come from the page")
         once("长长的回复。长长的回复。", whole: false, "the long reply is not there once", "reconnect-count-6", in: app)
         XCTAssertTrue(element("send", in: app).waitForExistence(timeout: 5), "a bubble is still replying after the page")
+
+        // 7. the subscription goes, the socket stays (session.replay_gap): caught up on the same socket
+        say("断线：跟不上", in: app)
+        XCTAssertTrue(waitForText("第3节。", in: app, timeout: 10), "the reply did not start")
+        var dropped = false
+        let caught = waitUntil(timeout: 40) {
+            if self.hasText("重新连接中…", in: app) { dropped = true }
+            return self.hasText("第40节。", in: app)
+        }
+        keep(app.windows.firstMatch.screenshot(), "reconnect-11-gap")
+        XCTAssertTrue(caught, "the reply did not go on after the gap")
+        XCTAssertFalse(dropped, "a gap is not a drop: the sidebar said 重新连接中…")
+        once("第1节。", whole: false, "the reply is not in one bubble across the gap", "reconnect-count-7", in: app)
+        XCTAssertTrue(holds(["第1节。", "第6节。", "第40节。"], in: app), "the bubble does not have the whole reply")
+        XCTAssertTrue(element("send", in: app).waitForExistence(timeout: 10), "a bubble is still replying after the gap")
+
+        // 8. a picture and a file, dropped before Hermes had them: 没发出去, and 重发, which finds the
+        // picture cleared and sends it up again under a new submission
+        let composer = element("composer", in: app)
+        putPicture()
+        composer.click()
+        composer.typeKey("v", modifierFlags: .command)
+        XCTAssertTrue(element("draft-picture", in: app).waitForExistence(timeout: 10), "the pasted picture is not in the composer")
+        putFiles(["ci-报告（CI）.pdf"])
+        composer.click()
+        composer.typeKey("v", modifierFlags: .command)
+        XCTAssertTrue(element("draft-file", in: app).waitForExistence(timeout: 10), "the pasted file is not in the composer")
+        let send = element("send", in: app)
+        XCTAssertTrue(waitUntil(timeout: 30) { send.isEnabled }, "the picture and the file did not go up")
+        say("断线：图和文件", in: app)
+        XCTAssertTrue(waitForText("重新连接中…", in: app, timeout: 10), "the socket did not drop")
+        let notSent = element("unsent", in: app).waitForExistence(timeout: 40)
+        keep(app.windows.firstMatch.screenshot(), "reconnect-12-media-unsent")
+        XCTAssertTrue(notSent, "the picture and the file Hermes never got do not say 没发出去")
+        let again = element("resend", in: app)
+        if again.waitForExistence(timeout: 5), waitUntil(timeout: 10, { again.isEnabled }) {
+            again.click()
+            let answered = waitForText("你说：断线：图和文件", in: app, timeout: 30)
+            keep(app.windows.firstMatch.screenshot(), "reconnect-13-media-resent")
+            XCTAssertTrue(answered, "重发 got no answer")
+            XCTAssertTrue(hasText("收到 1 张图", in: app), "the picture did not go with 重发")
+            XCTAssertTrue(hasText("收到文件：ci-报告（CI）.pdf", in: app), "the file did not go with 重发")
+            XCTAssertTrue(waitUntil(timeout: 5) { !self.element("unsent", in: app).exists }, "it still says 没发出去")
+            once("断线：图和文件", whole: true, "the message is not there once after 重发", "reconnect-count-8", in: app)
+        } else {
+            XCTFail("no 重发 to press")
+        }
         app.terminate()
     }
 
@@ -196,6 +248,33 @@ final class ReconnectTests: XCTestCase {
         field.click()
         field.typeKey("a", modifierFlags: .command)
         field.typeText(text)
+    }
+
+    /// A small picture on the pasteboard, as a screenshot copies one.
+    @MainActor
+    private func putPicture() {
+        guard let picture = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 64, pixelsHigh: 48, bitsPerSample: 8,
+                                             samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                             colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)
+        else { return XCTFail("no bitmap for the picture") }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: picture)
+        NSColor.systemTeal.setFill()
+        NSBezierPath(rect: NSRect(x: 0, y: 0, width: 64, height: 48)).fill()
+        NSGraphicsContext.restoreGraphicsState()
+        guard let data = picture.representation(using: .png, properties: [:]) else { return XCTFail("no PNG for the picture") }
+        let board = NSPasteboard.general
+        _ = board.clearContents()
+        XCTAssertTrue(board.setData(data, forType: .png))
+    }
+
+    /// Files as Finder copies them: their addresses, in the folder the stand-in fills (fake_media.py).
+    @MainActor
+    private func putFiles(_ names: [String]) {
+        let folder = URL(fileURLWithPath: "/tmp/shion-media-ci", isDirectory: true)
+        let board = NSPasteboard.general
+        _ = board.clearContents()
+        XCTAssertTrue(board.writeObjects(names.map { folder.appendingPathComponent($0) as NSURL }))
     }
 
     /// Typed into the chat's field and sent with its button.
