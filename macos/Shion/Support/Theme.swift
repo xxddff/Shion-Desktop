@@ -33,26 +33,33 @@ struct Avatar: View {
         // on a selected row the accent fill is behind it: go white, or 詩音's violet seal vanishes
         let onSelection = prominence == .increased
         let hue = bot?.hue ?? Color.secondary
-        Text(bot?.initial ?? "·")
-            .font(.system(size: size * 0.5, weight: .semibold))
-            .foregroundStyle(onSelection ? Color.white : hue)
-            .frame(width: size, height: size)
-            .background(onSelection ? Color.white.opacity(0.22) : hue.opacity(0.16), in: Circle())
-            .accessibilityHidden(true)
+        let outline = AvatarOutline(bot?.shape)
+        // Bot Mode's picture, once read, else the name's first character in its colour
+        if let bot, bot.hasPicture, let picture = AvatarPictures.shared.images[bot.id] {
+            Image(nsImage: picture)
+                .resizable()
+                .scaledToFill()
+                .frame(width: size, height: size)
+                .clipShape(outline)
+                .accessibilityHidden(true)
+        } else {
+            Text(bot?.initial ?? "·")
+                .font(.system(size: size * 0.5, weight: .semibold))
+                .foregroundStyle(onSelection ? Color.white : hue)
+                .frame(width: size, height: size)
+                .background(onSelection ? Color.white.opacity(0.22) : hue.opacity(0.16), in: outline)
+                .accessibilityHidden(true)
+        }
     }
 }
 
-/// 詩音's mark, the same seal as her avatar: wherever it appears, you are talking to her.
+/// 总秘书's mark, its avatar: wherever it appears, you are talking to 总秘书.
 struct Mark: View {
+    @Environment(AppStore.self) private var store
     var size: CGFloat = 18
 
     var body: some View {
-        Text("詩")
-            .font(.system(size: size * 0.52, weight: .semibold))
-            .foregroundStyle(Palette.accent)
-            .frame(width: size, height: size)
-            .background(Palette.accent.opacity(0.16), in: Circle())
-            .accessibilityHidden(true)
+        Avatar(bot: store.chief, size: size)
     }
 }
 
@@ -110,21 +117,22 @@ struct Box<Content: View>: View {
     }
 }
 
-/// 「跟詩音说」 in the toolbar of every page but Today and her own chat. ⌘K is the jump palette
-/// now (JumpPalette.swift); her chat is in it too.
+/// 「跟总秘书说」 (by name) in the toolbar of every page but Today and 总秘书's own chat. ⌘K is the
+/// jump palette now (JumpPalette.swift); 总秘书's chat is in it too.
 struct AskButton: View {
     @Environment(AppStore.self) private var store
 
     var body: some View {
+        let ask = "跟\(store.chiefName)说"
         Button {
             store.route = .chat(store.chiefId)
         } label: {
             HStack(spacing: 6) {
                 Mark(size: 16)
-                Text("跟詩音说")
+                Text(ask)
             }
         }
-        .help("跟詩音说")
+        .help(ask)
     }
 }
 
