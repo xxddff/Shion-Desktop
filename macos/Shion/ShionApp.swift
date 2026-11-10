@@ -13,6 +13,8 @@ struct ShionApp: App {
         QuickAsk.shared.attach(store)
         // and so do Shortcuts, Spotlight and Siri (Intents/)
         ShionShortcuts.attach(store)
+        // back from sleep or on another network, the connection is tried again at once
+        store.startReconnect()
     }
 
     var body: some Scene {

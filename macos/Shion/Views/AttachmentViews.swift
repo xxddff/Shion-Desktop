@@ -46,6 +46,8 @@ struct AttachButton: View {
         }
         .buttonStyle(.glass)
         .buttonBorderShape(.circle)
+        // not connected, words wait to go out (AppStore+Reconnect.swift); a file cannot go up
+        .disabled(store.readOnly)
         .help("添加图片或文件")
         .accessibilityLabel("添加图片或文件")
         .accessibilityIdentifier("attach")

@@ -2,6 +2,9 @@ import AppKit
 import XCTest
 
 /// 日报's screen time on the demo's day (its usage by kind and the apps used most), light and dark.
+/// The board's answers while a dropped connection is being got back (`-ShionReadOnlyDemo YES` on
+/// the demo's data, the sidebar saying 重新连接中…): in 等你确认 the card's reply box, 回复 and
+/// 让它继续 greyed out, and the card's own comment box on the board, opened from there.
 /// Settings → 这台 Mac, after this Mac's own data: 开机启动 and 关窗后只留在菜单栏, light and dark,
 /// and once more with a login item waiting for approval and the menu bar option on; then where a
 /// notification's click lands and the Shortcuts actions. Then the menu bar with the Dock icon
@@ -75,6 +78,44 @@ final class ExtrasScreenshotTests: XCTestCase {
             } else {
                 keep(window.screenshot(), "reports-usage-\(appearance)-missing")
                 XCTFail("no screen time under the demo's 生活日报 (\(appearance))")
+            }
+            app.terminate()
+        }
+    }
+
+    @MainActor
+    func testReadOnlyCards() throws {
+        continueAfterFailure = true
+        for appearance in ["light", "dark"] {
+            let app = launch(appearance: appearance, route: "confirm",
+                             extra: ["-ShionDemoSignIn", "YES", "-ShionReconnectDemo", "YES", "-ShionReadOnlyDemo", "YES"])
+            let window = app.windows.firstMatch
+            // the demo's card that waits on your answer: 课程's, for a verification code
+            if bringIntoView(element("card-ask-g5d2", in: window), in: window) {
+                XCTAssertFalse(element("card-ask-reply-g5d2", in: window).isEnabled, "the reply box takes words while read-only")
+                XCTAssertFalse(element("card-ask-resume-g5d2", in: window).isEnabled, "让它继续 is not greyed out")
+                Thread.sleep(forTimeInterval: 0.5)
+                keep(window.screenshot(), "readonly-confirm-\(appearance)")
+            } else {
+                keep(window.screenshot(), "readonly-confirm-\(appearance)-missing")
+                XCTFail("no card waiting on you in 等你确认 (\(appearance))")
+            }
+            // 打开卡片 still opens it: its comment box (补充它需要的信息, 让它继续) greyed out too
+            let open = element("card-ask-open-g5d2", in: window)
+            if open.waitForExistence(timeout: 3) {
+                open.click()
+                let comment = element("card-comment", in: window)
+                if comment.waitForExistence(timeout: 10) {
+                    XCTAssertFalse(comment.isEnabled, "the card's comment box takes words while read-only")
+                    XCTAssertFalse(element("card-comment-send", in: window).isEnabled, "the card's 让它继续 is not greyed out")
+                    Thread.sleep(forTimeInterval: 0.8)
+                    keep(window.screenshot(), "readonly-card-\(appearance)")
+                } else {
+                    keep(window.screenshot(), "readonly-card-\(appearance)-missing")
+                    XCTFail("打开卡片 did not open the card's detail (\(appearance))")
+                }
+            } else {
+                XCTFail("no 打开卡片 on the card in 等你确认 (\(appearance))")
             }
             app.terminate()
         }

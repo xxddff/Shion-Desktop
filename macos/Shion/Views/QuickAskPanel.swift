@@ -130,7 +130,7 @@ struct QuickAskView: View {
         let lines = ChatLine.lines(items, replying: store.replying.contains(store.chiefId))
         let asks = quick.asks(in: store)
         let state = status(answered: items.count > 1 || !asks.isEmpty)
-        let said = !quick.waiting.isEmpty || !lines.isEmpty
+        let said = !quick.sentences(for: nil).isEmpty || !lines.isEmpty
         let filled = said || !asks.isEmpty
         VStack(spacing: 0) {
             bar($quick.draft, answering: quick.question(in: store) != nil)
@@ -228,13 +228,14 @@ struct QuickAskView: View {
         let chief = store.chief
         return ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                ForEach(quick.waiting) { sentence in
+                ForEach(quick.sentences(for: nil)) { sentence in
                     WaitingSentence(text: sentence.text, written: QuickAskWaiting.written(sentence.at, now: Date()))
                 }
                 ForEach(lines) { line in
                     switch line {
                     case .item(let item):
                         ChatRow(item: item, bot: chief, showHead: false)
+                            .modifier(DeliveryMark(item: item, botId: store.chiefId))
                     case .tools(let id, let tools):
                         ToolRun(tools: tools, open: openRuns.contains(id)) {
                             openRuns.formSymmetricDifference([id])

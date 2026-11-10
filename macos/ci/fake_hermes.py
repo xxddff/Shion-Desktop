@@ -32,6 +32,9 @@ hermes_cli/dashboard_auth and the Canonical Gateway Protocol:
                                persisted_turn, a question left pending, a daily report written
                                (fake_extras.py, also "捷径慢：…", a reply slower than a Shortcuts
                                action waits)
+  prompt.submit "断线：…"       the socket drops at a chosen moment and the tunnel is down a few seconds;
+                               session.events.since replays what was missed (fake_reconnect.py, which
+                               also stamps, keeps and sends every session's frames)
 
 Like Hermes's contracts (extra="forbid"), session.resume, session.transcript and prompt.submit
 refuse keys they do not know, so a client's wrong parameter fails here as it would on a real server.
@@ -62,6 +65,7 @@ import fake_media  # noqa: E402  pictures and files (MediaTests)
 import fake_shion  # noqa: E402  the shion plugin's RPCs
 import fake_quick  # noqa: E402  詩音's answers to the ⌥Space window (QuickAskTests)
 import fake_extras  # noqa: E402  notifications to click and slow replies (ExtrasTests)
+import fake_reconnect  # noqa: E402  frames, replay and dropped sockets (ReconnectTests)
 
 ACCESS_ID, ACCESS_SECRET = "ci-client", "ci-secret"
 USER, PASSWORD = "ci-user", "ci-pass"
@@ -300,6 +304,8 @@ class Handler(BaseHTTPRequestHandler):
     # ---- routes -------------------------------------------------------------------------
 
     def do_GET(self):
+        if fake_reconnect.tunnel_down(self):
+            return
         url = urllib.parse.urlsplit(self.path)
         query = dict(urllib.parse.parse_qsl(url.query))
         if self.headers.get("Host", "").split(":")[0] == "localhost":
@@ -351,6 +357,8 @@ class Handler(BaseHTTPRequestHandler):
         self.answer(404, {"detail": "Not Found"})
 
     def do_POST(self):
+        if fake_reconnect.tunnel_down(self):
+            return
         if not self.access():
             return
         url = urllib.parse.urlsplit(self.path)
@@ -452,6 +460,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.rpc(json.loads(data))
         except (ConnectionError, OSError, ValueError) as exc:
             log("  ws: closed", type(exc).__name__)
+        fake_reconnect.closed(self)
         log("  ws: done")
 
     def read_exact(self, count):
@@ -656,10 +665,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_frame(1, json.dumps(value, ensure_ascii=False).encode())
 
     def event(self, kind, session_id, payload):
-        params = {"type": kind, "payload": payload}
         if session_id:
-            params["session_id"] = session_id
-        self.send_json({"jsonrpc": "2.0", "method": "event", "params": params})
+            # a session's frames are stamped, kept, and sent to whoever has it attached (fake_reconnect.py)
+            return fake_reconnect.publish(session_id, kind, payload)
+        self.send_json({"jsonrpc": "2.0", "method": "event", "params": {"type": kind, "payload": payload}})
 
     def snapshot(self, session_id, params):
         """session.resume's reply: no rows with omit_messages, every row projected with
@@ -667,7 +676,7 @@ class Handler(BaseHTTPRequestHandler):
         with lock:
             rows = list(transcripts.setdefault(session_id, []))
         reply = {"session_id": session_id, "running": False, "prompts": [], "message_count": len(rows),
-                 **fake_control.snapshot_fences(session_id)}
+                 **fake_control.snapshot_fences(session_id), **fake_reconnect.attach(self, session_id)}
         if params.get("omit_messages") is True:
             return {**reply, "messages": [], "messages_omitted": True}
         shown = [{k: v for k, v in row.items() if k != "row_kind"} for row in rows if row["row_kind"] == "message"]
@@ -710,6 +719,8 @@ class Handler(BaseHTTPRequestHandler):
             log(f"  rpc {method} {json.dumps(fake_profiles.loggable(method, params), ensure_ascii=False)[:160]}")
         if method == "prompt.submit" and set(params) - SUBMIT_KEYS:
             return self.refuse(rid, sorted(set(params) - SUBMIT_KEYS))
+        if fake_reconnect.answer(self, method, params, rid):
+            return
         if fake_control.handles(method, params):
             return fake_control.handle(self, method, params, rid)
         if fake_extras.handles_rpc(method, params):
@@ -814,7 +825,8 @@ class Handler(BaseHTTPRequestHandler):
             # pictures, files and the turns that hand them over
             if fake_media.submit(self, rid, params):
                 return
-            self.send_json({"jsonrpc": "2.0", "id": rid, "result": {"accepted": True}})
+            # the admission receipt (fake_reconnect.py keeps the admission, for an exact retry)
+            self.send_json({"jsonrpc": "2.0", "id": rid, "result": fake_reconnect.receipt(params)})
             session_id, text = params.get("session_id"), params.get("text", "")
             if fake_quick.handles(text):
                 return fake_quick.answer(self, log, lock, transcripts, session_id, text)
@@ -861,6 +873,7 @@ def main():
     fake_profiles.setup(log, valid_access)
     fake_media.setup(log, valid_access, transcripts, lock)
     fake_control.setup(log, transcripts, lock)
+    fake_reconnect.setup(log, transcripts, lock)
     server = Server(("127.0.0.1", args.port), Handler)
     log(f"stand-in Hermes on http://127.0.0.1:{args.port}")
     try:

@@ -126,8 +126,11 @@ private struct CountedMark: View {
     }
 }
 
-/// The menu bar panel's way back to the main window while the Dock icon is away.
+/// The menu bar panel's way back to the main window while the Dock icon is away, with the line
+/// the window's sidebar has under the server (ConnectionFooter: the connection being got back, or
+/// the last data and from when), which nothing else shows while the window is closed.
 struct MenuBarOpenRow: View {
+    @Environment(AppStore.self) private var store
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -138,7 +141,13 @@ struct MenuBarOpenRow: View {
                 MainWindow.show()
             } label: {
                 PanelRow(systemImage: "macwindow", text: "打开 Shion") {
-                    EmptyView()
+                    if let note = store.reconnectNote ?? store.lastDataNote {
+                        Text(note)
+                            .font(.t11)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .accessibilityIdentifier("menubar-connection-note")
+                    }
                 }
             }
             .buttonStyle(.plain)

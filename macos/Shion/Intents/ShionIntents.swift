@@ -24,7 +24,7 @@ struct TellChiefIntent: AppIntent {
     var text: String
 
     func perform() async throws -> some IntentResult & ReturnsValue<String> & ProvidesDialog {
-        let said = try await ShionShortcuts.tell(text) ?? "已发出"
+        let said = try await ShionShortcuts.tell(text)
         await IntentOutcome.note(said, value: .string(said))
         return .result(value: said, dialog: IntentDialog("\(said)"))
     }

@@ -134,11 +134,14 @@ def answered(session_id, prompt_id):
 
 
 def on_resume(session_id, result):
-    """session.resume's snapshot: the prompts still waiting, as Hermes sends them."""
+    """session.resume's snapshot: the prompts still waiting, as Hermes sends them, once each
+    (fake_reconnect.py lists the ones it saw published too)."""
     with lock:
         waiting = list(pending.get(session_id, []))
     if waiting:
-        result["prompts"] = list(result.get("prompts") or []) + waiting
+        listed = list(result.get("prompts") or [])
+        seen = {prompt.get("prompt_id") for prompt in listed}
+        result["prompts"] = listed + [prompt for prompt in waiting if prompt["prompt_id"] not in seen]
         result["running"] = True
 
 

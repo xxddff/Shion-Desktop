@@ -2,10 +2,11 @@ import AppKit
 import Foundation
 
 /// What Shortcuts, Siri and Spotlight do in Shion (ShionIntents.swift), on the main window's own
-/// store. Nothing goes out without a server Shion is signed in to and connected with; each action
-/// says why instead. One that starts Shion waits for the connection the launch makes. 跟总秘书说
-/// waits a few seconds for the reply and hands it back, and the reply's notification is left out
-/// while it waits; a reply that comes later is notified as usual.
+/// store. Nothing goes out without a server Shion is signed in to; each action says why instead.
+/// One that starts Shion waits for the connection the launch makes. 跟总秘书说 waits a few seconds
+/// for the reply and hands it back, and the reply's notification is left out while it waits; a
+/// reply that comes later is notified as usual. Signed in but not connected, its sentence waits
+/// with the ⌥Space window's and goes out once connected (AppStore+Reconnect.swift).
 enum ShionShortcuts {
     private static weak var store: AppStore?
     /// 总秘书's id for each action waiting on a reply.
@@ -55,13 +56,21 @@ enum ShionShortcuts {
 
     // MARK: the actions
 
-    /// 跟总秘书说: the sentence into 总秘书's Bot Chat, as the ⌥Space window sends it. Returns the
-    /// reply when the turn ends within `replyWait`, nil when it went out and the reply is still to
-    /// come.
-    static func tell(_ text: String) async throws -> String? {
+    /// 跟总秘书说: the sentence into 总秘书's Bot Chat, as the ⌥Space window sends it. What it says:
+    /// the reply when the turn ends within `replyWait`, 已发出 when it went out and the reply is
+    /// still to come, or that it waits when Shion is signed in but not connected.
+    static func tell(_ text: String) async throws -> String {
         let words = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !words.isEmpty else { throw ShortcutError.nothingToSay }
-        let store = try await connected()
+        let store: AppStore
+        do {
+            store = try await connected()
+        } catch {
+            if let waiting = waitWhileAway(words, after: error) {
+                return waiting
+            }
+            throw error
+        }
         let chief = store.chiefId
         await store.openChief()
         if let error = store.chatErrors[chief] {
@@ -93,7 +102,25 @@ enum ShionShortcuts {
                 return replies.map(\.text).joined(separator: "\n\n")
             }
         }
-        return nil
+        return "已发出"
+    }
+
+    /// Signed in, but the connection is down (being got back, or 断开 in Settings) or not up yet
+    /// after the wait: the sentence waits as one said in the window or the ⌥Space window would,
+    /// where the chat takes sentences to wait (AppStore.waits). Nil where it does not: no server
+    /// signed in to, or one never connected to, with no last data to stand in.
+    private static func waitWhileAway(_ words: String, after error: any Error) -> String? {
+        guard let store, let reason = error as? ShortcutError else { return nil }
+        switch reason {
+        case .offline, .notConnected:
+            break
+        default:
+            return nil
+        }
+        let chief = store.chiefId
+        guard store.waits(chief) else { return nil }
+        store.send(words, to: chief)
+        return "还没连上服务器，这句话先排着，连上后发给\(store.chiefName)。"
     }
 
     /// 今天的待办: what 今天 and the menu bar list, from the server's shion plugin.
