@@ -13,23 +13,18 @@ struct GeneralSettings: View {
             Section {
                 Toggle("开机启动", isOn: Binding(get: { login.isOn }, set: { login.set($0) }))
                     .accessibilityIdentifier("login-item")
+                // the identifiers go on the parts: one on the row would be the button's too
                 LabeledContent("状态") {
-                    switch login.state {
-                    case .on:
-                        Text("登录这台 Mac 时打开").foregroundStyle(.secondary)
-                    case .off:
-                        Text("不随开机打开").foregroundStyle(.secondary)
-                    case .needsApproval:
-                        HStack(spacing: 8) {
-                            Text("要在系统设置里允许").foregroundStyle(Palette.warm)
+                    HStack(spacing: 8) {
+                        Text(Self.stateText(login.state))
+                            .foregroundStyle(Self.stateStyle(login.state))
+                            .accessibilityIdentifier("login-item-state")
+                        if login.state == .needsApproval {
                             Button("打开「登录项」…") { login.openLoginItems() }
                                 .accessibilityIdentifier("login-items")
                         }
-                    case .notFound:
-                        Text("系统找不到 Shion 的登录项").foregroundStyle(Palette.alert)
                     }
                 }
-                .accessibilityIdentifier("login-item-state")
                 if let failure = login.failure {
                     Text(failure)
                         .font(.t12)
@@ -82,6 +77,23 @@ struct GeneralSettings: View {
         }
         .formStyle(.grouped)
         .frame(width: 520, height: 640)
+    }
+
+    private static func stateText(_ state: LoginItem.State) -> String {
+        switch state {
+        case .on: "登录这台 Mac 时打开"
+        case .off: "不随开机打开"
+        case .needsApproval: "要在系统设置里允许"
+        case .notFound: "系统找不到 Shion 的登录项"
+        }
+    }
+
+    private static func stateStyle(_ state: LoginItem.State) -> AnyShapeStyle {
+        switch state {
+        case .on, .off: AnyShapeStyle(.secondary)
+        case .needsApproval: AnyShapeStyle(Palette.warm)
+        case .notFound: AnyShapeStyle(Palette.alert)
+        }
     }
 
     private static let loginNote = "打开后，登录这台 Mac 时 Shion 自己打开，连上服务器，菜单栏和通知照常。第一次打开时系统可能要你在「系统设置 → 通用 → 登录项」里允许，这里会写「要在系统设置里允许」；在系统设置里关掉的话，这里也跟着变。"

@@ -77,56 +77,64 @@ final class DockMode {
 }
 
 /// What waits on you, next to 总秘书's mark in the menu bar, while the Dock icon (which shows it
-/// otherwise) is away. The orange badge is drawn as an image that is not a template, so the menu
-/// bar keeps its colour.
-struct MenuBarCount: View {
-    let count: Int
+/// otherwise) is away: the number cut out of a small filled capsule after the mark. A status item
+/// shows one image and one text, so the mark and the count are one image, a template like the
+/// mark alone, which the menu bar tints for its light or dark look.
+enum MenuBarCount {
+    private static var made: [String: NSImage] = [:]
 
-    var body: some View {
-        if DockMode.shared.hidden && count > 0 {
-            Image(nsImage: CountBadge.image(count))
-                .renderingMode(.original)
-                .accessibilityLabel("\(count) 件等你确认")
+    /// The status item's image: the mark, with the count while the Dock icon is away.
+    static func icon(_ initial: String, count: Int) -> NSImage {
+        guard DockMode.shared.hidden && count > 0 else {
+            return MenuBarIcon.image(initial)
         }
-    }
-}
-
-enum CountBadge {
-    private static var made: [Int: NSImage] = [:]
-
-    static func image(_ count: Int) -> NSImage {
-        if let image = made[count] {
+        let text = count > 99 ? "99+" : "\(count)"
+        let key = "\(initial)|\(text)"
+        if let image = made[key] {
             return image
         }
-        let renderer = ImageRenderer(content: CountBadgeMark(text: count > 99 ? "99+" : "\(count)"))
+        let renderer = ImageRenderer(content: CountedMark(mark: MenuBarIcon.image(initial), text: text))
         renderer.scale = 2
-        let image = renderer.nsImage ?? NSImage(size: NSSize(width: 16, height: 16))
-        image.isTemplate = false
-        made[count] = image
+        guard let image = renderer.nsImage else {
+            return MenuBarIcon.image(initial)
+        }
+        image.isTemplate = true
+        image.accessibilityDescription = "\(count) 件等你确认"
+        made[key] = image
         return image
     }
 }
 
-/// The Dock's badge in small: the number in white on warm orange.
-private struct CountBadgeMark: View {
+/// The mark, then the count: the digits are cut out of the capsule (drawn into it with
+/// destination-out), so they show the menu bar through them.
+private struct CountedMark: View {
+    let mark: NSImage
     let text: String
 
     var body: some View {
-        Text(text)
-            .font(.system(size: 10, weight: .bold))
-            .monospacedDigit()
-            .foregroundStyle(.white)
-            .padding(.horizontal, 4)
-            .frame(minWidth: 16, minHeight: 15)
-            .background(Capsule().fill(Palette.warm))
+        HStack(spacing: 3) {
+            Image(nsImage: mark)
+            Text(text)
+                .font(.system(size: 9.5, weight: .bold))
+                .monospacedDigit()
+                .blendMode(.destinationOut)
+                .padding(.horizontal, 3.5)
+                .frame(minWidth: 15, minHeight: 13)
+                .background(Capsule().fill(.foreground))
+                .compositingGroup()
+        }
     }
 }
 
 /// The menu bar panel's way back to the main window while the Dock icon is away.
 struct MenuBarOpenRow: View {
+    @Environment(\.dismiss) private var dismiss
+
     var body: some View {
         if DockMode.shared.hidden {
             Button {
+                // the panel closes, the window comes in front of where it was
+                dismiss()
                 MainWindow.show()
             } label: {
                 PanelRow(systemImage: "macwindow", text: "打开 Shion") {

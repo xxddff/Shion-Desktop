@@ -64,15 +64,20 @@ jobs:
       - name: Screenshot every page
         run: |
           set -o pipefail
-          xcodebuild test-without-building \
-            -project Shion.xcodeproj \
-            -scheme Shion \
-            -destination 'platform=macOS' \
-            -derivedDataPath build/DerivedData \
-            -only-testing:ShionUITests/ScreenshotTests \
-            -only-testing:ShionUITests/ExtrasScreenshotTests \
-            -resultBundlePath build/Shots.xcresult \
-            -quiet 2>&1 | tee -a build/xcodebuild.log
+          if ! xcodebuild test-without-building \
+                 -project Shion.xcodeproj \
+                 -scheme Shion \
+                 -destination 'platform=macOS' \
+                 -derivedDataPath build/DerivedData \
+                 -only-testing:ShionUITests/ScreenshotTests \
+                 -only-testing:ShionUITests/ExtrasScreenshotTests \
+                 -resultBundlePath build/Shots.xcresult \
+                 -quiet 2>&1 | tee -a build/xcodebuild.log; then
+            # -quiet leaves out what failed; the result bundle says
+            xcrun xcresulttool get test-results summary --path build/Shots.xcresult 2>/dev/null \
+              | grep -E '"(failureText|testName)"' | head -20 || true
+            exit 1
+          fi
 
       # Real Cloudflare Access and a real Hermes are not on the runner: the stand-in plays both,
       # checks what Shion sends (Access headers, PKCE, the loopback redirect, the bearer) and logs

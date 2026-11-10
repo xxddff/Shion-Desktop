@@ -10,8 +10,7 @@ struct MenuBarLabel: View {
 
     var body: some View {
         HStack(spacing: 4) {
-            Image(nsImage: MenuBarIcon.image(store.chief?.initial ?? "詩"))
-            MenuBarCount(count: store.confirmCount)
+            Image(nsImage: MenuBarCount.icon(store.chief?.initial ?? "詩", count: store.confirmCount))
             if let next = store.nextEvent {
                 Text("\(Fmt.hm(next.start)) \(next.title.replacing(#/ 第\d+回/#, with: ""))")
             }

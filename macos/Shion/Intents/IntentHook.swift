@@ -31,7 +31,7 @@ enum IntentHook {
         do {
             switch request["intent"]?.string {
             case "tell":
-                var intent = TellChiefIntent()
+                let intent = TellChiefIntent()
                 intent.text = request["text"]?.string ?? ""
                 _ = try await intent.perform()
             case "todos":
@@ -40,7 +40,7 @@ enum IntentHook {
                 guard let target = try await AssistantQuery().entities(matching: request["query"]?.string ?? "").first else {
                     return ["id": id, "ok": false, "error": "没有找到这个助手"]
                 }
-                var intent = OpenAssistantIntent()
+                let intent = OpenAssistantIntent()
                 intent.assistant = target
                 _ = try await intent.perform()
             case "open-confirm":

@@ -5,8 +5,9 @@ import XCTest
 /// actions), light and dark, and once more with a login item waiting for approval and the menu
 /// bar option on; then the menu bar with the Dock icon away: the main window closed, the count of
 /// what waits on you next to the menu bar icon, 打开 Shion in the panel bringing the window and
-/// the icon back (whole screen, so the Dock shows). Screenshot runs keep both settings in memory
-/// and leave the system's login items alone.
+/// the icon back (whole screen, so the Dock shows). Whether the Dock has the icon is asked of the
+/// system (Shion's activation policy), not read off the Dock. Screenshot runs keep both settings
+/// in memory and leave the system's login items alone.
 final class ExtrasScreenshotTests: XCTestCase {
     @MainActor
     func testGeneralSettings() throws {
@@ -56,20 +57,15 @@ final class ExtrasScreenshotTests: XCTestCase {
         let app = launch(appearance: "light", extra: ["-ShionMenuBarOnly", "YES"])
         let window = app.windows.firstMatch
         XCTAssertTrue(window.waitForExistence(timeout: 20), "no main window")
-        Thread.sleep(forTimeInterval: 1)
-        print("Dock before: \(dockHasShion().map(String.init(describing:)) ?? "unknown")")
+        XCTAssertTrue(dockIcon(true), "no Dock icon with the window open")
 
         // closed: only the menu bar, with the count next to the icon
         app.typeKey("w", modifierFlags: .command)
         let closed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: window)
         XCTAssertEqual(XCTWaiter().wait(for: [closed], timeout: 5), .completed, "the main window did not close")
+        XCTAssertTrue(dockIcon(false), "the Dock icon stayed with the window closed")
         Thread.sleep(forTimeInterval: 1.5)
         keep(XCUIScreen.main.screenshot(), "menubar-only-light")
-        if let shown = dockHasShion() {
-            XCTAssertFalse(shown, "the Dock icon stayed with the window closed")
-        } else {
-            print("the Dock's items could not be read; see the screenshot")
-        }
 
         // the panel's 打开 Shion: the window and the Dock icon come back
         let item = app.descendants(matching: .statusItem).firstMatch
@@ -86,22 +82,27 @@ final class ExtrasScreenshotTests: XCTestCase {
             open.click()
             XCTAssertTrue(app.windows.matching(NSPredicate(format: "identifier CONTAINS 'AppWindow'")).firstMatch.waitForExistence(timeout: 10),
                           "打开 Shion did not bring the main window back")
+            XCTAssertTrue(dockIcon(true), "the Dock icon did not come back with the window")
             Thread.sleep(forTimeInterval: 1.5)
             keep(XCUIScreen.main.screenshot(), "menubar-only-back-light")
-            if let shown = dockHasShion() {
-                XCTAssertTrue(shown, "the Dock icon did not come back with the window")
-            }
         }
         app.terminate()
     }
 
-    /// Whether the Dock shows Shion; nil when the Dock's items cannot be read.
+    /// Waits up to five seconds for Shion to have (or not have) its Dock icon: the regular
+    /// activation policy has one, the accessory one none. The run loop turns meanwhile, which is
+    /// when the system's word on another app's policy comes in.
     @MainActor
-    private func dockHasShion() -> Bool? {
-        let dock = XCUIApplication(bundleIdentifier: "com.apple.dock")
-        let items = dock.descendants(matching: .dockItem)
-        guard items.count > 0 else { return nil }
-        return items.matching(NSPredicate(format: "label == %@", "Shion")).count > 0
+    private func dockIcon(_ shown: Bool) -> Bool {
+        let wanted: NSApplication.ActivationPolicy = shown ? .regular : .accessory
+        let end = Date().addingTimeInterval(5)
+        repeat {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+            if NSRunningApplication.runningApplications(withBundleIdentifier: "dev.shion.Shion").first?.activationPolicy == wanted {
+                return true
+            }
+        } while Date() < end
+        return false
     }
 
     /// A Settings tab: a toolbar button, a radio button or a plain one, depending on the system.
