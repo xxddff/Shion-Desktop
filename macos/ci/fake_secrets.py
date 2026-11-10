@@ -6,7 +6,9 @@ gateway/session_secret_prompt.py).
 A prompt with 「装 ffmpeg（CI）」 plays a turn whose two tool calls run at once, as Hermes runs
 parallel tools: the terminal tool needs the sudo password for `sudo apt-get install -y ffmpeg`, and
 the notion skill asks for NOTION_API_KEY. A prompt with 「会过期（CI）」 asks for a sudo password that
-nobody gives in time.
+nobody gives in time. With 「断线（CI）」 the socket goes down right after the request goes out: the
+window reconnects, finds the request in session.resume's open_requests, and answers it on the new
+socket.
 
 On the wire, as on Hermes:
   request   {"jsonrpc": "2.0", "id": "srq-<12 hex>", "method": "sudo", "params": {"session_id",
@@ -24,19 +26,23 @@ log says that a value came and whether it was the one expected, never the value 
 Stdlib only.
 """
 import json
+import socket
+import struct
 import threading
 import time
 
 INSTALL = "装 ffmpeg（CI）"
 LATE = "会过期（CI）"
+DROP = "断线（CI）"
 # what SecretsTests types into the sudo card: checked here, never logged
 PASSWORD = "ci-sudo-Pa55"
 COMMAND = "sudo apt-get install -y ffmpeg"
 LATE_COMMAND = "sudo systemctl restart hermes-ci"
+DROP_COMMAND = "sudo apt-get install -y sox"
 WAIT = 120.0  # Hermes's REQUEST_TIMEOUT_S
 LATE_WAIT = 8.0  # the one that expires: shorter than Hermes's, to keep the test short
 # fixed ids, so the test can find each card (Hermes's are random: srq- and 12 hex digits)
-SUDO_ID, KEY_ID, LATE_ID = "srq-00000000c101", "srq-00000000c102", "srq-00000000c103"
+SUDO_ID, KEY_ID, LATE_ID, DROP_ID = "srq-00000000c101", "srq-00000000c102", "srq-00000000c103", "srq-00000000c104"
 
 lock = threading.Lock()
 waiting = {}  # request id -> its entry while it waits for an answer
@@ -45,7 +51,7 @@ answered = set()  # ids already answered once, to catch a second answer
 
 
 def handles(text):
-    return INSTALL in text or LATE in text
+    return INSTALL in text or LATE in text or DROP in text
 
 
 def note_viewer(session_id, handler):
@@ -97,7 +103,7 @@ def answer(handler, log, lock_, transcripts, session_id, text):
         rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "user", "text": text,
                      "timestamp": time.time()})
     note_viewer(session_id, handler)
-    turn = install_turn if INSTALL in text else late_turn
+    turn = install_turn if INSTALL in text else late_turn if LATE in text else drop_turn
     threading.Thread(target=turn, args=(log, lock_, transcripts, session_id), daemon=True).start()
 
 
@@ -114,10 +120,10 @@ def event(log, session_id, kind, payload):
         log(f"  (the window on {session_id} is gone: {kind} not delivered)")
 
 
-def ask(log, session_id, rid, method, params, wait):
+def ask(log, session_id, rid, method, params, wait, then=None):
     """One request, as gateway/session_server_requests.py `_ask` sends it: the frame to the windows
     on the chat, a wait for the first answer, then request.cancel to all of them. The value, or None
-    when the wait ran out."""
+    when the wait ran out. `then` runs once the frame is out."""
     entry = {"session_id": session_id, "method": method, "params": {"session_id": session_id, **params},
              "event": threading.Event(), "value": ""}
     with lock:
@@ -129,6 +135,8 @@ def ask(log, session_id, rid, method, params, wait):
         viewer.send_json({"jsonrpc": "2.0", "id": rid, "method": method, "params": entry["params"]})
     except (AttributeError, OSError):
         log(f"  (no window on {session_id} for {rid})")
+    if then is not None:
+        then(viewer)
     got = entry["event"].wait(wait)
     with lock:
         still = waiting.pop(rid, None) is entry
@@ -214,3 +222,29 @@ def late_turn(log, lock_, transcripts, session_id):
     done(log, lock_, transcripts, session_id, call, "terminal", LATE_COMMAND,
          {"exit_code": 1, "output": "sudo: a password is required" if value is None else "(answered after all)"})
     reply(log, lock_, transcripts, session_id, "没等到 sudo 密码，没有重启（CI）。" if value is None else "重启好了（CI）。")
+
+
+def hang_up(log, viewer):
+    """The socket goes down as a network drop would: a going-away close, then nothing more."""
+    log("  -> the socket goes down while the request waits")
+    try:
+        viewer.send_frame(8, struct.pack(">H", 1001))
+        viewer.connection.shutdown(socket.SHUT_RDWR)
+    except (AttributeError, OSError):
+        pass
+
+
+def drop_turn(log, lock_, transcripts, session_id):
+    """A sudo password asked for just before the connection drops: the window comes back, finds the
+    request in open_requests and answers it on its new socket."""
+    call = "call-ci-drop"
+    event(log, session_id, "session.info", {"running": True})
+    event(log, session_id, "message.start", {})
+    tool(log, session_id, call, "terminal", DROP_COMMAND, {"command": DROP_COMMAND})
+    value = ask(log, session_id, DROP_ID, "sudo", {"command": DROP_COMMAND}, WAIT,
+                then=lambda viewer: hang_up(log, viewer))
+    ok = value == PASSWORD
+    done(log, lock_, transcripts, session_id, call, "terminal", DROP_COMMAND,
+         {"exit_code": 0, "output": "Setting up sox (CI) ..."} if ok else
+         {"exit_code": 1, "output": "sudo: a password is required" if not value else "sudo: 1 incorrect password attempt"})
+    reply(log, lock_, transcripts, session_id, "sox 装好了（CI）。" if ok else "没拿到 sudo 密码，sox 没装上（CI）。")

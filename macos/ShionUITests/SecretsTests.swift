@@ -7,7 +7,8 @@ import XCTest
 /// time, NOTION_API_KEY for the notion skill. Both cards show in the chat and in 等你确认; the
 /// password is typed and sent from 等你确认 (the stand-in checks it without writing it down, and the
 /// command goes through), the key is declined in the chat, and each answer leaves the other card
-/// alone. Then one nobody answers expires. A picture at each step (`secrets-*.png`).
+/// alone. Then one nobody answers expires, and one asked just before the connection drops is
+/// answered after the reconnect. A picture at each step (`secrets-*.png`).
 final class SecretsTests: XCTestCase {
     private let server = "http://127.0.0.1:8765"
     /// What the stand-in checks the sudo password against (fake_secrets.py PASSWORD).
@@ -16,6 +17,7 @@ final class SecretsTests: XCTestCase {
     private let sudoId = "srq-00000000c101"
     private let keyId = "srq-00000000c102"
     private let lateId = "srq-00000000c103"
+    private let dropId = "srq-00000000c104"
 
     @MainActor
     func testPasswordsAndKeys() throws {
@@ -118,11 +120,34 @@ final class SecretsTests: XCTestCase {
         Thread.sleep(forTimeInterval: 0.5)
         keep(window.screenshot(), "secrets-6-expired")
 
+        // 5. the connection drops right after a request: the card stays but cannot be answered until
+        // the reconnect's resume finds the request still waiting (open_requests); then the password
+        // goes on the new connection, once
+        say("断线（CI）", in: app)
+        let dropCard = element("secret-card-\(dropId)", in: app)
+        guard dropCard.waitForExistence(timeout: 15) else { return XCTFail("no card for the request asked before the drop") }
+        let offline = waitForText("连接", in: dropCard, timeout: 8)
+        keep(window.screenshot(), "secrets-7-offline")
+        XCTAssertTrue(offline, "the card did not say the connection was down")
+        let dropField = app.secureTextFields["secret-field-\(dropId)"]
+        let back = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isEnabled == true"), object: dropField)
+        guard XCTWaiter().wait(for: [back], timeout: 40) == .completed else {
+            keep(window.screenshot(), "secrets-7-not-back")
+            return XCTFail("the request could not be answered after the reconnect")
+        }
+        dropField.click()
+        dropField.typeText(password)
+        element("secret-submit-\(dropId)", in: app).click()
+        XCTAssertTrue(waitForLabel(element("secret-state-\(dropId)", in: app), "已提交", timeout: 10), "the card does not say 已提交 after the reconnect")
+        XCTAssertTrue(waitForText("sox 装好了（CI）", in: app, timeout: 15), "the password given after the reconnect did not reach the stand-in")
+        Thread.sleep(forTimeInterval: 0.5)
+        keep(window.screenshot(), "secrets-8-reconnected")
+
         // 等你确认 holds none of them now
         element("nav-confirm", in: app).click()
         Thread.sleep(forTimeInterval: 0.8)
-        keep(window.screenshot(), "secrets-7-confirm-after")
-        for id in [sudoId, keyId, lateId] {
+        keep(window.screenshot(), "secrets-9-confirm-after")
+        for id in [sudoId, keyId, lateId, dropId] {
             XCTAssertFalse(element("secret-card-\(id)", in: app).exists, "\(id) is still in 等你确认")
         }
         XCTAssertFalse(shows(password, in: app), "the password shows somewhere in the window")
