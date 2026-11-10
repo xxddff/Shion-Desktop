@@ -5,18 +5,16 @@ import XCTest
 /// ci/fake_kanban.py): the cards that stopped on your answer come to 等你确认, where you answer and
 /// let them go on; each assistant's 工作记录 lists the cards it ran today on every board; and the
 /// card notifications, which a test run writes down in a file instead of posting
-/// (`-ShionNotificationLog`) and answers through another (`-ShionNotificationAnswers`), as typing
-/// into the notification would. A picture at each step (`work-*.png`).
+/// (`-ShionNotificationLog`) and answers with a distributed notification, as typing into the
+/// notification would. A picture at each step (`work-*.png`).
 final class WorkTests: XCTestCase {
     private let server = "http://127.0.0.1:8765"
     private let notes = "/tmp/shion-work-notifications.jsonl"
-    private let answers = "/tmp/shion-work-answers.jsonl"
 
     @MainActor
     func testWorkForYou() throws {
         continueAfterFailure = false
         try? FileManager.default.removeItem(atPath: notes)
-        try? FileManager.default.removeItem(atPath: answers)
         let app = XCUIApplication()
         app.launchArguments = [
             "-ShionSnapshot", "YES",
@@ -24,7 +22,6 @@ final class WorkTests: XCTestCase {
             "-ShionAppearance", "light",
             "-ApplePersistenceIgnoreState", "YES",
             "-ShionNotificationLog", notes,
-            "-ShionNotificationAnswers", answers,
         ]
         app.launch()
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 20))
@@ -124,6 +121,7 @@ final class WorkTests: XCTestCase {
         // answered there, as typing into it would: the reply goes on the card, which goes on
         if let week {
             replyInNotification("排作业4（CI，从通知回复）", to: week.id)
+            XCTAssertTrue(waitUntil(timeout: 10) { self.answered(week.id) }, "the app did not take the answer to the notification")
         }
         let handedIn = waitForText("交给你检查", in: app, timeout: 10)
         keep(window.screenshot(), "work-4-log-updated")
@@ -224,20 +222,24 @@ final class WorkTests: XCTestCase {
         }
     }
 
-    /// Answers a notification as typing into it and sending would: a line in the answers file,
-    /// which the app reads as it comes.
+    /// Answers a notification as typing into it and sending would: a distributed notification the
+    /// app takes in test runs (the test runner may not write files the app can see).
     private func replyInNotification(_ text: String, to id: String) {
         guard let json = try? JSONSerialization.data(withJSONObject: ["id": id, "action": "card-reply", "text": text]) else {
             return XCTFail("the answer could not be written")
         }
-        let line = json + Data("\n".utf8)
-        guard let handle = FileHandle(forWritingAtPath: answers) else {
-            _ = FileManager.default.createFile(atPath: answers, contents: line)
-            return
+        DistributedNotificationCenter.default().postNotificationName(
+            Notification.Name("dev.shion.test.answer"), object: String(decoding: json, as: UTF8.self), userInfo: nil,
+            deliverImmediately: true)
+    }
+
+    /// Whether the app noted, in its notification log, that it took the answer to `id`.
+    private func answered(_ id: String) -> Bool {
+        guard let text = try? String(contentsOfFile: notes, encoding: .utf8) else { return false }
+        return text.split(separator: "\n").contains { line in
+            guard let row = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any] else { return false }
+            return row["answered"] as? String == id
         }
-        _ = try? handle.seekToEnd()
-        try? handle.write(contentsOf: line)
-        try? handle.close()
     }
 
     @MainActor
