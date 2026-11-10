@@ -126,8 +126,11 @@ struct QuickAskView: View {
 
     var body: some View {
         @Bindable var quick = quick
-        // what 总秘书 asked on the way stays as a line once answered (AppStore+Trail.swift)
-        let items = store.withAskCards(quick.exchange(in: store), of: store.chiefId, open: false, since: quick.asked?.at)
+        // what 总秘书 asked on the way stays as a line once answered (AppStore+Trail.swift); with
+        // nothing asked the window is empty, whatever was answered before
+        let items = quick.asked.map {
+            store.withAskCards(quick.exchange(in: store), of: store.chiefId, open: false, since: $0.at)
+        } ?? []
         let lines = ChatLine.lines(items, replying: store.replying.contains(store.chiefId))
         let asks = quick.asks(in: store)
         let state = status(answered: items.count > 1 || !asks.isEmpty)

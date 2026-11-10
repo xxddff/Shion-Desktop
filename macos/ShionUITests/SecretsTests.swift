@@ -200,7 +200,8 @@ final class SecretsTests: XCTestCase {
 
     @MainActor
     private func waitForLabel(_ element: XCUIElement, _ label: String, timeout: TimeInterval) -> Bool {
-        let says = NSPredicate(format: "label == %@", label)
+        // a Text's words are its value on macOS, its label stays empty
+        let says = NSPredicate(format: "label == %@ OR value == %@", label, label)
         return XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: says, object: element)], timeout: timeout) == .completed
     }
 
