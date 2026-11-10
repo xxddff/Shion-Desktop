@@ -79,6 +79,7 @@ struct TurnNote: View {
     let item: ChatItem
     let botId: String
     @State private var details = false
+    @Environment(\.rowReveal) private var reveal
 
     var body: some View {
         if let failure = item.failure {
@@ -135,6 +136,12 @@ struct TurnNote: View {
             .background(Palette.fill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("turn-failed")
+            // 详情 opened: the chat scrolls as far as it takes to show all of the line
+            .onChange(of: details) { _, open in
+                if open {
+                    reveal?.show(item.id)
+                }
+            }
         } else {
             VStack(spacing: 4) {
                 FoundText(item.text)
@@ -261,11 +268,11 @@ nonisolated struct FindMarks: Equatable, Sendable {
         var start = marked.startIndex
         while start < marked.endIndex, let range = marked[start...].range(of: needle, options: Self.options) {
             guard range.upperBound > start else { break }
-            marked[range].backgroundColor = strong ? Self.color : Self.color.opacity(0.35)
-            if strong {
-                // the highlight is light in both appearances
-                marked[range].foregroundColor = Color.black
-            }
+            // opaque, with dark text, so a hit reads on the purple of your own messages as on the
+            // page, in both appearances: the one in view in the system's find yellow, the others
+            // in a paler one
+            marked[range].backgroundColor = strong ? Self.color : Self.pale
+            marked[range].foregroundColor = Color.black
             start = range.upperBound
         }
         return marked
@@ -276,6 +283,8 @@ nonisolated struct FindMarks: Equatable, Sendable {
     }
 
     private static let color = Color(nsColor: .findHighlightColor)
+    private static let pale = Color(nsColor: NSColor.findHighlightColor.usingColorSpace(.sRGB)?
+        .blended(withFraction: 0.55, of: .white) ?? NSColor(srgbRed: 1, green: 0.95, blue: 0.62, alpha: 1))
 }
 
 extension Optional where Wrapped == FindMarks {
