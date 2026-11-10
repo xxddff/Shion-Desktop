@@ -135,6 +135,15 @@ final class WorkTests: XCTestCase {
         XCTAssertTrue(detail, "the card's comments did not show")
         XCTAssertTrue(waitForText("看板 side", in: app, timeout: 3), "the detail does not say the other board")
 
+        // the archived card opens the same way: 已归档, what it handed in, its run
+        let quiz = element("work-t_quiz", in: app)
+        reveal(quiz, in: window, at: 0.45)
+        quiz.click()
+        let archivedDetail = waitForText("编号 t_quiz", in: app, timeout: 10)
+        Thread.sleep(forTimeInterval: 0.5)
+        keep(window.screenshot(), "work-5a-archived-detail")
+        XCTAssertTrue(archivedDetail, "the archived card's detail did not open")
+
         // on the board page nothing is notified: a card made there runs and is done in front of you
         element("nav-board", in: app).click()
         XCTAssertTrue(waitForText("整理第8回录音（CI）", in: app, timeout: 10), "the board did not show")
@@ -336,12 +345,12 @@ final class WorkTests: XCTestCase {
         XCTAssertTrue(settings.textFields["server-address"].waitForExistence(timeout: 5), "no 服务器 tab in Settings")
     }
 
-    /// Scrolls a window's page until `target` can be clicked, the wheel turning at the page's right
-    /// margin, where no row takes it. Which sign of a delta scrolls down is the runner's business,
-    /// so one way a few times, then the other.
+    /// Scrolls a window's page until `target` can be clicked, the wheel turning at `dx` across the
+    /// window: its right margin, where no row takes it, unless an inspector is there. Which sign of
+    /// a delta scrolls down is the runner's business, so one way a few times, then the other.
     @MainActor
-    private func reveal(_ target: XCUIElement, in window: XCUIElement) {
-        let margin = window.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.6))
+    private func reveal(_ target: XCUIElement, in window: XCUIElement, at dx: CGFloat = 0.97) {
+        let margin = window.coordinate(withNormalizedOffset: CGVector(dx: dx, dy: 0.6))
         for delta: CGFloat in [-300, -300, -300, 300, 300, 300, 300, 300, 300] {
             if target.exists && target.isHittable { return }
             margin.hover()
