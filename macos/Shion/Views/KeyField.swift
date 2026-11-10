@@ -108,3 +108,60 @@ final class FocusField: NSTextField {
         window?.makeFirstResponder(self)
     }
 }
+
+/// Behind a SwiftUI text field, gives it the keys each time `request` changes. Asked through
+/// @FocusState, the chat's composer did not get them from its find field (a KeyField) as the bar
+/// closed (run 159): this finds the editable field under it in the window and makes that the first
+/// responder, as the ⌥Space window does with its own (QuickAskPanel.focusField).
+struct KeyTarget: NSViewRepresentable {
+    let request: Int
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(request: request)
+    }
+
+    func makeNSView(context: Context) -> Behind {
+        Behind()
+    }
+
+    func updateNSView(_ view: Behind, context: Context) {
+        guard context.coordinator.request != request else { return }
+        context.coordinator.request = request
+        // after this update, the views it changes (the find bar going) gone by then
+        Task {
+            guard let window = view.window, let content = window.contentView else { return }
+            let middle = view.convert(NSPoint(x: view.bounds.midX, y: view.bounds.midY), to: nil)
+            if let field = Self.field(at: middle, in: content) {
+                window.makeFirstResponder(field)
+            }
+        }
+    }
+
+    /// The editable text field or text view holding `point` (in the window's coordinates),
+    /// outermost first; an editing field's own field editor is not one.
+    private static func field(at point: NSPoint, in view: NSView) -> NSView? {
+        guard !view.isHidden else { return nil }
+        let editable = (view as? NSTextField)?.isEditable == true
+            || (view as? NSTextView).map { $0.isEditable && !$0.isFieldEditor } == true
+        if editable && view.convert(view.bounds, to: nil).contains(point) {
+            return view
+        }
+        for subview in view.subviews {
+            if let field = field(at: point, in: subview) { return field }
+        }
+        return nil
+    }
+
+    final class Coordinator {
+        var request: Int
+
+        init(request: Int) {
+            self.request = request
+        }
+    }
+
+    /// Never what a click lands on: the field in front of it is.
+    final class Behind: NSView {
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    }
+}
