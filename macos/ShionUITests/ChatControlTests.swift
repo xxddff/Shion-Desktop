@@ -270,13 +270,7 @@ final class ChatControlTests: XCTestCase {
     /// A mark in the stand-in's log (fake_hermes-ChatControlTests.log, kept even when the run is
     /// cut short): where the test got to, if the app stops answering (run 146).
     private func mark(_ step: String) {
-        guard let url = URL(string: "\(server)/ci/mark/\(step)") else { return }
-        var request = URLRequest(url: url, timeoutInterval: 1)
-        request.setValue("ci-client", forHTTPHeaderField: "CF-Access-Client-Id")
-        request.setValue("ci-secret", forHTTPHeaderField: "CF-Access-Client-Secret")
-        let done = DispatchSemaphore(value: 0)
-        URLSession.shared.dataTask(with: request) { _, _, _ in done.signal() }.resume()
-        _ = done.wait(timeout: .now() + 1.5)
+        StandIn.mark("chatctl-\(step)")
     }
 
     @MainActor

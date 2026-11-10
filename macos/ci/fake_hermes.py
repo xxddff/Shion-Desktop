@@ -34,6 +34,9 @@ hermes_cli/dashboard_auth and the Canonical Gateway Protocol:
                                session's frames)
   prompt.submit "装 ffmpeg（CI）" sudo and secret server requests, answered with a response frame
                                (fake_secrets.py; the values are checked, never logged)
+  POST /ci/mark/<step>         a test's word, not Hermes's: where it got to, in this log
+  POST /ci/later               the message nobody asked for that 「等一会儿再说一句」 keeps back, now
+  POST /ci/quick/finish        the rest of the ⌥Space reply that waits after its first part
 
 Like Hermes's contracts (extra="forbid"), session.resume, session.transcript and prompt.submit
 refuse keys they do not know, so a client's wrong parameter fails here as it would on a real server.
@@ -71,6 +74,7 @@ ACCESS_ID, ACCESS_SECRET = "ci-client", "ci-secret"
 USER, PASSWORD = "ci-user", "ci-pass"
 
 lock = threading.Lock()
+later_kept = []  # (connection, session id): messages nobody asked for, until a test says POST /ci/later
 access_logins = {}  # one-time token from the Access login page -> where the browser was going
 access_cookies = set()  # CF_Authorization values of browsers signed in to Access
 pending = {}  # broker -> {challenge, redirect_uri, state}
@@ -363,6 +367,8 @@ class Handler(BaseHTTPRequestHandler):
         self.answer(404, {"detail": "Not Found"})
 
     def do_POST(self):
+        if self.test_word():
+            return
         if fake_reconnect.tunnel_down(self):
             return
         if not self.access():
@@ -546,13 +552,42 @@ class Handler(BaseHTTPRequestHandler):
         except OSError:
             pass
 
+    def test_word(self):
+        """A test's own word to the stand-in (StandIn.swift), ahead of Access and of a tunnel that
+        is down, as the tunnel's own word is (fake_reconnect.py): a mark in this log where it got to;
+        the message nobody asked for, now; the rest of the quick window's reply. True when
+        answered here."""
+        path = self.path.split("?")[0]
+        if self.command != "POST" or not path.startswith("/ci/") or path == fake_reconnect.CONTROL:
+            return False
+        if path.startswith("/ci/mark/"):
+            log(f"== the test is at {path[len('/ci/mark/'):]}")
+            fake_reconnect.word(self, 200, {"marked": True})
+        elif path == "/ci/later":
+            with lock:
+                kept = later_kept.pop(0) if later_kept else None
+            if kept is None:
+                log("POST /ci/later -> 409 (no message kept back)")
+                fake_reconnect.word(self, 409, {"sent": False})
+            else:
+                connection, session_id = kept
+                connection.later_turn(session_id)
+                fake_reconnect.word(self, 200, {"sent": True})
+        elif path == "/ci/quick/finish":
+            held = fake_quick.finish_held(log)
+            fake_reconnect.word(self, 200, {"held": held})
+        else:
+            return False
+        return True
+
     LATER_NOW = "好，过一会儿再说一句（CI）。"
     LATER_REPLY = "又想起一件事（CI）：周四的实验课改到下午 3 点。"
 
     def later(self, session_id, text):
-        """A reply now, and 8 seconds on another one nobody asked for, as when an assistant comes
-        back to a chat by itself (a cron job's delivery, a card done). BoardTests reads further up
-        the chat meanwhile, and the new message must not pull it down to the end."""
+        """A reply now, and another one nobody asked for once the test says (POST /ci/later), as
+        when an assistant comes back to a chat by itself (a cron job's delivery, a card done).
+        BoardTests reads further up the chat meanwhile, and the new message must not pull it down to
+        the end; it says when it is there, not after a time it may not keep to."""
         with lock:
             rows = transcripts.setdefault(session_id, [])
             rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "user",
@@ -562,7 +597,9 @@ class Handler(BaseHTTPRequestHandler):
         self.event("message.start", session_id, {})
         self.event("message.delta", session_id, {"text": self.LATER_NOW})
         self.event("message.complete", session_id, {"text": self.LATER_NOW, "status": "complete"})
-        threading.Timer(8.0, self.later_turn, args=(session_id,)).start()
+        with lock:
+            later_kept.append((self, session_id))
+        log(f"  -> a message nobody asked for on {session_id} waits for the test's word (POST /ci/later)")
 
     def later_turn(self, session_id):
         with lock:
