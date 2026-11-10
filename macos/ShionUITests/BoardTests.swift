@@ -273,6 +273,7 @@ final class BoardTests: XCTestCase {
             }
         }
         stillWhileFurtherUp(in: app, window: window, transcript: transcript, positions: &positions)
+        longReplyStays(in: app, window: window, transcript: transcript, positions: &positions)
         note(positions.joined(separator: "\n"), "board-positions")
         app.terminate()
     }
@@ -329,6 +330,113 @@ final class BoardTests: XCTestCase {
         XCTAssertNotNil(before, "nothing in view to watch. \(numbers)")
         XCTAssertEqual(after ?? .nan, before ?? .nan, accuracy: 2, "a message that came moved what shows further up. \(numbers)")
         XCTAssertTrue(arrived, "the message nobody asked for is not at the end. \(numbers)")
+    }
+
+    /// 詩音's 第 120 条 on the stand-in is a reply some screens tall. The find bar goes to it, and
+    /// it fills what shows; then, for words found nowhere, 上一个 reads the older pages (the second,
+    /// then the third): as they come in above, the reply stays where it was. The wheel can't stop
+    /// on it as a page lands: a page is asked for as the top comes near, when a long reply leading
+    /// the page is only just laid out, and the page comes with its foot and the rows below in view.
+    @MainActor
+    private func longReplyStays(in app: XCUIApplication, window: XCUIElement, transcript: XCUIElement,
+                                positions: inout [String]) {
+        app.typeKey("f", modifierFlags: .command)
+        let field = element("find-field", in: app)
+        if !field.waitForExistence(timeout: 5) {
+            element("find", in: app).click()
+        }
+        guard field.waitForExistence(timeout: 5) else {
+            positions.append("the long reply: no find bar")
+            return XCTFail("neither ⌘F nor the toolbar's find button opened the find bar")
+        }
+        field.click()
+        // from the end it is gone to through rows not laid out yet, and may only just show; gone
+        // to again from there, it comes to the middle of what shows
+        field.typeText("很长的回复")
+        Thread.sleep(forTimeInterval: 2)
+        field.typeKey("a", modifierFlags: .command)
+        field.typeKey(.delete, modifierFlags: [])
+        Thread.sleep(forTimeInterval: 0.5)
+        field.typeText("很长的回复")
+        Thread.sleep(forTimeInterval: 1.5)
+        // words found nowhere (its paragraphs go to 48): nothing to go to, and what shows stays
+        field.typeText("，段落 99")
+        Thread.sleep(forTimeInterval: 0.5)
+        let area = transcript.frame
+        let before = longReply(in: transcript)
+        let top = before.paragraphs["第 120 条（詩音）"]?.minY
+        let foot = before.paragraphs.first { $0.key.hasPrefix("很长的回复，段落 48：") }?.value.maxY
+        let fills = (top.map { $0 < area.minY } ?? false) && (foot.map { $0 > area.maxY } ?? false)
+        keep(window.screenshot(), "board-21-long-reply")
+
+        element("find-older", in: app).click()
+        // the third page is asked for as the second comes in: it can be in by the next reading
+        let came = landed(in: transcript, from: before.bar)
+        let withSecond = longReply(in: transcript)
+        let thenThird = landed(in: transcript, from: withSecond.bar)
+        let withThird = longReply(in: transcript)
+        keep(window.screenshot(), "board-22-long-reply-pages-in")
+        app.typeKey(.escape, modifierFlags: [])
+
+        // by its topmost paragraph read each time
+        let held = before.paragraphs
+            .filter { withSecond.paragraphs[$0.key] != nil && withThird.paragraphs[$0.key] != nil }
+            .min { $0.value.minY < $1.value.minY }
+        let name = held.map { $0.key.components(separatedBy: "：").first ?? $0.key } ?? "no paragraph read each time"
+        let (was, second, third) = (held?.value.minY, held.flatMap { withSecond.paragraphs[$0.key]?.minY },
+                                    held.flatMap { withThird.paragraphs[$0.key]?.minY })
+        func bar(_ reading: (paragraphs: [String: CGRect], bar: Double?)) -> String {
+            reading.bar.map { String(format: "%.3f", $0) } ?? "not there"
+        }
+        let numbers = "the long reply (第 120 条, its top at \(say(top)), its foot at \(say(foot)) in \(area)): "
+            + "「\(name)」 at \(say(was)) before 上一个, \(say(second)) once the scroll bar moved, \(say(third)) "
+            + "\(thenThird ? "once it moved again" : "a moment later"); the scroll bar \(bar(before)), \(bar(withSecond)), \(bar(withThird))"
+        positions.append(numbers)
+        XCTAssertTrue(fills, "the long reply does not fill what shows. \(numbers)")
+        XCTAssertTrue(came, "no older page came in. \(numbers)")
+        XCTAssertEqual(second ?? .nan, was ?? .nan, accuracy: 4, "the long reply moved as an older page came in. \(numbers)")
+        XCTAssertEqual(third ?? .nan, was ?? .nan, accuracy: 4, "the long reply moved as the older pages came in. \(numbers)")
+    }
+
+    /// From one snapshot of the transcript: the paragraphs of the stand-in's long 第 120 条 laid
+    /// out, by their words, and where the transcript's own scroll bar is.
+    @MainActor
+    private func longReply(in transcript: XCUIElement) -> (paragraphs: [String: CGRect], bar: Double?) {
+        guard let root = try? transcript.snapshot() else { return ([:], nil) }
+        var paragraphs: [String: CGRect] = [:]
+        func visit(_ node: XCUIElementSnapshot) {
+            if node.elementType == .staticText || node.elementType == .textView,
+               let text = [node.label, node.value as? String ?? ""]
+                .first(where: { $0.hasPrefix("第 120 条（") || $0.hasPrefix("很长的回复，段落 ") }),
+               paragraphs[text] == nil {
+                paragraphs[text] = node.frame
+            }
+            node.children.forEach(visit)
+        }
+        visit(root)
+        // not a wide table's inside a row
+        let bar = root.children.first { $0.elementType == .scrollBar && $0.frame.height > $0.frame.width }
+        let value = bar?.value
+        return (paragraphs, (value as? NSNumber)?.doubleValue ?? (value as? String).flatMap(Double.init))
+    }
+
+    /// Waits up to 6 s for the transcript's scroll bar to move, as a page comes in above, then a
+    /// moment for the row put back; false when it did not, or there is no bar to read.
+    @MainActor
+    private func landed(in transcript: XCUIElement, from bar: Double?) -> Bool {
+        guard let bar else {
+            Thread.sleep(forTimeInterval: 2.3)
+            return false
+        }
+        let deadline = Date().addingTimeInterval(6)
+        while Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.2)
+            if let now = longReply(in: transcript).bar, abs(now - bar) > 0.005 {
+                Thread.sleep(forTimeInterval: 0.3)
+                return true
+            }
+        }
+        return false
     }
 
     /// In the transcript's visible part, not above or below it.

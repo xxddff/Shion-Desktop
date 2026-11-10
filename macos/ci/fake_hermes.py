@@ -91,8 +91,8 @@ def seed_transcripts():
     row_id of the message it was stored on and comes just before it, and that message still shows
     when it holds real content too; tool rows have no row_id, only their call's id. The first
     compaction is on 第 1 条, with two tool rows after it; the second is on 第 32 条, which leads the
-    second page, so the compaction is the last row of the third. 第 82 条, which leads the first
-    page, is a reply some screens tall."""
+    second page, so the compaction is the last row of the third. 第 120 条, in the middle of the
+    first page, is a reply some screens tall."""
     start = time.time() - 86400
     rows = []
 
@@ -108,10 +108,10 @@ def seed_transcripts():
         if n == 32:
             compaction(n + 1, 70, at)
         text = f"第 {n} 条（{'你' if who == 'user' else '詩音'}）"
-        if n == 82:
-            # the oldest of the first page, a reply some screens tall: SignInTests reads older
-            # pages coming in while it fills what shows, and its top stays where it was (no 第 or
-            # 条 in the rest, so finding 第 12 or 第 3 条 does not count it)
+        if n == 120:
+            # a reply some screens tall: BoardTests goes to it with the find bar and reads the older
+            # pages while it fills what shows, and it stays where it was. The rest has no 第 or 条:
+            # finding 第 12 counts it once, as before, and 第 3 条 not at all
             text += "\n\n" + "\n\n".join(f"很长的回复，段落 {i}：这一段只是为了把回复撑得比窗口还高。" for i in range(1, 49))
         rows.append({"row_id": n + 1, "row_kind": "message", "role": who, "text": text, "timestamp": at})
         if n == 1:
