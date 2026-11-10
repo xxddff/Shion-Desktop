@@ -150,6 +150,7 @@ final class ChatControlTests: XCTestCase {
             retryTool.click()
             if let ask = question(in: app, timeout: 5) {
                 keep(app.windows.firstMatch.screenshot(), "chatctl-4c-confirm")
+                note(describe(ask, in: app), "chatctl-question")
                 let says = ask.staticTexts.allElementsBoundByIndex.map { "\($0.label) \(($0.value as? String) ?? "")" }
                     .joined(separator: " ")
                 XCTAssertTrue(says.contains("web_search") && says.contains("可能会再做一次"), "the question does not name the tool: \(says)")
@@ -307,6 +308,40 @@ final class ChatControlTests: XCTestCase {
             return found != nil
         }
         return found
+    }
+
+    /// What the question is to XCUI, for chatctl-question.txt: where it was found, what kind of
+    /// element, and whether its buttons kept the identifiers the app gave them.
+    @MainActor
+    private func describe(_ ask: XCUIElement, in app: XCUIApplication) -> String {
+        let places = [("a sheet of the window", app.windows.sheets.firstMatch), ("a sheet", app.sheets.firstMatch),
+                      ("a dialog in the window", app.windows.dialogs.firstMatch), ("a dialog", app.dialogs.firstMatch)]
+        let found = places.filter { $0.1.exists }.map { $0.0 }
+        let kind: String
+        switch ask.elementType {
+        case .sheet: kind = "sheet"
+        case .dialog: kind = "dialog"
+        case .alert: kind = "alert"
+        case .window: kind = "window"
+        default: kind = "type \(ask.elementType.rawValue)"
+        }
+        let buttons = ask.buttons.allElementsBoundByIndex.map { button in
+            "「\(button.label)」 identifier \(button.identifier.isEmpty ? "(none)" : button.identifier)"
+        }
+        return """
+            found as: \(found.joined(separator: ", "))
+            element: \(kind)
+            buttons: \(buttons.joined(separator: "; "))
+            retry-confirm kept: \(ask.buttons["retry-confirm"].exists), retry-cancel kept: \(ask.buttons["retry-cancel"].exists)
+            """
+    }
+
+    /// Text worth reading after the run, beside the pictures (`name.txt`).
+    private func note(_ text: String, _ name: String) {
+        let attachment = XCTAttachment(string: text)
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
     }
 
     /// A button in `container`, by its identifier if the alert kept it, else by its name.
