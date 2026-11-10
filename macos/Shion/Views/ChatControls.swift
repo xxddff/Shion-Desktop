@@ -228,8 +228,8 @@ final class ChatFind {
                 // the newest of those above the hits there were
                 let above = known.isEmpty ? hits : Array(hits.prefix { !known.contains($0) })
                 if let newest = above.last {
-                    // with the page: the chat goes to it rather than putting the row at the top
-                    // back (TranscriptPlace in ChatView.swift)
+                    // after the page's own scroll, which keeps the rows that were at the top in place
+                    try? await Task.sleep(for: .milliseconds(150))
                     current = newest
                     return
                 }

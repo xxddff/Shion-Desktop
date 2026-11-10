@@ -14,9 +14,8 @@ struct ChatView: View {
     /// Whether what comes next is followed down: the reader is at the newest message. Scrolled
     /// up, nothing moves under them until they are back at the end, or send something.
     @State private var follow = Follow()
-    /// Where the transcript shows between updates: the row at the top put back as older rows
-    /// come in above, the find bar's hits gone to, in that order (TranscriptPlace).
-    @State private var place = TranscriptPlace()
+    /// Where the rows in view are, so the one at the top stays put as older rows come in above.
+    @State private var spots = RowSpots()
     /// Bumped as the transcript is made: once its rows are laid out, it goes to the newest one.
     @State private var placing = 0
     /// ⌘F (ChatControls.swift)
@@ -31,9 +30,9 @@ struct ChatView: View {
         let items = store.withAskCards(store.chats[botId] ?? [], of: botId) + WaitingMessages.items(for: botId)
         let lines = ChatLine.lines(items, replying: store.replying.contains(botId))
         let found = find.found(in: lines)
-        // before the rows are laid out: older rows coming in above (the row at the top of what
-        // shows is noted, from the layout before them), or a new hit of the find bar
-        let _ = place.note(first: items.first?.id, focus: found.focus, following: follow.on)
+        // older rows coming in above: where the row at the top of what shows was, from the layout
+        // before they came
+        let _ = spots.note(first: items.first?.id)
         Group {
             // the transcript is made once there is something in it: it starts at its newest
             // message with the rows there, and nothing has to be followed down to get there
@@ -46,7 +45,6 @@ struct ChatView: View {
                         // older pages wait until then
                         .onAppear {
                             reveal.proxy = reader
-                            place.proxy = reader
                             follow.placed = false
                             toEnd(lines, with: reader)
                             placing += 1
@@ -58,8 +56,15 @@ struct ChatView: View {
                         // older rows arrived above: the row that was at the top of what shows goes
                         // back to where it was (a run of tool calls the page boundary cut is one
                         // line with the calls before it, under the same id)
-                        .onChange(of: items.first?.id) {
-                            settle(lines)
+                        .onChange(of: items.first?.id) { previous, _ in
+                            guard let previous else { return }
+                            if let held = spots.held, lines.contains(where: { $0.id == held.id }),
+                               viewport > held.frame.height + 1 {
+                                let anchor = UnitPoint(x: 0, y: held.frame.minY / (viewport - held.frame.height))
+                                reader.scrollTo(held.id, anchor: anchor)
+                            } else if let line = lines.first(where: { line in line.items.contains { $0.id == previous } }) {
+                                reader.scrollTo(line.id, anchor: .top)
+                            }
                         }
                         // a message came, a reply grew or finished, a call was made: followed down
                         // while the reader is at the end. Opening or closing a run changes none of
@@ -74,25 +79,27 @@ struct ChatView: View {
                         // heights, followed for a moment after a message, or a run opening
                         .onScrollGeometryChange(for: EndGap.self) { geometry in
                             EndGap(below: geometry.contentSize.height - geometry.visibleRect.maxY,
-                                   height: geometry.contentSize.height,
-                                   container: geometry.containerSize.height)
+                                   height: geometry.contentSize.height)
                         } action: { old, new in
-                            // not the reader either: the visible part changed height (the window,
-                            // the composer, the page's host). Followed, it goes back to the end. A
-                            // jump to the top in one go (Home, ⌘↑, the scroll bar) is the reader's
-                            // and stays where it went
-                            if follow.on, abs(new.container - old.container) > 1 {
-                                toEnd(lines, with: reader)
-                            } else if new.height == old.height {
+                            if new.height == old.height {
                                 follow.on = new.below <= 40
                             } else if follow.on, Date() < follow.until, new.below > 1, let last = lines.last {
                                 reader.scrollTo(last.id, anchor: .bottom)
                             }
-                            place.scrolled()
                         }
-                        // the find bar's hit in view
-                        .onChange(of: found.focus) {
-                            settle(lines)
+                        // the hit in view, its folded tool calls open; what comes next is not
+                        // followed down from there. After this update's own scrolling: when the
+                        // hit came with an older page (finding reads them), that page's row is
+                        // put back first, and the hit is where the reader goes
+                        .onChange(of: found.focus) { _, line in
+                            guard let line else { return }
+                            follow.on = false
+                            if line.hasPrefix("tools-") {
+                                openRuns.insert(line)
+                            }
+                            Task {
+                                reader.scrollTo(line, anchor: .center)
+                            }
                         }
                         .environment(\.rowReveal, reveal)
                 }
@@ -164,10 +171,10 @@ struct ChatView: View {
                         .onGeometryChange(for: CGRect.self) { proxy in
                             proxy.frame(in: .scrollView)
                         } action: { frame in
-                            place.laidOut(line.id, at: frame)
+                            spots.frames[line.id] = frame
                         }
                         .onDisappear {
-                            place.gone(line.id)
+                            spots.frames[line.id] = nil
                         }
                 }
             }
@@ -177,20 +184,15 @@ struct ChatView: View {
             // a short chat sits at the bottom of a full-height page, not on a short one
             .frame(maxWidth: .infinity, minHeight: viewport, alignment: .bottom)
         }
-        // anchored only where it starts: a scroll view set up again by its host (a split view with
-        // an inspector does that as the page opens, after the transcript went to its end) starts
-        // at its end too. Nothing else is anchored: the content's top stays put as it grows or
-        // shrinks, and where it shows is only ever set above (to the newest message, after it,
-        // back to the row in view, to a hit); a short chat sits at the bottom of the full-height
-        // frame
-        .defaultScrollAnchor(.bottom, for: .initialOffset)
+        // no anchor: the content's top stays put as it grows or shrinks, and where it shows is
+        // only ever set above (to the newest message, after it, back to the row in view); a short
+        // chat sits at the bottom of the full-height frame
         .accessibilityIdentifier("transcript")
         // measured from the first layout on (a scroll geometry change only reports changes); the
         // size is already inside the toolbar and the composer
         .onGeometryChange(for: CGFloat.self) { proxy in
             proxy.size.height
         } action: { height in
-            place.viewport = max(0, height)
             if abs(height - viewport) > 1 {
                 viewport = max(0, height)
             }
@@ -216,22 +218,6 @@ struct ChatView: View {
                     await store.loadOlder(botId)
                 }
             }
-        }
-    }
-
-    /// Older rows arrived above, or the find bar has a new hit: where the transcript shows then
-    /// (TranscriptPlace). A hit opens its folded tool calls, and what comes next is not followed
-    /// down from it.
-    private func settle(_ lines: [ChatLine]) {
-        // followed at its end, rows changing at the top (a page read there, the chat read again
-        // on reconnecting) leave it at its end, with the follow
-        if place.keepsEnd(), let reader = place.proxy {
-            toEnd(lines, with: reader)
-        }
-        guard let hit = place.settle(lines) else { return }
-        follow.on = false
-        if hit.hasPrefix("tools-") {
-            openRuns.insert(hit)
         }
     }
 
@@ -273,180 +259,23 @@ final class Follow {
     var placed = false
 }
 
-/// Where a transcript shows, between updates, and in what order it is moved there. Older rows
-/// coming in above put the row that was at the top of what showed back where it was, unless it
-/// was followed at its end, where it stays (the chat read again on reconnecting is such a change
-/// at the top, and the end changes with it); a new hit of the find bar is gone to. When both come in one update the hit is gone to and nothing is put
-/// back; a hit that comes while a row is on its way back waits until that row is laid out where
-/// it was (or the scroll geometry has changed a few times without it). A hit gone to is looked
-/// for in the layouts after: not in view (going a long way through rows not laid out yet can land
-/// short), it is gone to again, three times at most. Not observed, so nothing redraws for it.
-final class TranscriptPlace {
-    var proxy: ScrollViewProxy?
-    /// The transcript's visible height.
-    var viewport: CGFloat = 0
-    /// Each row's frame in the visible part, by line id, as last laid out.
-    private var frames: [String: CGRect] = [:]
+/// Where the rows are in the transcript's visible part, by line id, as last laid out. Not
+/// observed, so nothing redraws for it as the rows move.
+final class RowSpots {
+    var frames: [String: CGRect] = [:]
+    /// The topmost row wholly below the top of what showed, and where it was, when the first row
+    /// last changed.
+    private(set) var held: (id: String, frame: CGRect)?
     private var first: String?
-    private var focus: String?
-    /// For this update's onChange handlers (settle).
-    private var restore: Restore?
-    private var hit: String?
-    /// Put back, not yet seen where it was: the line, where, and the scroll geometry changes since.
-    private var restoring: (id: String, y: CGFloat, changes: Int)?
-    /// A hit waiting for that.
-    private var queued: String?
-    /// Gone to, not yet seen in view: the line, the scroll geometry changes since, and the tries.
-    private var going: (id: String, changes: Int, tries: Int)?
 
-    private enum Restore {
-        /// The row at the top of what showed, and its frame then.
-        case row(String, CGRect)
-        /// No row was laid out: the line holding the old first item goes to the top.
-        case line(holding: String)
-        /// Followed at its end, it stays there (ChatView's settle).
-        case end
-    }
-
-    /// Called as the transcript is made, before its rows are laid out.
-    func note(first: String?, focus: String?, following: Bool) {
-        if focus != self.focus {
-            self.focus = focus
-            hit = focus
-            if focus == nil {
-                queued = nil
-                going = nil
-            }
-        }
+    /// Called as the transcript is made, before its rows are laid out: a new first row means older
+    /// rows came in above, and the row at the top of what shows is noted from the layout before.
+    func note(first: String?) {
         guard first != self.first else { return }
-        let previous = self.first
         self.first = first
-        guard let previous, hit == nil else {
-            restore = nil
-            return
-        }
-        restore = following ? .end : topInView().map { .row($0.id, $0.frame) } ?? .line(holding: previous)
-    }
-
-    /// Whether the transcript is to stay at its end as rows changed at its top: then that is
-    /// taken, and settle puts nothing back.
-    func keepsEnd() -> Bool {
-        guard case .end? = restore else { return false }
-        restore = nil
-        return true
-    }
-
-    /// From the update's onChange handlers, both: whichever runs first does it. The row put back,
-    /// or the hit gone to, or queued behind a row still on its way back. Returns a hit newly asked
-    /// for.
-    func settle(_ lines: [ChatLine]) -> String? {
-        if let restore {
-            self.restore = nil
-            put(restore, lines)
-        }
-        guard let hit else { return nil }
-        self.hit = nil
-        if let back = restoring, let frame = frames[back.id], abs(frame.minY - back.y) <= 1 {
-            restoring = nil
-        }
-        if restoring == nil {
-            go(hit)
-        } else {
-            queued = hit
-        }
-        return hit
-    }
-
-    /// A row laid out.
-    func laidOut(_ id: String, at frame: CGRect) {
-        frames[id] = frame
-        if let back = restoring, back.id == id, abs(frame.minY - back.y) <= 1 {
-            restored()
-        }
-        if let going, going.id == id, shows(frame) {
-            self.going = nil
-        }
-    }
-
-    /// A row no longer laid out.
-    func gone(_ id: String) {
-        frames[id] = nil
-    }
-
-    /// The transcript scrolled, or its content's height changed.
-    func scrolled() {
-        if var back = restoring {
-            back.changes += 1
-            if let frame = frames[back.id], abs(frame.minY - back.y) <= 1 {
-                restored()
-            } else if back.changes >= 3 {
-                restored()
-            } else {
-                restoring = back
-            }
-        }
-        guard var going else { return }
-        if let frame = frames[going.id], shows(frame) {
-            self.going = nil
-            return
-        }
-        going.changes += 1
-        guard going.changes >= 2 else {
-            self.going = going
-            return
-        }
-        guard going.tries < 3 else {
-            self.going = nil
-            return
-        }
-        self.going = (going.id, 0, going.tries + 1)
-        proxy?.scrollTo(going.id, anchor: .center)
-    }
-
-    private func put(_ restore: Restore, _ lines: [ChatLine]) {
-        switch restore {
-        case .row(let id, let frame):
-            guard lines.contains(where: { $0.id == id }) else { return }
-            // scrollTo puts the row's unit point y on the same point of what shows, so its top goes
-            // to y·(viewport − height): back where it was, a row taller than what shows (a long
-            // reply) too. One as tall as what shows (within a point) can only go to the top
-            let room = viewport - frame.height
-            let top = abs(room) > 1 ? frame.minY : 0
-            proxy?.scrollTo(id, anchor: UnitPoint(x: 0, y: abs(room) > 1 ? frame.minY / room : 0))
-            restoring = (id, top, 0)
-        case .line(let item):
-            guard let line = lines.first(where: { line in line.items.contains { $0.id == item } }) else { return }
-            proxy?.scrollTo(line.id, anchor: .top)
-        case .end:
-            break
-        }
-    }
-
-    private func restored() {
-        restoring = nil
-        if let queued {
-            self.queued = nil
-            go(queued)
-        }
-    }
-
-    private func go(_ id: String) {
-        going = (id, 0, 1)
-        proxy?.scrollTo(id, anchor: .center)
-    }
-
-    private func shows(_ frame: CGRect) -> Bool {
-        frame.maxY > 0 && frame.minY < viewport
-    }
-
-    /// The topmost row starting in what shows, and where it is; none starting there (a reply taller
-    /// than what shows), the one across its top.
-    private func topInView() -> (id: String, frame: CGRect)? {
-        let starting = frames.filter { $0.value.minY >= 0 && $0.value.minY < viewport }
+        held = frames.filter { $0.value.minY >= 0 }
             .min { $0.value.minY < $1.value.minY }
-        let across = frames.filter { $0.value.minY < 0 && $0.value.maxY > 0 }
-            .min { $0.value.minY < $1.value.minY }
-        return (starting ?? across).map { (id: $0.key, frame: $0.value) }
+            .map { (id: $0.key, frame: $0.value) }
     }
 }
 
@@ -499,11 +328,10 @@ nonisolated extension EnvironmentValues {
     }
 }
 
-/// How far the content goes on below what shows, how tall it is, and how tall what shows is.
+/// How far the content goes on below what shows, and how tall it is.
 private nonisolated struct EndGap: Equatable {
     let below: CGFloat
     let height: CGFloat
-    let container: CGFloat
 }
 
 /// The top of a paged transcript: a spinner while the next older page loads, or why it did not.
