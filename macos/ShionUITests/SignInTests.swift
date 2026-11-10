@@ -231,6 +231,44 @@ final class SignInTests: XCTestCase {
         app.terminate()
     }
 
+    /// The demo's 詩音 chat opened from 日报 with the page in an inspector (`-ShionChatInspector`),
+    /// hidden and then shown: the window's split view sets such a page up again as it opens, after
+    /// the chat went to its newest message, and puts the transcript back at its top. Twice each:
+    /// the chat is at its end (its scroll bar at the bottom). No server.
+    @MainActor
+    func testOpensAtNewestUnderAnInspector() throws {
+        continueAfterFailure = true
+        var notes: [String] = []
+        for inspector in ["hidden", "shown"] {
+            let app = XCUIApplication()
+            app.launchArguments = [
+                "-ShionSnapshot", "YES",
+                "-ShionRoute", "reports",
+                "-ShionAppearance", "light",
+                "-ApplePersistenceIgnoreState", "YES",
+                "-ShionChatInspector", inspector,
+            ]
+            app.launch()
+            XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 20))
+            let window = app.windows.firstMatch
+            let transcript = element("transcript", in: app)
+            for round in 1...2 {
+                element("bot-shion", in: app).click()
+                let opened = transcript.waitForExistence(timeout: 10)
+                Thread.sleep(forTimeInterval: 1.5)
+                let bar = layout(of: transcript).bar
+                keep(window.screenshot(), "signin-9-inspector-\(inspector)-\(round)")
+                notes.append("inspector \(inspector), opening \(round): the scroll bar at \(bar.map { String(format: "%.3f", $0) } ?? "not there")")
+                XCTAssertTrue(opened, "the chat did not open (inspector \(inspector))")
+                XCTAssertGreaterThan(bar ?? 0, 0.98, "the chat did not open at its newest message. \(notes.last ?? "")")
+                element("nav-reports", in: app).click()
+                Thread.sleep(forTimeInterval: 1)
+            }
+            app.terminate()
+        }
+        note(notes.joined(separator: "\n"), "signin-inspector")
+    }
+
     /// Which sign of a wheel delta at `wheel` scrolls the chat back, from nudges each way watching
     /// the row `label`; nil when none moves it. The pointer rests there first, and the nudges grow
     /// from 40 to 80: on the runner a first nudge of 40 sometimes moves nothing, the pointer
