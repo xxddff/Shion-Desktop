@@ -3,7 +3,7 @@ import Foundation
 /// One thing ⌘K can go to, and the words it is found by. Foundation only, so the matching can be
 /// checked away from a Mac.
 struct JumpCandidate: Identifiable, Equatable {
-    /// In the order the palette lists them; `ask` is the line that hands the words to 詩音.
+    /// In the order the palette lists them; `ask` is the line that hands the words to 总秘书.
     enum Group: Int, CaseIterable {
         case page, assistant, todo, ask
     }
