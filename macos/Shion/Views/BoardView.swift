@@ -25,6 +25,7 @@ struct BoardView: View {
                         Label("新建卡片", systemImage: "plus")
                     }
                     .help("新建卡片")
+                    .disabled(store.readOnly)
                     .accessibilityIdentifier("new-card")
                 }
             }
