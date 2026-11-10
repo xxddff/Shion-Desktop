@@ -55,6 +55,8 @@ struct CardAskView: View {
                         .disabled(sending)
                         .accessibilityIdentifier("card-ask-resume-\(ask.cardId)")
                 }
+                // the last data, or the connection down: an answer waits for the server
+                .disabled(store.readOnly)
                 .padding(.top, 2)
                 HStack(spacing: 8) {
                     Button("打开卡片") { store.openCard(ask.cardId, board: ask.board) }

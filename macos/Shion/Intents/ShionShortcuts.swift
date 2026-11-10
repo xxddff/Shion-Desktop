@@ -28,8 +28,9 @@ enum ShionShortcuts {
 
     // MARK: the connection
 
-    /// The store once it is connected and its assistants are in; why not, otherwise. Signed in
-    /// but still connecting (Shion was just started for this): waited for.
+    /// The store once it is connected, its assistants are in and the window has left the last
+    /// data for the server's (until then a send does nothing: `readOnly`); why not, otherwise.
+    /// Signed in but still connecting (Shion was just started for this): waited for.
     static func connected(within timeout: Duration = .seconds(15)) async throws -> AppStore {
         guard let store else { throw ShortcutError.notReady }
         let clock = ContinuousClock()
@@ -37,7 +38,7 @@ enum ShionShortcuts {
         while true {
             guard store.canConnect(store.serverSettings) else { throw ShortcutError.notSignedIn }
             switch store.gateway.phase {
-            case .online where store.live:
+            case .online where store.live && !store.readOnly:
                 return store
             case .failed(let reason):
                 throw ShortcutError.offline(reason)

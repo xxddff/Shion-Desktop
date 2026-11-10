@@ -25,6 +25,7 @@ struct BoardView: View {
                         Label("新建卡片", systemImage: "plus")
                     }
                     .help("新建卡片")
+                    .disabled(store.readOnly)
                     .accessibilityIdentifier("new-card")
                 }
             }
@@ -391,6 +392,8 @@ struct BoardInspector: View {
                     .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     .accessibilityIdentifier("card-comment-send")
             }
+            // the last data, or the connection down: a comment waits for the server
+            .disabled(store.readOnly)
         }
     }
 

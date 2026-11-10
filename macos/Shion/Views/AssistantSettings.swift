@@ -1,23 +1,44 @@
 import SwiftUI
 
-/// The Settings window: the server, the assistants on it, the keys (ShortcutSettings.swift), and
-/// how Shion starts and stays around (GeneralSettings.swift).
+/// The Settings window: the server, the assistants on it, the server check (ServerCheckView.swift),
+/// the keys (ShortcutSettings.swift), and how Shion starts and stays around (GeneralSettings.swift).
+/// It opens on the tab it was left on; screenshot and test runs always open on 服务器 and leave the
+/// remembered tab alone.
 struct SettingsTabs: View {
+    @State private var tab = SettingsTabs.firstTab
+
     var body: some View {
-        TabView {
-            Tab("服务器", systemImage: "network") {
+        TabView(selection: $tab) {
+            Tab("服务器", systemImage: "network", value: "server") {
                 SettingsView()
             }
-            Tab("助手", systemImage: "person.2") {
+            Tab("助手", systemImage: "person.2", value: "assistants") {
                 AssistantSettings()
             }
-            Tab("快捷键", systemImage: "keyboard") {
+            Tab("服务器体检", systemImage: "stethoscope", value: "check") {
+                ServerCheckView()
+            }
+            Tab("快捷键", systemImage: "keyboard", value: "keys") {
                 ShortcutSettings()
             }
-            Tab("通用", systemImage: "gearshape") {
+            Tab("通用", systemImage: "gearshape", value: "general") {
                 GeneralSettings()
             }
         }
+        .onChange(of: tab) { _, tab in
+            guard !LaunchOptions.current.snapshot else { return }
+            UserDefaults.standard.set(tab, forKey: Self.tabKey)
+        }
+    }
+
+    private static let tabKey = "ShionSettingsTab"
+
+    private static var firstTab: String {
+        guard !LaunchOptions.current.snapshot,
+              let stored = UserDefaults.standard.string(forKey: tabKey),
+              ["server", "assistants", "check", "keys", "general"].contains(stored)
+        else { return "server" }
+        return stored
     }
 }
 
