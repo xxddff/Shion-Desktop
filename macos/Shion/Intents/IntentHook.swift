@@ -41,7 +41,7 @@ enum IntentHook {
                     return ["id": id, "ok": false, "error": "没有找到这个助手"]
                 }
                 var intent = OpenAssistantIntent()
-                intent.target = target
+                intent.assistant = target
                 _ = try await intent.perform()
             case "open-confirm":
                 _ = try await OpenConfirmIntent().perform()

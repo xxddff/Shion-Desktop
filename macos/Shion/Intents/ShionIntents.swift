@@ -4,34 +4,39 @@ import Foundation
 // Shion's actions for Shortcuts, Spotlight and Siri (App Intents), with Chinese phrases for Siri
 // (ShionAppShortcuts). Each runs on the app's own store through ShionShortcuts.swift; test runs
 // call their perform() themselves (IntentHook.swift). Settings → 通用 says what each does.
+//
+// The intents are main-actor types like the rest of the app (their @Parameter storage cannot be
+// nonisolated), so what the protocol reads without an actor is marked nonisolated: the title,
+// description and modes, and init() (the system and the shortcuts below make them anywhere).
+// perform() is async, and a main-actor perform() answers it.
 
 /// 跟总秘书说: a sentence into 总秘书's Bot Chat, as the ⌥Space window sends it. The reply comes
 /// back when it comes within a few seconds; otherwise the action says it went out, and the reply
 /// arrives as it always does.
-nonisolated struct TellChiefIntent: AppIntent {
-    static let title: LocalizedStringResource = "跟总秘书说"
-    static let description: IntentDescription? = IntentDescription("把一句话发给总秘书，和在 Shion 里说的一样。几秒内有回复，就把回复带回来；没有就回「已发出」，回复照常在通知和对话里。")
-    static let supportedModes: IntentModes = .background
+struct TellChiefIntent: AppIntent {
+    nonisolated static let title: LocalizedStringResource = "跟总秘书说"
+    nonisolated static let description: IntentDescription? = IntentDescription("把一句话发给总秘书，和在 Shion 里说的一样。几秒内有回复，就把回复带回来；没有就回「已发出」，回复照常在通知和对话里。")
+    nonisolated static let supportedModes: IntentModes = .background
+
+    nonisolated init() {}
 
     @Parameter(title: "要说的话", requestValueDialog: IntentDialog("要跟总秘书说什么？"))
     var text: String
 
-    static var parameterSummary: some ParameterSummary {
-        Summary("跟总秘书说\(\.$text)")
-    }
-
     func perform() async throws -> some IntentResult & ReturnsValue<String> & ProvidesDialog {
         let said = try await ShionShortcuts.tell(text) ?? "已发出"
-        await IntentOutcome.note(said, value: .string(said))
+        IntentOutcome.note(said, value: .string(said))
         return .result(value: said, dialog: IntentDialog("\(said)"))
     }
 }
 
 /// 今天的待办: what 今天 and the menu bar list, planned for or due today or earlier.
-nonisolated struct TodayTodosIntent: AppIntent {
-    static let title: LocalizedStringResource = "今天的待办"
-    static let description: IntentDescription? = IntentDescription("今天要做和今天到期的待办（还有逾期的），和 Shion 的「今天」页一样。")
-    static let supportedModes: IntentModes = .background
+struct TodayTodosIntent: AppIntent {
+    nonisolated static let title: LocalizedStringResource = "今天的待办"
+    nonisolated static let description: IntentDescription? = IntentDescription("今天要做和今天到期的待办（还有逾期的），和 Shion 的「今天」页一样。")
+    nonisolated static let supportedModes: IntentModes = .background
+
+    nonisolated init() {}
 
     func perform() async throws -> some IntentResult & ReturnsValue<[TodoEntity]> & ProvidesDialog {
         let todos = try await ShionShortcuts.todayTodoEntities()
@@ -42,36 +47,41 @@ nonisolated struct TodayTodosIntent: AppIntent {
             let listed = todos.prefix(5).map { $0.subtitle.isEmpty ? $0.title : "\($0.title)（\($0.subtitle)）" }
             said = "今天还有 \(todos.count) 件：" + listed.joined(separator: "；") + (todos.count > 5 ? "……" : "。")
         }
-        await IntentOutcome.note(said, value: .array(todos.map { .string($0.title) }))
+        IntentOutcome.note(said, value: .array(todos.map { .string($0.title) }))
         return .result(value: todos, dialog: IntentDialog("\(said)"))
     }
 }
 
-/// 打开助手: an assistant found by name, its chat opened in the main window.
-nonisolated struct OpenAssistantIntent: OpenIntent {
-    static let title: LocalizedStringResource = "打开助手"
-    static let description: IntentDescription? = IntentDescription("按名字在 Shion 的助手里找一个，打开它的对话。")
-    static let supportedModes: IntentModes = .foreground
+/// 打开助手: an assistant found by name, its chat opened in the main window. A plain AppIntent:
+/// OpenIntent's `target` is a synchronous requirement, which a main-actor property cannot answer.
+struct OpenAssistantIntent: AppIntent {
+    nonisolated static let title: LocalizedStringResource = "打开助手"
+    nonisolated static let description: IntentDescription? = IntentDescription("按名字在 Shion 的助手里找一个，打开它的对话。")
+    nonisolated static let supportedModes: IntentModes = .foreground
+
+    nonisolated init() {}
 
     @Parameter(title: "助手", requestValueDialog: IntentDialog("打开哪个助手？"))
-    var target: AssistantEntity
+    var assistant: AssistantEntity
 
     func perform() async throws -> some IntentResult {
-        try await ShionShortcuts.openAssistant(target.id)
-        await IntentOutcome.note("打开了\(target.name)", value: .string(target.id))
+        try await ShionShortcuts.openAssistant(assistant.id)
+        IntentOutcome.note("打开了\(assistant.name)", value: .string(assistant.id))
         return .result()
     }
 }
 
 /// 打开等你确认: the page with everything waiting on you.
-nonisolated struct OpenConfirmIntent: AppIntent {
-    static let title: LocalizedStringResource = "打开等你确认"
-    static let description: IntentDescription? = IntentDescription("打开 Shion 的「等你确认」：助手要你批准或回答的，和停下来等你的卡片。")
-    static let supportedModes: IntentModes = .foreground
+struct OpenConfirmIntent: AppIntent {
+    nonisolated static let title: LocalizedStringResource = "打开等你确认"
+    nonisolated static let description: IntentDescription? = IntentDescription("打开 Shion 的「等你确认」：助手要你批准或回答的，和停下来等你的卡片。")
+    nonisolated static let supportedModes: IntentModes = .foreground
+
+    nonisolated init() {}
 
     func perform() async throws -> some IntentResult {
-        await ShionShortcuts.openConfirm()
-        await IntentOutcome.note("打开了等你确认")
+        ShionShortcuts.openConfirm()
+        IntentOutcome.note("打开了等你确认")
         return .result()
     }
 }
@@ -136,7 +146,8 @@ nonisolated struct TodoQuery: EntityQuery {
 }
 
 /// The phrases Siri knows Shion's actions by, in Chinese; Shortcuts and Spotlight list the same
-/// four. Each phrase names the app (`applicationName`); 打开助手 can name the assistant too.
+/// four. Each phrase names the app (`applicationName`); 打开助手 asks which assistant next (a
+/// phrase with the assistant in it would need a key path to the intent's main-actor parameter).
 nonisolated struct ShionAppShortcuts: AppShortcutsProvider {
     @AppShortcutsBuilder
     static var appShortcuts: [AppShortcut] {
@@ -163,9 +174,8 @@ nonisolated struct ShionAppShortcuts: AppShortcutsProvider {
         AppShortcut(
             intent: OpenAssistantIntent(),
             phrases: [
-                "用\(.applicationName)打开\(\.$target)",
-                "在\(.applicationName)里打开\(\.$target)",
                 "用\(.applicationName)打开助手",
+                "在\(.applicationName)里打开助手",
             ],
             shortTitle: "打开助手",
             systemImageName: "person.crop.circle"

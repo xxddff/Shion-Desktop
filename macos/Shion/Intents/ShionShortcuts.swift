@@ -1,6 +1,5 @@
 import AppKit
 import Foundation
-import SwiftUI
 
 /// What Shortcuts, Siri and Spotlight do in Shion (ShionIntents.swift), on the main window's own
 /// store. Nothing goes out without a server Shion is signed in to and connected with; each action
@@ -202,18 +201,5 @@ enum IntentOutcome {
     static func note(_ said: String, value: JSONValue = .null) {
         self.said = said
         self.value = value
-    }
-}
-
-/// On the window's root: Siri learns the assistants' names for 「用 Shion 打开…」 whenever the
-/// server's list changes. Not in screenshot and test runs, which keep the system out of it.
-struct ShortcutsRoot: ViewModifier {
-    @Environment(AppStore.self) private var store
-
-    func body(content: Content) -> some View {
-        content.onChange(of: store.live ? store.bots.map(\.name) : [], initial: true) {
-            guard !LaunchOptions.current.snapshot else { return }
-            ShionAppShortcuts.updateAppShortcutParameters()
-        }
     }
 }

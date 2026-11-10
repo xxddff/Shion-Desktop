@@ -18,9 +18,8 @@ struct ShionApp: App {
     var body: some Scene {
         WindowGroup("Shion", id: "main") {
             RootView()
-                // a notification's click lands here (Landing.swift); Siri learns the assistants
+                // a notification's click lands here (Landing.swift)
                 .modifier(LandingRoot())
-                .modifier(ShortcutsRoot())
                 .environment(store)
                 .environment(jump)
                 .preferredColorScheme(LaunchOptions.current.colorScheme)
