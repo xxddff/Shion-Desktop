@@ -57,8 +57,9 @@ tunnel is down and every request gets Cloudflare's 502:
              was admitted, the first time; the picture is cleared from the staging folder meanwhile,
              as Hermes's cache does, so the same submission comes back refused (fake_media.py) and
              the picture goes up again, under a new id
-  跟不上     40 parts 0.25 s apart; after the 5th the socket's subscription is retired with a
-             session.replay_gap, the socket kept: nothing drops, Shion catches up on the same socket
+  跟不上     40 parts 0.25 s apart; the 6th does not fit: the socket's subscription is retired and
+             it gets a session.replay_gap instead, the socket kept. Nothing drops; the 6th part is
+             only in the kept frames, so Shion has it from its replay on the same socket
 
 Stdlib only.
 """
@@ -525,15 +526,21 @@ def lagging(turn):
     begin(turn)
     for n in range(1, 41):
         time.sleep(0.25)
+        if n == 6:
+            # the 6th does not fit: the subscription goes in its place, and the part reaches only the
+            # kept frames, so Shion has it from its replay or not at all
+            with bus:
+                watchers.get(turn["session_id"], {}).pop(turn["handler"], None)
         say(turn, f"第{n}节。")
-        if n == 5:
+        if n == 6:
             retire(turn["handler"], turn["session_id"])
     end(turn)
 
 
 def retire(handler, session_id):
     """The owner gives up on a viewer that cannot keep up: its subscription goes, its socket stays,
-    and it gets one session.replay_gap in place of what it missed (gateway/session_events.py)."""
+    and it gets one session.replay_gap in place of the frame that did not fit, naming the newest
+    (gateway/session_events.py publish's overflow)."""
     with bus:
         watchers.get(session_id, {}).pop(handler, None)
         found = stream(session_id)
