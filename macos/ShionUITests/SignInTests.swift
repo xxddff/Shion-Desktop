@@ -269,6 +269,56 @@ final class SignInTests: XCTestCase {
         note(notes.joined(separator: "\n"), "signin-inspector")
     }
 
+    /// The demo's 詩音 chat, at its end: ⌘↑ to its top (Home if the key does not move it, one turn of
+    /// the wheel all the way if neither does), and two seconds later it is still there; a jump to
+    /// the top is the reader's, not something to follow back down. No server.
+    @MainActor
+    func testJumpToTheTopStays() throws {
+        continueAfterFailure = true
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-ShionSnapshot", "YES",
+            "-ShionRoute", "chat-shion",
+            "-ShionAppearance", "light",
+            "-ApplePersistenceIgnoreState", "YES",
+        ]
+        app.launch()
+        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 20))
+        let window = app.windows.firstMatch
+        let transcript = element("transcript", in: app)
+        XCTAssertTrue(transcript.waitForExistence(timeout: 10), "no transcript")
+        Thread.sleep(forTimeInterval: 1.5)
+        var notes = ["opened: the scroll bar at \(barText(layout(of: transcript)))"]
+        XCTAssertGreaterThan(layout(of: transcript).bar ?? 0, 0.98, "the chat did not open at its end. \(notes[0])")
+        // the keys go to what has the keyboard: the transcript, once its margin is clicked
+        let margin = transcript.coordinate(withNormalizedOffset: CGVector(dx: 0.03, dy: 0.5))
+        margin.click()
+        var how = "⌘↑"
+        app.typeKey(.upArrow, modifierFlags: .command)
+        Thread.sleep(forTimeInterval: 0.5)
+        if (layout(of: transcript).bar ?? 1) > 0.02 {
+            how = "Home"
+            app.typeKey(.home, modifierFlags: [])
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+        // a first turn of the wheel sometimes moves nothing on the runner (see upward): up to three
+        for _ in 0..<3 where (layout(of: transcript).bar ?? 1) > 0.02 {
+            how = "the wheel, all the way in one turn"
+            margin.scroll(byDeltaX: 0, deltaY: 100_000)
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+        let jumped = layout(of: transcript).bar
+        Thread.sleep(forTimeInterval: 2)
+        let later = layout(of: transcript).bar
+        keep(window.screenshot(), "signin-10-jumped-to-top")
+        notes.append("to the top by \(how): the scroll bar at \(jumped.map { String(format: "%.3f", $0) } ?? "not there"), "
+                     + "two seconds later \(later.map { String(format: "%.3f", $0) } ?? "not there")")
+        note(notes.joined(separator: "\n"), "signin-jump")
+        XCTAssertLessThan(jumped ?? 1, 0.02, "nothing took the chat to its top. \(notes.last ?? "")")
+        XCTAssertLessThan(later ?? 1, 0.02, "the chat went back down after a jump to its top. \(notes.last ?? "")")
+        app.terminate()
+    }
+
     /// Which sign of a wheel delta at `wheel` scrolls the chat back, from nudges each way watching
     /// the row `label`; nil when none moves it. The pointer rests there first, and the nudges grow
     /// from 40 to 80: on the runner a first nudge of 40 sometimes moves nothing, the pointer

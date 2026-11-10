@@ -75,16 +75,13 @@ struct ChatView: View {
                         .onScrollGeometryChange(for: EndGap.self) { geometry in
                             EndGap(below: geometry.contentSize.height - geometry.visibleRect.maxY,
                                    height: geometry.contentSize.height,
-                                   top: geometry.contentOffset.y + geometry.contentInsets.top,
                                    container: geometry.containerSize.height)
                         } action: { old, new in
-                            // not the reader either: the visible part changed size (the window,
-                            // or the page set up again by its host, as a split view with an
-                            // inspector does as the page opens), or what shows went back to the
-                            // top in one go from the end. Followed, it goes back to the end
-                            let moved = abs(new.container - old.container) > 1
-                                || (old.below <= 40 && new.top <= 1 && old.top - new.top > 100)
-                            if follow.on, moved {
+                            // not the reader either: the visible part changed height (the window,
+                            // the composer, the page's host). Followed, it goes back to the end. A
+                            // jump to the top in one go (Home, ⌘↑, the scroll bar) is the reader's
+                            // and stays where it went
+                            if follow.on, abs(new.container - old.container) > 1 {
                                 toEnd(lines, with: reader)
                             } else if new.height == old.height {
                                 follow.on = new.below <= 40
@@ -476,12 +473,10 @@ nonisolated extension EnvironmentValues {
     }
 }
 
-/// How far the content goes on below what shows, how tall it is, how far down it what shows
-/// starts, and how tall what shows is.
+/// How far the content goes on below what shows, how tall it is, and how tall what shows is.
 private nonisolated struct EndGap: Equatable {
     let below: CGFloat
     let height: CGFloat
-    let top: CGFloat
     let container: CGFloat
 }
 
