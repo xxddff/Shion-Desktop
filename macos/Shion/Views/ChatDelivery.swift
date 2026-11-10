@@ -60,8 +60,8 @@ struct DeliveryMark: ViewModifier {
         .foregroundStyle(.secondary)
     }
 
-    /// Screenshot runs say the demo's times on the demo's day.
-    private var clock: Date { LaunchOptions.current.snapshot ? store.demoClock : Date() }
+    /// The real time with the server's data (live, or the last of it); the demo's day on the demo.
+    private var clock: Date { store.live || store.lastData.shown ? Date() : store.demoClock }
 }
 
 /// What waits in this chat for a connection, under what has been said, oldest first: it waits
