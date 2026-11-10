@@ -54,8 +54,13 @@ nonisolated struct StoredBot: Codable, Sendable {
     var name: String
     var title: String
     var chief: Bool
-    /// Its place in Palette.hues; nil for 詩音's accent.
+    /// Its place in Palette.hues; nil for 总秘书's accent.
     var hue: Int?
+    /// Bot Mode's colour as it wrote it (`#rrggbb`, `hsl(…)`), when it set one: it wins over `hue`.
+    var color: String?
+    /// Bot Mode's avatar shape, and whether the profile has a picture (BotLook.swift).
+    var shape: String?
+    var picture: Bool?
 }
 
 nonisolated struct StoredItem: Codable, Sendable {
@@ -224,7 +229,9 @@ extension AppStore {
         let server = serverSettings.trimmed.signInServer
         let previous = lastData.file?.server == server ? lastData.file : nil
         var file = LastDataFile(server: server, savedAt: Date())
-        file.bots = bots.map { StoredBot($0) }
+        file.bots = bots.map { bot in
+            StoredBot(bot, color: roster.profiles.first { $0.name == bot.id }?.color)
+        }
         var pages = previous?.chats ?? [:]
         for bot in bots {
             let items = (chats[bot.id] ?? []).filter { !$0.streaming }
@@ -316,15 +323,18 @@ extension AppStore {
 // MARK: - to and from the app's own types
 
 extension StoredBot {
-    init(_ bot: Bot) {
+    /// `color`: Bot Mode's, from the bot's profile (Roster), kept only when Shion can read it.
+    init(_ bot: Bot, color: String? = nil) {
         self.init(id: bot.id, name: bot.name, title: bot.title, chief: bot.chief,
-                  hue: bot.chief ? nil : Palette.hues.firstIndex(of: bot.hue))
+                  hue: bot.chief ? nil : Palette.hues.firstIndex(of: bot.hue),
+                  color: color.flatMap { BotLook.color($0) == nil ? nil : $0 },
+                  shape: bot.shape, picture: bot.hasPicture ? true : nil)
     }
 
     var bot: Bot {
         Bot(id: id, name: name, title: title, chief: chief,
-            hue: hue.map { Palette.hues[$0 % Palette.hues.count] } ?? Palette.accent,
-            status: .idle, statusNote: "")
+            hue: color.flatMap { BotLook.color($0) } ?? hue.map { Palette.hues[$0 % Palette.hues.count] } ?? Palette.accent,
+            status: .idle, statusNote: "", shape: shape, hasPicture: picture ?? false)
     }
 }
 

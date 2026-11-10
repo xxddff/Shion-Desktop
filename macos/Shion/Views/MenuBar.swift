@@ -1,15 +1,15 @@
 import KeyboardShortcuts
 import SwiftUI
 
-/// The status item: 詩音's mark in outline (a template image, like other menu bar icons) and the
-/// next thing on the calendar.
+/// The status item: 总秘书's mark in outline (a template image, like other menu bar icons) and
+/// the next thing on the calendar.
 struct MenuBarLabel: View {
     let store: AppStore
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         HStack(spacing: 4) {
-            Image(nsImage: MenuBarIcon.image)
+            Image(nsImage: MenuBarIcon.image(store.chief?.initial ?? "詩"))
             if let next = store.nextEvent {
                 Text("\(Fmt.hm(next.start)) \(next.title.replacing(#/ 第\d+回/#, with: ""))")
             }
@@ -26,13 +26,22 @@ struct MenuBarLabel: View {
 }
 
 enum MenuBarIcon {
-    /// A template image, so the menu bar tints it.
-    static let image: NSImage = render()
+    /// Template images, so the menu bar tints them: one for each character 总秘书 has had.
+    private static var made: [String: NSImage] = [:]
+
+    static func image(_ initial: String) -> NSImage {
+        if let image = made[initial] {
+            return image
+        }
+        let image = render(initial)
+        made[initial] = image
+        return image
+    }
 
     /// Rendered from a view of this module: an opaque `some View` built inline here made the
     /// compiler warn that its conformance might be isolated elsewhere (#IsolatedConformances).
-    private static func render() -> NSImage {
-        let renderer = ImageRenderer(content: MenuBarMark())
+    private static func render(_ initial: String) -> NSImage {
+        let renderer = ImageRenderer(content: MenuBarMark(initial: initial))
         renderer.scale = 2
         let image = renderer.nsImage ?? NSImage(size: NSSize(width: 16, height: 16))
         image.isTemplate = true
@@ -40,10 +49,12 @@ enum MenuBarIcon {
     }
 }
 
-/// 「詩」 in a ring.
+/// 总秘书's first character in a ring.
 private struct MenuBarMark: View {
+    let initial: String
+
     var body: some View {
-        Text("詩")
+        Text(initial)
             .font(.system(size: 9.5, weight: .bold))
             .frame(width: 16, height: 16)
             .overlay(Circle().strokeBorder(lineWidth: 1.2))
@@ -107,7 +118,7 @@ struct MenuBarPanel: View {
             } label: {
                 HStack(spacing: 8) {
                     Mark(size: 18)
-                    Text("跟詩音说…").foregroundStyle(.secondary)
+                    Text("跟\(store.chiefName)说…").foregroundStyle(.secondary)
                     Spacer()
                     if let shortcut = QuickAsk.shared.shortcut {
                         Text(shortcut.description)

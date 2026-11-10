@@ -76,7 +76,7 @@ struct SettingsView: View {
                 }
                 Toggle(isOn: $store.focusCheck) {
                     Text("专注检查")
-                    Text("发给詩音：此刻的计划、偏离了几分钟、在做哪类事。不发：窗口标题、应用名、本机的窗口记录。在本机读窗口标题，需要辅助功能权限。")
+                    Text("发给\(store.chiefName)：此刻的计划、偏离了几分钟、在做哪类事。不发：窗口标题、应用名、本机的窗口记录。在本机读窗口标题，需要辅助功能权限。")
                 }
             }
 

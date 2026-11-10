@@ -33,6 +33,10 @@ struct Bot: Identifiable, Hashable {
     let hue: Color
     var status: BotStatus
     var statusNote: String
+    /// Bot Mode's avatar shape, when it set one (BotLook.swift).
+    var shape: String? = nil
+    /// The profile has Bot Mode's avatar picture (AvatarPictures holds it once read).
+    var hasPicture = false
 
     var initial: String { String(name.prefix(1)) }
 }

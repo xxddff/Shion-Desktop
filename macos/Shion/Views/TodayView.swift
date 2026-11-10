@@ -35,7 +35,7 @@ struct TodayView: View {
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 10) {
                 Mark(size: 22)
-                TextField("跟詩音说：「把实验报告挪到明天」", text: $draft)
+                TextField("跟\(store.chiefName)说：「把实验报告挪到明天」", text: $draft)
                     .textFieldStyle(.plain)
                     .disabled(store.readOnly)
                     .font(.system(size: 14))

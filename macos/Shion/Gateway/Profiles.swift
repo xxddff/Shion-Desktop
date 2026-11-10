@@ -114,6 +114,8 @@ struct ProfileRow: Identifiable, Equatable {
     let botsMeta: [String: JSONValue]
     /// That section's revision: `profiles.configure` writes it only while it is still this one.
     let botsRevision: Int
+    /// Bot Mode gave it an avatar picture (`profiles.get_asset`).
+    let hasAvatar: Bool
 
     var id: String { name }
 
@@ -129,10 +131,15 @@ struct ProfileRow: Identifiable, Equatable {
             botsMeta = [:]
         }
         botsRevision = row["ui_meta_revisions"]?["hermes-bots"]?.int ?? 0
+        hasAvatar = row["has_avatar"]?.bool == true
     }
 
     /// Bot Mode's title, if it has one.
     var title: String { botsMeta["title"]?.string ?? "" }
+
+    /// Bot Mode's avatar colour and shape, if it set them (BotLook.swift reads them).
+    var color: String { botsMeta["color"]?.string ?? "" }
+    var shape: String { botsMeta["shape"]?.string ?? "" }
 
     /// The name Shion shows: Bot Mode's title, then the profile's display name, then its id.
     var shownName: String {

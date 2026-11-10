@@ -631,7 +631,7 @@ class Handler(BaseHTTPRequestHandler):
     def rpc(self, request):
         method, params, rid = request.get("method", ""), request.get("params") or {}, request.get("id")
         if method != "gateway.ping":
-            log(f"  rpc {method} {json.dumps(params, ensure_ascii=False)[:160]}")
+            log(f"  rpc {method} {json.dumps(fake_profiles.loggable(method, params), ensure_ascii=False)[:160]}")
         if method == "prompt.submit" and set(params) - SUBMIT_KEYS:
             return self.refuse(rid, sorted(set(params) - SUBMIT_KEYS))
         if fake_control.handles(method, params):
