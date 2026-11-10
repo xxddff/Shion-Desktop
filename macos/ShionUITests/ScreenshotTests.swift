@@ -176,6 +176,34 @@ final class ScreenshotTests: XCTestCase {
         }
     }
 
+    /// ⌘F in 詩音's chat (demo): 「作业」 is in your message (purple) and in her reply below it; the
+    /// hit in view in the system's find yellow, the others in a paler one, light and dark.
+    @MainActor
+    func testFind() throws {
+        continueAfterFailure = true
+        for appearance in ["light", "dark"] {
+            let app = launch(route: "chat-shion", appearance: appearance)
+            let window = app.windows.firstMatch
+            guard window.waitForExistence(timeout: 20) else {
+                XCTFail("No window for find (\(appearance))")
+                app.terminate()
+                continue
+            }
+            Thread.sleep(forTimeInterval: 1)
+            app.typeKey("f", modifierFlags: .command)
+            let field = window.descendants(matching: .any).matching(identifier: "find-field").firstMatch
+            if field.waitForExistence(timeout: 5) {
+                field.click()
+                field.typeText("作业")
+                Thread.sleep(forTimeInterval: 1)
+                keep(window.screenshot(), name: "find-\(appearance)")
+            } else {
+                XCTFail("⌘F did not open the find bar (\(appearance))")
+            }
+            app.terminate()
+        }
+    }
+
     /// The ⌥Space window with a sentence and 詩音's answer in it (demo), then empty from the 前往
     /// menu, with what it says when no server is connected; ⌘K over the main window, a search,
     /// ↓ and Return; ⌘1…⌘7. Whole screen for the window, which floats over the others.
