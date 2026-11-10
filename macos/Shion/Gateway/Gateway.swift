@@ -418,7 +418,9 @@ final class Gateway {
         retry = Task { [weak self] in
             try? await Task.sleep(for: .seconds(delay))
             guard !Task.isCancelled, let self, self.wanted, self.phase != .online, self.phase != .connecting else { return }
-            await self.open(isReconnect: true)
+            // the dial gets a task of its own: open() cancels the retry, and from in here that
+            // would cancel the dial too (its requests failing at once, never sent)
+            self.redial()
         }
     }
 
