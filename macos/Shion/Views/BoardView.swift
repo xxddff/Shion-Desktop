@@ -49,6 +49,15 @@ struct BoardView: View {
                 selection = nil
                 showInspector = false
             }
+            // a card asked for from elsewhere (a notification, 等你确认): open it once its board is up
+            .task(id: "\(store.board.revealing?.id ?? "")|\(store.board.slug ?? "")|\(items.count)") {
+                guard let wanted = store.board.revealing,
+                      !store.board.active || wanted.board == nil || wanted.board == store.board.slug,
+                      items.contains(where: { $0.id == wanted.id })
+                else { return }
+                store.board.revealing = nil
+                open(wanted.id)
+            }
     }
 
     @ViewBuilder
@@ -247,7 +256,8 @@ struct BoardCard: View {
 }
 
 /// A card's detail: what it is, what it is waiting on or delivered, its comments, what comes before
-/// and after it, and each run. The id and the board go at the bottom, in small type.
+/// and after it, and each run. The id and the board go at the bottom, in small type. The card may
+/// be on another board than the board page's (an assistant's 工作记录 opens cards from all).
 struct BoardInspector: View {
     @Environment(AppStore.self) private var store
     let item: BoardItem
@@ -256,17 +266,22 @@ struct BoardInspector: View {
 
     var body: some View {
         let live = store.board.active
-        let task = store.board.task(item.id)
-        let detail = store.board.details[item.id]
+        let task = store.board.task(item.id, on: item.board)
+        let detail = store.board.detail(item.id, on: item.board)
         let bot = item.assignee.flatMap { store.bot($0) }
         let now = live ? store.board.serverNow : store.now
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(spacing: 8) {
-                        CardStateTag(status: item.group)
-                        if store.boardLabel(item.status) != item.group.label {
-                            Text(store.boardLabel(item.status)).font(.t12).foregroundStyle(.secondary)
+                        if archived {
+                            // only 工作记录 opens an archived card
+                            Text("已归档").font(.t12).foregroundStyle(.secondary)
+                        } else {
+                            CardStateTag(status: item.group)
+                            if store.boardLabel(item.status) != item.group.label {
+                                Text(store.boardLabel(item.status)).font(.t12).foregroundStyle(.secondary)
+                            }
                         }
                     }
                     Text(item.title)
@@ -287,26 +302,28 @@ struct BoardInspector: View {
                         .textSelection(.enabled)
                 }
 
-                if item.group == .waiting || item.group == .queued || !live {
+                if item.group == .waiting || (item.group == .queued && !archived) || !live {
                     Callout(text: item.line, warm: item.group == .waiting)
                 }
-                if live, item.status == "done" || item.status == "review",
+                if live, item.status == "done" || item.status == "review" || archived,
                    let delivered = detail?.summary ?? detail?.result ?? task?.latestSummary ?? task?.result {
                     Callout(text: delivered, warm: false)
                 }
 
                 if live {
-                    comments(detail, now: now)
+                    comments(detail, waiting: task.map { $0.status == "blocked" || BoardWork.looped($0) } ?? false, now: now)
                     if let detail, !detail.parents.isEmpty || !detail.children.isEmpty {
                         links(detail)
                     }
                     if let detail, !detail.runs.isEmpty {
-                        runs(detail)
+                        runs(detail.runs)
                     }
                     Text(technical)
                         .font(.t11)
                         .foregroundStyle(.tertiary)
                         .textSelection(.enabled)
+                } else if !store.demoRuns(item.id).isEmpty {
+                    runs(store.demoRuns(item.id))
                 }
             }
             .padding(20)
@@ -315,6 +332,8 @@ struct BoardInspector: View {
         .inspectorColumnWidth(min: 240, ideal: 280, max: 360)
         .accessibilityIdentifier("card-inspector")
     }
+
+    private var archived: Bool { item.status == KanbanWorkflow.archived }
 
     private func meta(bot: Bot?, task: KanbanTask?, now: Date) -> String {
         var parts = ["\(bot?.name ?? item.assignee ?? "还没有人") 负责"]
@@ -329,7 +348,7 @@ struct BoardInspector: View {
 
     private var technical: String {
         var parts = ["编号 \(item.id)"]
-        if let board = store.board.currentBoard {
+        if let board = store.board.boardInfo(item.board) {
             parts.append("看板 \(board.slug)")
         }
         if let assignee = item.assignee {
@@ -338,9 +357,11 @@ struct BoardInspector: View {
         return parts.joined(separator: " · ")
     }
 
+    /// `waiting`: blocked, or moved to triage after it stopped on the same thing again; a comment
+    /// then lets it go on.
     @ViewBuilder
-    private func comments(_ detail: KanbanDetail?, now: Date) -> some View {
-        let blocked = item.status == "blocked"
+    private func comments(_ detail: KanbanDetail?, waiting: Bool, now: Date) -> some View {
+        let blocked = waiting
         VStack(alignment: .leading, spacing: 10) {
             SectionTitle(title: "评论", count: detail?.comments.count)
             ForEach(detail?.comments ?? []) { comment in
@@ -371,6 +392,8 @@ struct BoardInspector: View {
                     .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     .accessibilityIdentifier("card-comment-send")
             }
+            // the last data, or the connection down: a comment waits for the server
+            .disabled(store.readOnly)
         }
     }
 
@@ -379,7 +402,8 @@ struct BoardInspector: View {
         guard !text.isEmpty else { return }
         draft = ""
         let id = item.id
-        Task { await store.board.comment(id, text, resume: resume) }
+        let board = item.board
+        Task { await store.board.comment(id, text, resume: resume, on: board) }
     }
 
     private func links(_ detail: KanbanDetail) -> some View {
@@ -409,16 +433,16 @@ struct BoardInspector: View {
         .buttonStyle(.plain)
     }
 
-    private func runs(_ detail: KanbanDetail) -> some View {
+    private func runs(_ runs: [KanbanRun]) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             SectionTitle(title: "经过")
-            ForEach(Array(detail.runs.enumerated()), id: \.element.id) { index, run in
+            ForEach(Array(runs.enumerated()), id: \.element.id) { index, run in
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 8) {
                         Text("第 \(index + 1) 次").font(.t12.weight(.medium))
-                        Text(span(run)).font(.t12).monospacedDigit().foregroundStyle(.secondary)
+                        Text(run.spanText).font(.t12).monospacedDigit().foregroundStyle(.secondary)
                         Spacer(minLength: 4)
-                        Text(outcome(run))
+                        Text(run.outcomeText)
                             .font(.t12)
                             .foregroundStyle(run.outcome == "blocked" ? Palette.warm : Color.secondary)
                     }
@@ -431,27 +455,6 @@ struct BoardInspector: View {
                     }
                 }
             }
-        }
-    }
-
-    private func span(_ run: KanbanRun) -> String {
-        guard let start = run.startedAt else { return "" }
-        guard let end = run.endedAt else { return "\(Fmt.hm(start)) 开始" }
-        return "\(Fmt.hm(start))–\(Fmt.hm(end))"
-    }
-
-    private func outcome(_ run: KanbanRun) -> String {
-        switch run.outcome ?? "" {
-        case "": return run.endedAt == nil ? "进行中" : "结束了"
-        case "completed": return "做完了"
-        case "blocked": return "停下来等你"
-        case "crashed": return "中途出错"
-        case "timed_out": return "超时了"
-        case "reclaimed": return "收回了"
-        case "gave_up": return "放弃了"
-        case "spawn_failed": return "没能开始"
-        case "review_requested", "review": return "交给你检查"
-        case let other: return other
         }
     }
 }
