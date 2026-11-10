@@ -11,7 +11,10 @@ extension XCTestCase {
     @MainActor
     func bringIntoView(_ element: XCUIElement, in window: XCUIElement, atTop: Bool = false) -> Bool {
         guard element.waitForExistence(timeout: 5) else { return false }
-        let area = window.scrollViews.firstMatch.exists ? window.scrollViews.firstMatch : window
+        // the scroll view the element is in: a main window's first one is the sidebar's
+        let x = element.frame.midX
+        let area = window.scrollViews.allElementsBoundByIndex.first { $0.frame.minX <= x && x <= $0.frame.maxX }
+            ?? (window.scrollViews.firstMatch.exists ? window.scrollViews.firstMatch : window)
         let toolbar = window.toolbars.firstMatch
         var up: CGFloat = -1  // the sign of a delta that moves the page up
         var signKnown = false

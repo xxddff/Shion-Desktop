@@ -128,8 +128,8 @@ struct ScreenTimeSection: View {
 }
 
 /// The day's minutes by kind, then the apps used most: ranked bars in one quiet colour (purple,
-/// orange and red mean something else here), the time at each bar's end, no axis to read off.
-/// One series each, so no legend: the headings say what they are.
+/// orange and red mean something else here), each with its name above it and its time at its end,
+/// no axis to read off. One series each, so no legend: the headings say what they are.
 struct UsageChart: View {
     let usage: UsageDay
     /// How many apps are listed.
@@ -168,16 +168,25 @@ struct UsageChart: View {
         .accessibilityIdentifier("usage-chart")
     }
 
+    /// Each row's band: its name, a little gap, the bar in the middle, the gap to the next name.
+    private static let band: CGFloat = 44
+
     private func bars(_ rows: [Row], named name: String, identifier: String) -> some View {
         let longest = Double(rows.map(\.seconds).max() ?? 0) / 60
         return Chart(rows) { row in
             BarMark(
                 x: .value("分钟", Double(row.seconds) / 60),
-                y: .value("名称", row.label),
-                height: .fixed(14)
+                y: .value("名称", row.id),
+                height: .fixed(10)
             )
             .foregroundStyle(Self.bar)
             .cornerRadius(3)
+            // the name over the bar's start, the time at its end
+            .annotation(position: .top, alignment: .leading, spacing: 3) {
+                Text(row.label)
+                    .font(.t12)
+                    .lineLimit(1)
+            }
             .annotation(position: .trailing, alignment: .leading, spacing: 6) {
                 Text(UsageDay.duration(row.seconds))
                     .font(.t12)
@@ -186,14 +195,10 @@ struct UsageChart: View {
             }
         }
         .chartXAxis(.hidden)
-        .chartYAxis {
-            AxisMarks(position: .leading) { _ in
-                AxisValueLabel()
-            }
-        }
+        .chartYAxis(.hidden)
         // room at the end of the longest bar for its time
         .chartXScale(domain: 0...max(1, longest * 1.3))
-        .frame(height: CGFloat(rows.count) * 26)
+        .frame(height: CGFloat(rows.count) * Self.band)
         // one element for VoiceOver (and the tests): every row and its time
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(name)
