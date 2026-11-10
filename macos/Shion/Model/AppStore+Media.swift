@@ -302,6 +302,8 @@ extension AppStore {
                 picture.path.map { ["path": .string($0), "mime": .string(picture.mime)] }
             })
         }
+        // just after a reconnect, Hermes takes it once the chat is attached again (AppStore+Reconnect.swift)
+        await waitForChat(botId)
         do {
             try await gateway.call("prompt.submit", .object(params))
         } catch GatewayError.rpc(_, let message, let reason) where !again && !pictures.isEmpty && (reason ?? message) == "invalid_params" {
