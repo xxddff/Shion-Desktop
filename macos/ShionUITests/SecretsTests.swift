@@ -50,19 +50,21 @@ final class SecretsTests: XCTestCase {
             return XCTFail("Not connected: \(state.label) / \(String(describing: state.value))")
         }
         app.typeKey("w", modifierFlags: .command)
+        // from here a check that fails is kept and the rest still runs; only a missing card stops it
+        continueAfterFailure = true
 
         // 1. 通勤's chat (created on the stand-in), and a turn that asks for both at once
         let commute = element("bot-commute", in: app)
-        XCTAssertTrue(commute.waitForExistence(timeout: 10), "no assistants from the server")
+        guard commute.waitForExistence(timeout: 10) else { return XCTFail("no assistants from the server") }
         commute.click()
         XCTAssertTrue(waitForText("新的 Bot Chat。", in: app, timeout: 15), "通勤's chat did not open")
         say("装 ffmpeg（CI）", in: app)
         let sudoCard = element("secret-card-\(sudoId)", in: app)
         let keyCard = element("secret-card-\(keyId)", in: app)
-        XCTAssertTrue(sudoCard.waitForExistence(timeout: 15), "no card for the sudo password in the chat")
-        XCTAssertTrue(keyCard.waitForExistence(timeout: 10), "no card for NOTION_API_KEY in the chat")
+        let asked = sudoCard.waitForExistence(timeout: 15) && keyCard.waitForExistence(timeout: 10)
         Thread.sleep(forTimeInterval: 0.8)
         keep(window.screenshot(), "secrets-1-asked")
+        guard asked else { return XCTFail("no cards for the sudo password and NOTION_API_KEY in the chat") }
         // who wants it, what for, what it is; and how long Hermes still waits
         XCTAssertTrue(waitForText("要 sudo 密码", in: app, timeout: 2), "the sudo card does not say what it wants")
         XCTAssertTrue(waitForText("sudo apt-get install -y ffmpeg", in: sudoCard, timeout: 2), "the sudo card does not show the command")
@@ -75,9 +77,10 @@ final class SecretsTests: XCTestCase {
         // 2. both wait in 等你确认 too; the password is typed and sent there
         element("nav-confirm", in: app).click()
         let field = app.secureTextFields["secret-field-\(sudoId)"]
-        XCTAssertTrue(field.waitForExistence(timeout: 10), "the sudo password is not in 等你确认")
-        XCTAssertTrue(app.secureTextFields["secret-field-\(keyId)"].exists, "NOTION_API_KEY is not in 等你确认")
+        let listed = field.waitForExistence(timeout: 10)
         keep(window.screenshot(), "secrets-2-confirm")
+        guard listed else { return XCTFail("the sudo password is not in 等你确认") }
+        XCTAssertTrue(app.secureTextFields["secret-field-\(keyId)"].exists, "NOTION_API_KEY is not in 等你确认")
         field.click()
         field.typeText(password)
         // dots on screen, and to accessibility
@@ -106,8 +109,9 @@ final class SecretsTests: XCTestCase {
         // 4. one nobody answers: it expires, its field goes
         say("会过期（CI）", in: app)
         let late = app.secureTextFields["secret-field-\(lateId)"]
-        XCTAssertTrue(late.waitForExistence(timeout: 15), "no card for the request that expires")
+        let came = late.waitForExistence(timeout: 15)
         keep(window.screenshot(), "secrets-5-waiting")
+        guard came else { return XCTFail("no card for the request that expires") }
         XCTAssertTrue(waitForLabel(element("secret-state-\(lateId)", in: app), "已过期", timeout: 25), "the card does not say 已过期")
         XCTAssertFalse(late.exists, "the expired card kept its field")
         XCTAssertTrue(waitForText("没等到 sudo 密码", in: app, timeout: 10), "the turn did not end after the request expired")

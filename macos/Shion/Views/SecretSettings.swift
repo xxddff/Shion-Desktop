@@ -9,6 +9,7 @@ struct SecretSettings: View {
                 .font(.t12)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("secret-settings")
             Text("Shion 不显示、不保存、不记录你填的值：不进对话，不写进钥匙串、偏好设置或这台 Mac 上的任何文件。通知只写谁要一个密码或密钥，不能在通知里填。输入框不接自动填充，「密码」App 不会替你填，也不会提出保存；存在「密码」里的，复制过来粘贴。")
                 .font(.t12)
                 .foregroundStyle(.secondary)

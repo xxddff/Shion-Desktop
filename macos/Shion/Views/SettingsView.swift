@@ -47,8 +47,6 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
-            SecretSettings()
-
             Section {
                 if let limits = store.boardLimits {
                     LabeledContent("整台服务器同时进行") {
@@ -80,6 +78,8 @@ struct SettingsView: View {
                     Text("发给\(store.chiefName)：此刻的计划、偏离了几分钟、在做哪类事。不发：窗口标题、应用名、本机的窗口记录。在本机读窗口标题，需要辅助功能权限。")
                 }
             }
+
+            SecretSettings()
         }
         .formStyle(.grouped)
         // tall enough for the server and the board at once
