@@ -25,6 +25,8 @@ hermes_cli/dashboard_auth and the Canonical Gateway Protocol:
   /api/profiles, /api/mcp/…,   the assistants' profiles: create, title, SOUL, model, MCP
   /api/skills, /api/tools/…,   servers, skills, toolsets, config, delete (fake_profiles.py, which
   /api/config?profile=         also answers profiles.list, profiles.create and profiles.configure)
+  /api/chat/*-upload, /api/fs/*  pictures and files: uploads, file.attach, read-data-url,
+                               download, and the turns that hand them over (fake_media.py)
   prompt.submit "小窗：…"       詩音's answer to the ⌥Space window, streamed slowly (fake_quick.py)
 
 Like Hermes's contracts (extra="forbid"), session.resume, session.transcript and prompt.submit
@@ -52,6 +54,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fake_control  # noqa: E402  stop, retry, a failed turn and the server check (ChatControlTests)
 import fake_kanban  # noqa: E402  the kanban plugin's routes (BoardTests)
 import fake_profiles  # noqa: E402  the profiles' routes and RPCs (BotsTests)
+import fake_media  # noqa: E402  pictures and files (MediaTests)
 import fake_shion  # noqa: E402  the shion plugin's RPCs
 import fake_quick  # noqa: E402  詩音's answers to the ⌥Space window (QuickAskTests)
 
@@ -330,12 +333,25 @@ class Handler(BaseHTTPRequestHandler):
             return self.socket(query)
         if url.path.startswith(fake_kanban.PREFIX):
             return fake_kanban.route(self, "GET", url, query, {})
+        if url.path.startswith("/api/fs/"):
+            return fake_media.route(self, "GET", url, query)
+        self.answer(404, {"detail": "Not Found"})
+
+    def do_HEAD(self):
+        if not self.access():
+            return
+        url = urllib.parse.urlsplit(self.path)
+        if url.path.startswith("/api/fs/"):
+            return fake_media.route(self, "HEAD", url, dict(urllib.parse.parse_qsl(url.query)))
         self.answer(404, {"detail": "Not Found"})
 
     def do_POST(self):
         if not self.access():
             return
         url = urllib.parse.urlsplit(self.path)
+        if url.path in fake_media.POSTS:
+            # reads its own body: JSON with a picture, or multipart
+            return fake_media.route(self, "POST", url, dict(urllib.parse.parse_qsl(url.query)))
         body = self.body()
         if url.path == "/auth/password-login":
             return self.password_login(body)
@@ -416,6 +432,8 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.flush()
         log("  ws: open")
         self.close_connection = True
+        # sessions resumed or created on this connection: file.attach takes no others
+        self.subscribed = set()
         self.event("gateway.ready", None, {"session_authority": True, "heartbeat": True})
         try:
             while True:
@@ -698,6 +716,8 @@ class Handler(BaseHTTPRequestHandler):
             return fake_shion.handle(self, log, method, params, rid)
         if fake_profiles.handles_rpc(method):
             return fake_profiles.rpc(self, method, params, rid)
+        if method == "file.attach":
+            return fake_media.attach(self, rid, params)
         result = None
         if method == "client.capabilities":
             result = {"server_requests": True}
@@ -727,6 +747,7 @@ class Handler(BaseHTTPRequestHandler):
             if unknown:
                 return self.refuse(rid, unknown)
             result = self.snapshot(params.get("session_id", ""), params)
+            self.subscribed.add(params.get("session_id", ""))
             if params.get("session_id") == "sess-study" and "sess-study" not in approvals_raised:
                 # 课程 wants a login on its cloud desktop, a moment after Shion attaches
                 approvals_raised.add("sess-study")
@@ -750,6 +771,7 @@ class Handler(BaseHTTPRequestHandler):
                 transcripts.setdefault(session_id, [{"row_id": 1, "row_kind": "message", "role": "assistant",
                                                      "text": "新的 Bot Chat。", "timestamp": time.time()}])
             result = self.snapshot(session_id, {})
+            self.subscribed.add(session_id)
         elif method == "session.transcript":
             unknown = sorted(set(params) - TRANSCRIPT_KEYS)
             if unknown:
@@ -780,6 +802,9 @@ class Handler(BaseHTTPRequestHandler):
             unknown = sorted(set(params) - SUBMIT_KEYS)
             if unknown:
                 return self.refuse(rid, unknown)
+            # pictures, files and the turns that hand them over
+            if fake_media.submit(self, rid, params):
+                return
             self.send_json({"jsonrpc": "2.0", "id": rid, "result": {"accepted": True}})
             session_id, text = params.get("session_id"), params.get("text", "")
             if fake_quick.handles(text):
@@ -823,6 +848,7 @@ def main():
     args = parser.parse_args()
     fake_kanban.setup(log, valid_access)
     fake_profiles.setup(log, valid_access)
+    fake_media.setup(log, valid_access, transcripts, lock)
     fake_control.setup(log, transcripts, lock)
     server = Server(("127.0.0.1", args.port), Handler)
     log(f"stand-in Hermes on http://127.0.0.1:{args.port}")

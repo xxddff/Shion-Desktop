@@ -69,6 +69,8 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+            MediaSettings()
+
             Section("这台 Mac 发出去的") {
                 Toggle(isOn: $store.activityLog) {
                     Text("记录应用使用情况")

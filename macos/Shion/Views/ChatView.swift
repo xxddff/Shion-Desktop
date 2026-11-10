@@ -121,18 +121,29 @@ struct ChatView: View {
             await store.openChat(botId)
         }
         .safeAreaInset(edge: .bottom) {
-            Composer(placeholder: "跟\(bot?.name ?? "")说…", text: $draft, send: {
-                // what one sends, and the reply to it, are followed down from wherever one was
-                follow.on = true
-                store.send(draft, to: botId)
-                draft = ""
-            }, stop: store.turnRunning(botId) ? { store.stopReply(botId) } : nil,
-               stopping: store.control.stopping.contains(botId))
+            // with what is about to go: pictures and files (AttachmentViews.swift)
+            ComposerBar(botId: botId) {
+                Composer(placeholder: "跟\(bot?.name ?? "")说…", text: $draft, canSend: store.canSend(botId, draft), send: {
+                    // what one sends, and the reply to it, are followed down from wherever one was;
+                    // a send that does not go (a picture still going up) leaves following as it was
+                    let following = follow.on
+                    follow.on = true
+                    if store.sendMessage(draft, to: botId) {
+                        draft = ""
+                    } else {
+                        follow.on = following
+                    }
+                }, stop: store.turnRunning(botId) ? { store.stopReply(botId) } : nil,
+                   stopping: store.control.stopping.contains(botId))
+            }
             .disabled(store.readOnly)
             .frame(maxWidth: 720)
             .padding(.horizontal, 40)
             .padding(.bottom, 16)
         }
+        // dropped and pasted pictures and files go to the composer
+        .chatAttachments(botId)
+        .environment(\.chatBotId, botId)
         .navigationTitle(bot?.name ?? "")
         .navigationSubtitle(bot?.title ?? "")
         .toolbar {
@@ -367,20 +378,12 @@ struct ChatRow: View {
                     .frame(maxWidth: .infinity)
             }
         case .user:
-            HStack {
-                Spacer(minLength: 80)
-                FoundText(item.text)
-                    .font(.t13)
-                    .foregroundStyle(Palette.onAccent)
-                    .textSelection(.enabled)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(Palette.accent, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            }
+            // with the pictures and files you sent (ChatMediaViews.swift)
+            UserMessage(item: item)
         case .assistant:
             AssistantMessage(item: item, bot: bot, showHead: showHead)
         case .tool:
-            ToolLine(text: item.text)
+            ToolCall(item: item)
         }
     }
 }
@@ -425,9 +428,12 @@ struct ToolRun: View {
             .accessibilityIdentifier("tool-run")
             if open {
                 ForEach(tools) { tool in
-                    ToolLine(text: tool.text)
+                    ToolCall(item: tool)
                         .padding(.leading, 18)
                 }
+            } else {
+                // the run's screenshots, small
+                RunShots(tools: tools)
             }
         }
     }
@@ -452,11 +458,16 @@ struct AssistantMessage: View {
             if item.text.isEmpty && item.streaming {
                 BusyDots()
             } else if item.streaming {
-                StreamingReply(id: item.id, text: item.text)
+                StreamingReply(id: item.id, text: ReplyMedia.streamingText(item.text))
             } else {
-                // parsed once per text (MarkdownCache); a block at a time selects
-                MarkdownView(blocks: MarkdownCache.shared.document(item.id, item.text).blocks)
+                // parsed once per text (MarkdownCache); a block at a time selects. What the reply
+                // hands over (MEDIA:, server paths, its pictures) is laid out under it
+                let reply = ReplyMediaCache.shared.parsed(item.id, item.text)
+                MarkdownView(blocks: MarkdownCache.shared.document(item.id, reply.text).blocks)
                     .textSelection(.enabled)
+                if !reply.media.isEmpty {
+                    DeliveredMedia(media: reply.media)
+                }
             }
             ReplyFooter(item: item, botId: bot?.id ?? "")
             if !todos.isEmpty {
@@ -476,6 +487,8 @@ struct AssistantMessage: View {
 struct Composer: View {
     let placeholder: String
     @Binding var text: String
+    /// Whether it can send now; nil: once there are words.
+    var canSend: Bool?
     let send: () -> Void
     /// While a turn runs: the stop button (⌘.) in place of send.
     var stop: (() -> Void)?
@@ -500,7 +513,7 @@ struct Composer: View {
                 }
                 .buttonStyle(.glassProminent)
                 .buttonBorderShape(.circle)
-                .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(!(canSend ?? !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
                 .accessibilityLabel("发送")
                 .accessibilityIdentifier("send")
             }

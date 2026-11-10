@@ -6,7 +6,8 @@ import XCTest
 /// .github/workflows/macos.yml), so the UI can be reviewed from pictures. The app pins its demo
 /// date and stills its animations in snapshot mode, so runs are comparable.
 final class ScreenshotTests: XCTestCase {
-    private let routes = ["today", "confirm", "todos", "calendar", "reports", "board", "desktop", "chat-shion", "chat-study", "chat-news"]
+    private let routes = ["today", "confirm", "todos", "calendar", "reports", "board", "desktop", "chat-shion", "chat-study",
+                          "chat-news", "chat-mail"]
 
     @MainActor
     func testEveryPage() throws {
@@ -184,6 +185,24 @@ final class ScreenshotTests: XCTestCase {
         return plain.exists ? plain : root.textViews.matching(exact).firstMatch
     }
 
+    /// The mail chat's composer holding what it is about to send: a picture and a file ready, a
+    /// picture going up, a file too big to send (`-ShionDemoDrafts YES`).
+    @MainActor
+    func testComposerAttachments() throws {
+        continueAfterFailure = true
+        for appearance in ["light", "dark"] {
+            let app = launch(route: "chat-mail", appearance: appearance, extra: ["-ShionDemoDrafts", "YES"])
+            let window = app.windows.firstMatch
+            if window.waitForExistence(timeout: 20) {
+                Thread.sleep(forTimeInterval: 1)
+                keep(window.screenshot(), name: "chat-mail-attachments-\(appearance)")
+            } else {
+                XCTFail("No window for the mail chat (\(appearance))")
+            }
+            app.terminate()
+        }
+    }
+
     /// Settings' 服务器体检, with the screenshot run's made-up results: nothing is dialled.
     @MainActor
     func testServerCheck() throws {
@@ -335,6 +354,37 @@ final class ScreenshotTests: XCTestCase {
             }
             app.terminate()
         }
+    }
+
+    /// Settings scrolled to 图片和文件.
+    @MainActor
+    func testMediaSettings() throws {
+        continueAfterFailure = true
+        let app = launch(route: "today", appearance: "light")
+        _ = app.windows.firstMatch.waitForExistence(timeout: 20)
+        app.typeKey(",", modifierFlags: .command)
+        let settings = app.windows.matching(NSPredicate(format: "identifier CONTAINS[c] 'settings'")).firstMatch
+        guard settings.waitForExistence(timeout: 5) else {
+            keep(XCUIScreen.main.screenshot(), name: "settings-media-screen")
+            return XCTFail("No Settings window")
+        }
+        // on its 服务器 tab, where the section is
+        if !settings.textFields["server-address"].waitForExistence(timeout: 1) {
+            selectTab("服务器", in: settings)
+        }
+        let usage = settings.descendants(matching: .any).matching(identifier: "media-cache").firstMatch
+        let form = settings.scrollViews.firstMatch
+        // which sign scrolls down is the runner's business: one way a few times, then the other
+        for delta in [-400.0, -400, -400, 400, 400, 400, 400, 400, 400] {
+            if usage.exists && usage.isHittable { break }
+            form.hover()
+            form.scroll(byDeltaX: 0, deltaY: delta)
+            Thread.sleep(forTimeInterval: 0.4)
+        }
+        Thread.sleep(forTimeInterval: 0.5)
+        keep(settings.screenshot(), name: "settings-media-light")
+        XCTAssertTrue(usage.exists, "no 图片和文件 section in Settings")
+        app.terminate()
     }
 
     /// Settings → 快捷键: the global shortcut's recorder, light and dark. Left there, Settings
