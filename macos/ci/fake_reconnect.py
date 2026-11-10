@@ -68,6 +68,7 @@ import os
 import socket
 import threading
 import time
+import unicodedata
 import uuid
 
 try:  # the run and revision a turn bumps, kept with the stop and retry module's where it is there
@@ -326,7 +327,9 @@ def submit(handler, params, rid):
         log(f"    exact retry of {submission}: the same admission ({known['status']}), no second turn")
         handler.send_json({"jsonrpc": "2.0", "id": rid, "result": receipt_of(known)})
         return True
-    words = said(text)
+    # read as written: XCUI's typing can give a character's compatibility ideograph (不 as U+F967)
+    plain = unicodedata.normalize("NFC", text)
+    words = said(plain)
     if words == PREFIX + "图和文件" and words not in gone:
         # sent as the connection went, before Hermes had it; its picture cleared meanwhile, so the
         # same submission sent again finds it gone, and the picture goes up again, a new submission
@@ -334,8 +337,8 @@ def submit(handler, params, rid):
         expire(params.get("attachments"))
         drop(handler, f"before {words!r} with its picture and file was admitted")
         return True
-    if text.startswith(PREFIX) and submission not in dropped:
-        what = text[len(PREFIX):].strip()
+    if plain.startswith(PREFIX) and submission not in dropped:
+        what = plain[len(PREFIX):].strip()
         if what in SCRIPTS:
             return scripted(handler, what, session_id, submission, text, profile, rid)
     if session_id in running:
