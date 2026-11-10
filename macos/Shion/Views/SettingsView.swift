@@ -82,9 +82,9 @@ struct SettingsView: View {
                 }
             }
 
-            LastDataSection()
-
             SecretSettings()
+
+            LastDataSection()
         }
         .formStyle(.grouped)
         // tall enough for the server and the board at once

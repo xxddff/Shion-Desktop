@@ -101,7 +101,8 @@ final class SecretScreenshotTests: XCTestCase {
     }
 
     /// Scrolls the window until `element` can be clicked (Form rows are there before they are in
-    /// view), then on the same way to the end: the section is the last one, so all of it shows.
+    /// view), then on the same way to the end: 没连上时 is the last section, and this one, just
+    /// above it, shows whole, clear of the runner's Dock over the window's bottom edge.
     @MainActor
     private func reveal(_ element: XCUIElement, in window: XCUIElement) -> Bool {
         guard element.waitForExistence(timeout: 5) else { return false }
