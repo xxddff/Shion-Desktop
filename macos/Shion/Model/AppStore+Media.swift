@@ -249,7 +249,7 @@ extension AppStore {
             send(text, to: botId)
             return true
         }
-        guard canSend(botId, text) else { return false }
+        guard !readOnly, canSend(botId, text) else { return false }
         let words = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard live else {
             let drafts = media.takeDrafts(botId)
@@ -259,21 +259,34 @@ extension AppStore {
         }
         guard let sessionId = sessions[botId] else { return false }
         let drafts = media.takeDrafts(botId)
-        chats[botId, default: []].append(ChatItem(id: UUID().uuidString, role: .user, at: Date(), text: words,
+        // the submission id names the item, as send's does: the turn's end says which row it was
+        // stored as, which 重试 needs (AppStore+Control.swift)
+        let id = UUID().uuidString
+        chats[botId, default: []].append(ChatItem(id: id, role: .user, at: Date(), text: words,
                                                   media: drafts.map(\.media)))
         Task {
             // Hermes keeps a sent picture for about a day; the Mac keeps its own for good
             for hash in drafts.filter({ $0.kind == .image }).compactMap(\.sha256) {
                 await media.disk.keep(hash)
             }
-            await submit(words, drafts, botId: botId, sessionId: sessionId, again: false)
+            await submit(words, drafts, botId: botId, sessionId: sessionId, submission: id, again: false)
         }
         return true
     }
 
+    /// Whether 重试 may ask a prompt again. Not one that took pictures: Hermes keeps them as image
+    /// parts of the stored row, which its own /retry will not replay and refuses before it rewinds
+    /// anything ("no replay protocol": agent/context_compressor_retry.py, retryable_user_text,
+    /// gateway/slash_commands_session.py); a rewind's receipt would hand back the words alone. The
+    /// files of a prompt are `@file:` lines in its words, which a retry sends again as they were.
+    static func retryable(_ prompt: ChatItem) -> Bool {
+        !prompt.media.contains { $0.kind == .image }
+    }
+
     /// The message as the official desktop words it: the files' references, one a line, a blank
     /// line, then your words; Hermes's own caption when only pictures go.
-    private func submit(_ words: String, _ drafts: [Draft], botId: String, sessionId: String, again: Bool) async {
+    private func submit(_ words: String, _ drafts: [Draft], botId: String, sessionId: String, submission: String,
+                        again: Bool) async {
         let refs = drafts.compactMap(\.ref).joined(separator: "\n")
         var body = [refs, words].filter { !$0.isEmpty }.joined(separator: "\n\n")
         let pictures = drafts.filter { $0.kind == .image }
@@ -282,7 +295,7 @@ extension AppStore {
         }
         var params: [String: JSONValue] = [
             "profile": .string(botId), "session_id": .string(sessionId), "text": .string(body),
-            "submission_id": .string(UUID().uuidString),
+            "submission_id": .string(submission),
         ]
         if !pictures.isEmpty {
             params["attachments"] = .array(pictures.compactMap { picture in
@@ -296,7 +309,8 @@ extension AppStore {
             guard let fresh = await uploadAgain(drafts, botId: botId) else {
                 return chatNote("没发出去：图片要重新上传，可是没传上去", in: botId)
             }
-            await submit(words, fresh, botId: botId, sessionId: sessionId, again: true)
+            // a new admission, so a new id: the refused one is not asked to change its pictures
+            await submit(words, fresh, botId: botId, sessionId: sessionId, submission: UUID().uuidString, again: true)
         } catch {
             chatNote("没发出去：\(error.localizedDescription)", in: botId)
         }

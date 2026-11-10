@@ -24,7 +24,8 @@ a temporary folder. Every route checks the bearer.
 Turns, by the words sent:
   - pictures arrive: the reply says what each is (format, size, whether it holds a location or other
     EXIF metadata), so the test sees what Shion made of the picture before sending it
-  - @file: references: the reply names each file and its size, as the server has it
+  - @file: references: the reply names each file and its size, as the server has it; the same words
+    again (a retry, once 重试 has rewound the turn) get a reply marked 「（重试）」
   - 「截个图（CI）」: a browser call whose tool.complete carries image_path; once Shion has read the
     screenshot, the stand-in clears it, as Hermes's 24-hour sweep would, so later the chat can only
     show the Mac's copy
@@ -35,6 +36,7 @@ Stdlib only.
 """
 import base64
 import hashlib
+import itertools
 import json
 import os
 import re
@@ -65,6 +67,8 @@ _valid = lambda token: False  # noqa: E731
 # second copy of them
 _transcripts, _transcript_lock = {}, threading.Lock()
 failed_once = set()  # files whose first file.attach was refused
+sent_texts = set()  # words with @file: lines seen before: a retry sends them again
+row_ids = itertools.count(2001)  # never one twice, rewound or not, as a database's ids
 # The files MediaTests pastes (names and sizes as MediaTests.swift expects them). The stand-in
 # makes them: the UI test runner is sandboxed and cannot write outside its own container, and
 # Shion would have to ask before reading another app's container. /tmp needs neither.
@@ -518,12 +522,15 @@ def submit(conn, rid, params):
         return True
     conn.send_json({"jsonrpc": "2.0", "id": rid, "result": {"accepted": True}})
     if "截个图（CI）" in text:
-        threading.Thread(target=screenshot_turn, args=(conn, session_id, profile, text), daemon=True).start()
+        threading.Thread(target=screenshot_turn, args=(conn, session_id, profile, params), daemon=True).start()
         return True
     if "把课件发给我（CI）" in text:
-        threading.Thread(target=media_turn, args=(conn, session_id, profile, text), daemon=True).start()
+        threading.Thread(target=media_turn, args=(conn, session_id, profile, params), daemon=True).start()
         return True
     files, words = refs(text, profile)
+    again = bool(files) and text in sent_texts
+    if files:
+        sent_texts.add(text)
     stored = text
     lines = []
     if taken:
@@ -542,36 +549,45 @@ def submit(conn, rid, params):
     if words and words != DEFAULT_CAPTION:
         lines.append(f"你说：{words}")
     reply = "\n\n".join(lines) if lines else "收到。"
-    with _transcript_lock:
-        rows = _transcripts.setdefault(session_id, [])
-        rows.append({"row_id": len(rows) + 2000, "row_kind": "message", "role": "user", "text": stored,
-                     "timestamp": time.time()})
-        rows.append({"row_id": len(rows) + 2000, "row_kind": "message", "role": "assistant", "text": reply,
-                     "timestamp": time.time()})
+    if again:
+        reply = "（重试）" + reply
+    ids = store_turn(session_id, [{"role": "user", "text": stored}, {"role": "assistant", "text": reply}])
     _log(f"    stored the user row as {stored!r}")
     conn.event("message.start", session_id, {})
     conn.event("message.delta", session_id, {"text": reply})
-    conn.event("message.complete", session_id, {"text": reply, "status": "complete"})
+    conn.event("message.complete", session_id, {"text": reply, "status": "complete",
+                                                "persisted_turn": persisted(params, ids)})
     return True
 
 
 def store_turn(session_id, rows):
+    """The rows a turn stores; the ids it gave the ones that have one (tool rows have none)."""
+    ids = []
     with _transcript_lock:
         stored = _transcripts.setdefault(session_id, [])
         for row in rows:
             if row.get("role") != "tool":
-                row["row_id"] = len(stored) + 2000
+                row["row_id"] = next(row_ids)
+                ids.append(row["row_id"])
             stored.append({"row_kind": "message", "timestamp": time.time(), **row})
+    return ids
 
 
-def screenshot_turn(conn, session_id, profile, text):
+def persisted(params, ids):
+    """message.complete's persisted_turn, as Hermes ends a turn (agent/persisted_turn_receipt.py):
+    the rows it stored, the prompt's first, and the submitter's own id for it."""
+    return {"row_ids": ids, "complete": True, "user_row_id": ids[0], "user_row_ids": ids[:1],
+            "final_assistant_row_id": ids[-1], "submission_id": params.get("submission_id")}
+
+
+def screenshot_turn(conn, session_id, profile, params):
     """A browser call that took a screenshot: image_path on tool.complete, as a local viewer turn has
     it (gateway/local_viewer_events.py); the transcript keeps the call without it."""
     call, name, context = "call-ci-shot", "browser_navigate", "ci.example/login（CI）"
     shot = write(server_path(profile, "cache", "screenshots", "ci-login.png"), png(640, 400, (230, 140, 60)))
     reply = "截好了：登录页上写着要两步验证。"
-    store_turn(session_id, [
-        {"role": "user", "text": text},
+    ids = store_turn(session_id, [
+        {"role": "user", "text": params.get("text", "")},
         {"role": "tool", "name": name, "context": context, "args": {"url": "https://ci.example/login"},
          "tool_call_id": call},
         {"role": "assistant", "text": reply},
@@ -586,25 +602,28 @@ def screenshot_turn(conn, session_id, profile, text):
             "tool_id": call, "name": name, "image_path": shot,
             "result": json.dumps({"ok": True, "screenshot_path": shot})})
         conn.event("message.delta", session_id, {"text": reply})
-        conn.event("message.complete", session_id, {"text": reply, "status": "complete"})
+        conn.event("message.complete", session_id, {"text": reply, "status": "complete",
+                                                    "persisted_turn": persisted(params, ids)})
         _log(f"  -> screenshot turn on {session_id}: image_path {shot}")
     except OSError:
         pass
 
 
-def media_turn(conn, session_id, profile, text):
+def media_turn(conn, session_id, profile, params):
     """A reply handing files over as a desktop session's assistant is told to (MEDIA:<path>, a line
     each), with a path written in passing and a web picture (a real one: the test clicks it)."""
     slides, chart, data = seed(profile)
     reply = (f"第8回的课件和这周的延误图都在这里：\n\nMEDIA:{slides}\nMEDIA:{chart}\n\n"
              f"原始数据我放在 {data} 了。\n\n![网上找的示例图](https://www.w3.org/Icons/w3c_home.png)")
-    store_turn(session_id, [{"role": "user", "text": text}, {"role": "assistant", "text": reply}])
+    ids = store_turn(session_id, [{"role": "user", "text": params.get("text", "")},
+                                  {"role": "assistant", "text": reply}])
     try:
         conn.event("message.start", session_id, {})
         for part in reply.split("\n\n"):
             time.sleep(0.2)
             conn.event("message.delta", session_id, {"text": part + "\n\n"})
-        conn.event("message.complete", session_id, {"text": reply, "status": "complete"})
+        conn.event("message.complete", session_id, {"text": reply, "status": "complete",
+                                                    "persisted_turn": persisted(params, ids)})
         _log(f"  -> media turn on {session_id}: {os.path.basename(slides)}, {os.path.basename(chart)}, written path")
     except OSError:
         pass

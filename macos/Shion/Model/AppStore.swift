@@ -195,7 +195,8 @@ final class AppStore {
         }
         // the submission id names the item: the turn's end says which row it was stored as
         let id = UUID().uuidString
-        chats[botId, default: []].append(ChatItem(id: id, role: .user, at: Date(), text: trimmed))
+        // as the transcript will show it: words a retry sends again can start with their files' `@file:` lines
+        chats[botId, default: []].append(Self.userItem(id: id, at: Date(), text: trimmed))
         let params: JSONValue = [
             "profile": .string(botId),
             "session_id": .string(sessionId),
