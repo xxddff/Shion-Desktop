@@ -26,7 +26,8 @@ struct ChatView: View {
 
     var body: some View {
         let bot = store.bot(botId)
-        let items = store.withAskCards(store.chats[botId] ?? [], of: botId)
+        // and under them, what was said while not connected, waiting (ChatDelivery.swift)
+        let items = store.withAskCards(store.chats[botId] ?? [], of: botId) + WaitingMessages.items(for: botId)
         let lines = ChatLine.lines(items, replying: store.replying.contains(botId))
         let found = find.found(in: lines)
         // older rows coming in above: where the row at the top of what shows was, from the layout
@@ -133,10 +134,11 @@ struct ChatView: View {
                     } else {
                         follow.on = following
                     }
-                }, stop: store.turnRunning(botId) ? { store.stopReply(botId) } : nil,
+                }, stop: store.turnRunning(botId) && !store.readOnly ? { store.stopReply(botId) } : nil,
                    stopping: store.control.stopping.contains(botId))
             }
-            .disabled(store.readOnly)
+            // not connected, what is said waits under the chat (AppStore+Reconnect.swift)
+            .disabled(store.readOnly && !store.waits(botId))
             .frame(maxWidth: 720)
             .padding(.horizontal, 40)
             .padding(.bottom, 16)
@@ -231,6 +233,8 @@ struct ChatView: View {
         switch line {
         case .item(let item):
             ChatRow(item: item, bot: bot, showHead: showsHead(lines, index))
+                // waiting, unsure or not sent (ChatDelivery.swift)
+                .modifier(DeliveryMark(item: item, botId: botId))
         case .tools(let id, let tools):
             ToolRun(tools: tools, open: openRuns.contains(id)) {
                 openRuns.formSymmetricDifference([id])

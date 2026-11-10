@@ -135,7 +135,9 @@ struct SecretCard: View {
                 .foregroundStyle(Palette.alert)
                 .fixedSize(horizontal: false, vertical: true)
         } else if !answerable {
-            Text(store.gateway.phase == .connecting ? "连接中…" : "未连接服务器")
+            // back online, the chat not attached again yet: its resume says whether this still waits
+            let phase = store.gateway.phase
+            Text(phase == .online || phase == .connecting || store.reconnecting ? "连接中…" : "未连接服务器")
                 .font(.t12)
                 .foregroundStyle(.secondary)
         }

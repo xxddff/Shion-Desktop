@@ -159,7 +159,7 @@ final class SecretsTests: XCTestCase {
         XCTAssertTrue(waitForText("sox 装好了（CI）", in: app, timeout: 15), "the password given after the reconnect did not reach the stand-in")
         Thread.sleep(forTimeInterval: 0.5)
         keep(window.screenshot(), "secrets-8-reconnected")
-        // the chat was read again after the reconnect; the lines are Shion's own and stay
+        // the chat caught up after the reconnect (replayed, or read again); the lines are Shion's own and stay
         XCTAssertTrue(waitForLabel(element("ask-outcome-\(sudoId)", in: app), "已提交", timeout: 5),
                       "the sudo password's line went with the reconnect")
         element("bot-study", in: app).click()

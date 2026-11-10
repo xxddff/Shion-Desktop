@@ -1,13 +1,16 @@
 import Foundation
 
-/// A sentence for 总秘书 from the ⌥Space window that has not gone out yet (no server was
-/// connected), and how waiting sentences read once they do. Foundation only, so the wording can
-/// be checked away from a Mac.
+/// A sentence that has not gone out yet (no server was connected): for 总秘书 from the ⌥Space
+/// window, or said in a chat of the main window. And how waiting sentences read once they do.
+/// Foundation only, so the wording can be checked away from a Mac.
 nonisolated struct QuickAskWaiting: Codable, Equatable, Identifiable, Sendable {
     let id: String
     let text: String
     /// When it was written.
     let at: Date
+    /// The chat of the main window it was said in; nil for the ⌥Space window's, which go to
+    /// whoever is 总秘书 when they go out.
+    var botId: String?
 
     /// Written longer ago than this, a sentence goes out with the time it was written:
     /// 「提醒我 5 分钟后出门」 two hours late is not what was meant.

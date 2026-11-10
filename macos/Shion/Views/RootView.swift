@@ -121,7 +121,8 @@ struct ConnectionFooter: View {
         SettingsLink {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
-                    Circle().fill(ConnectionState.color(store.gateway.phase)).frame(width: 7, height: 7)
+                    Circle().fill(store.reconnecting ? Palette.warm : ConnectionState.color(store.gateway.phase))
+                        .frame(width: 7, height: 7)
                     Text(store.serverSettings.host.isEmpty ? "未连接服务器" : store.serverSettings.host)
                         .font(.t12)
                         .lineLimit(1)
@@ -130,13 +131,15 @@ struct ConnectionFooter: View {
                         Text("示例数据").font(.t11).foregroundStyle(.tertiary)
                     }
                 }
-                // not connected, or not any more: the server's data as it last was, from when
-                if let note = store.lastDataNote {
+                // not connected, or not any more: the server's data as it last was, from when; while a
+                // connection that had worked is being got back, that, and when it is tried again
+                if let note = store.reconnectNote ?? store.lastDataNote {
                     Text(note)
                         .font(.t11)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .padding(.leading, 13)
+                        .accessibilityIdentifier("connection-note")
                 }
             }
             .padding(.horizontal, 16)

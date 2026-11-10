@@ -72,6 +72,7 @@ jobs:
             -derivedDataPath build/DerivedData \
             -only-testing:ShionUITests/ScreenshotTests \
             -only-testing:ShionUITests/LocalScreenshotTests \
+            -only-testing:ShionUITests/ReconnectScreenshotTests \
             -only-testing:ShionUITests/SecretScreenshotTests \
             -resultBundlePath build/Shots.xcresult \
             -quiet 2>&1 | tee -a build/xcodebuild.log
@@ -87,7 +88,7 @@ jobs:
           # would otherwise go to whichever test connects first, and BotsTests and BotPageTests change
           # its profiles
           failed=""
-          for test in SignInTests BoardTests BotsTests BotPageTests QuickAskTests ChatControlTests MediaTests LocalDataTests SecretsTests; do
+          for test in SignInTests BoardTests BotsTests BotPageTests QuickAskTests ChatControlTests MediaTests LocalDataTests ReconnectTests SecretsTests; do
             python3 -u ci/fake_hermes.py --port 8765 > "build/fake_hermes-$test.log" 2>&1 &
             standin=$!
             for attempt in 1 2 3 4 5 6 7 8 9 10; do
@@ -115,7 +116,7 @@ jobs:
             wait "$standin" 2>/dev/null || true
           done
           if [ -n "$failed" ]; then
-            echo "::warning title=End to end::failed:$failed; see the signin-*, board-*, bots-*, page-*, quick-*, chatctl-*, media-*, local-* and secrets-* screenshots and the fake_hermes-*.log files in the shots artifact"
+            echo "::warning title=End to end::failed:$failed; see the signin-*, board-*, bots-*, page-*, quick-*, chatctl-*, media-*, local-*, reconnect-* and secrets-* screenshots and the fake_hermes-*.log files in the shots artifact"
             exit 1
           fi
 
@@ -157,7 +158,7 @@ jobs:
         if: always()
         run: |
           mkdir -p build/shots
-          for bundle in Shots SignInTests BoardTests BotsTests BotPageTests QuickAskTests ChatControlTests MediaTests LocalDataTests SecretsTests; do
+          for bundle in Shots SignInTests BoardTests BotsTests BotPageTests QuickAskTests ChatControlTests MediaTests LocalDataTests ReconnectTests SecretsTests; do
             if [ -d "build/$bundle.xcresult" ]; then
               mkdir -p "build/export-$bundle"
               xcrun xcresulttool export attachments --path "build/$bundle.xcresult" --output-path "build/export-$bundle" \
@@ -170,7 +171,8 @@ jobs:
           out = 'build/shots'
           for folder in ('build/export-Shots', 'build/export-SignInTests', 'build/export-BoardTests', 'build/export-BotsTests',
                          'build/export-BotPageTests', 'build/export-QuickAskTests', 'build/export-ChatControlTests',
-                         'build/export-MediaTests', 'build/export-LocalDataTests', 'build/export-SecretsTests'):
+                         'build/export-MediaTests', 'build/export-LocalDataTests',
+                         'build/export-ReconnectTests', 'build/export-SecretsTests'):
               manifest = os.path.join(folder, 'manifest.json')
               if not os.path.exists(manifest):
                   continue

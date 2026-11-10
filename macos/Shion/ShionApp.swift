@@ -11,6 +11,8 @@ struct ShionApp: App {
         _store = State(initialValue: store)
         // the ⌥Space window sends through the same store as the main window
         QuickAsk.shared.attach(store)
+        // back from sleep or on another network, the connection is tried again at once
+        store.startReconnect()
     }
 
     var body: some Scene {
