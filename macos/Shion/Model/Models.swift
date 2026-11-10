@@ -67,6 +67,9 @@ struct CalEvent: Identifiable, Hashable {
     let start: Date
     let end: Date
     var place: String?
+    /// Its calendar's color, for this Mac's calendars (AppStore+Local.swift).
+    var tint: Color?
+    var allDay = false
 }
 
 /// Kanban columns: queued (todo/ready), running, waiting on you (blocked/review), done.
@@ -182,13 +185,6 @@ struct Report: Identifiable, Hashable {
     let date: Date
     let headline: String
     let blocks: [ReportBlock]
-}
-
-/// The focus check: what you planned to be doing now, and whether the window in front matches.
-struct FocusStatus: Hashable {
-    var planTitle: String
-    var plannedAt: Date
-    var onTrack: Bool
 }
 
 /// An assistant's own desktop on the VPS (Hermes Bot Screen).

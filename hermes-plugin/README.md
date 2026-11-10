@@ -50,7 +50,7 @@ Shion 连接所在的那个 profile（通常是默认 profile `~/.hermes`）不�
 for p in shion study commute mail news journal; do hermes -p $p plugins enable shion; done
 ```
 
-**3. 詩音的 profile 允许插件叫醒她。** 专注检查要用 `ctx.inject_message` 往詩音的 Bot Chat 里放一句话，Hermes 默认拒绝。只在 `shion` 这个 profile 的 `config.yaml`（`~/.hermes/profiles/shion/config.yaml`）里加：
+**3. 总秘书的 profile 允许插件叫醒它。** 专注检查要用 `ctx.inject_message` 往总秘书的 Bot Chat 里放一句话，Hermes 默认拒绝。总秘书是设置里的 `chief_profile`，默认 `shion`；只在这个 profile 的 `config.yaml`（默认是 `~/.hermes/profiles/shion/config.yaml`）里加：
 
 ```yaml
 plugins:
@@ -61,7 +61,7 @@ plugins:
       allow_gateway_injection: true
 ```
 
-代码里读的是 `plugins.entries.shion.allow_gateway_injection`，必须是 `true`（布尔值，不是字符串），读的是插件自己那个 profile 的配置（`PluginContext._gateway_injection_allowed`）。其他助手的 profile 不用开。
+代码里读的是 `plugins.entries.shion.allow_gateway_injection`，必须是 `true`（布尔值，不是字符串），读的是插件自己那个 profile 的配置（`PluginContext._gateway_injection_allowed`）。其他助手的 profile 不用开。在 Shion 里换了总秘书的话，Shion 会把 `chief_profile` 改成新总秘书（见下面「设置」），那个 profile 也要这样开，不然专注检查的报告会是 `woke: false, reason: "inject_refused"`。
 
 **4. 不用改别的配置。** 插件的工具集叫 `shion`：没用 `hermes tools` 存过工具选择的 profile，插件工具集默认就开着；存过的，`plugins enable` 会把它加回去（见 Hermes 用户文档的插件一节）。`plugins.isolation` 保持默认的 `in_process`（原因见「限制」）。
 

@@ -2,7 +2,8 @@ name: macOS app
 
 # Builds the app on macOS 27 / Xcode 27 and takes a screenshot of every page, light and dark,
 # then signs in through the browser sheet against a stand-in Hermes (macos/ci/fake_hermes.py) and
-# runs the board, the assistants and the passwords and keys they ask for against it.
+# runs the board, the assistants, this Mac's own data (made-up calendars and windows) and the
+# passwords and keys assistants ask for against it.
 # macOS runner minutes are limited: this only runs when the app or this file changes.
 # A downloadable Release build (Shion.dmg) is made on manual runs, or when the commit message
 # contains [package].
@@ -70,6 +71,7 @@ jobs:
             -destination 'platform=macOS' \
             -derivedDataPath build/DerivedData \
             -only-testing:ShionUITests/ScreenshotTests \
+            -only-testing:ShionUITests/LocalScreenshotTests \
             -only-testing:ShionUITests/SecretScreenshotTests \
             -resultBundlePath build/Shots.xcresult \
             -quiet 2>&1 | tee -a build/xcodebuild.log
@@ -77,7 +79,7 @@ jobs:
       # Real Cloudflare Access and a real Hermes are not on the runner: the stand-in plays both,
       # checks what Shion sends (Access headers, PKCE, the loopback redirect, the bearer) and logs
       # each request. A failure here warns, and the screenshots and the package still go out.
-      - name: Sign-in, board, assistants and media against a stand-in Hermes
+      - name: Sign-in, board, assistants, media and local data against a stand-in Hermes
         continue-on-error: true
         run: |
           set -o pipefail
@@ -85,7 +87,7 @@ jobs:
           # would otherwise go to whichever test connects first, and BotsTests and BotPageTests change
           # its profiles
           failed=""
-          for test in SignInTests BoardTests BotsTests BotPageTests QuickAskTests ChatControlTests MediaTests SecretsTests; do
+          for test in SignInTests BoardTests BotsTests BotPageTests QuickAskTests ChatControlTests MediaTests LocalDataTests SecretsTests; do
             python3 -u ci/fake_hermes.py --port 8765 > "build/fake_hermes-$test.log" 2>&1 &
             standin=$!
             for attempt in 1 2 3 4 5 6 7 8 9 10; do
@@ -113,7 +115,7 @@ jobs:
             wait "$standin" 2>/dev/null || true
           done
           if [ -n "$failed" ]; then
-            echo "::warning title=End to end::failed:$failed; see the signin-*, board-*, bots-*, page-*, quick-*, chatctl-*, media-* and secrets-* screenshots and the fake_hermes-*.log files in the shots artifact"
+            echo "::warning title=End to end::failed:$failed; see the signin-*, board-*, bots-*, page-*, quick-*, chatctl-*, media-*, local-* and secrets-* screenshots and the fake_hermes-*.log files in the shots artifact"
             exit 1
           fi
 
@@ -155,7 +157,7 @@ jobs:
         if: always()
         run: |
           mkdir -p build/shots
-          for bundle in Shots SignInTests BoardTests BotsTests BotPageTests QuickAskTests ChatControlTests MediaTests SecretsTests; do
+          for bundle in Shots SignInTests BoardTests BotsTests BotPageTests QuickAskTests ChatControlTests MediaTests LocalDataTests SecretsTests; do
             if [ -d "build/$bundle.xcresult" ]; then
               mkdir -p "build/export-$bundle"
               xcrun xcresulttool export attachments --path "build/$bundle.xcresult" --output-path "build/export-$bundle" \
@@ -168,7 +170,7 @@ jobs:
           out = 'build/shots'
           for folder in ('build/export-Shots', 'build/export-SignInTests', 'build/export-BoardTests', 'build/export-BotsTests',
                          'build/export-BotPageTests', 'build/export-QuickAskTests', 'build/export-ChatControlTests',
-                         'build/export-MediaTests', 'build/export-SecretsTests'):
+                         'build/export-MediaTests', 'build/export-LocalDataTests', 'build/export-SecretsTests'):
               manifest = os.path.join(folder, 'manifest.json')
               if not os.path.exists(manifest):
                   continue
