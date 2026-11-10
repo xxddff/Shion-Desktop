@@ -44,7 +44,7 @@ struct ChatView: View {
                 ContentUnavailableView("打不开这个对话", systemImage: "exclamationmark.bubble", description: Text(error))
             } else if store.openingChats.contains(botId) {
                 ProgressView()
-            } else if items.isEmpty {
+            } else if items.isEmpty && QuickAsk.shared.sentences(for: botId).isEmpty {
                 ContentUnavailableView("还没有对话", systemImage: "bubble.left.and.bubble.right")
             }
         }
@@ -56,9 +56,10 @@ struct ChatView: View {
             Composer(placeholder: "跟\(bot?.name ?? "")说…", text: $draft, send: {
                 store.send(draft, to: botId)
                 draft = ""
-            }, stop: store.turnRunning(botId) ? { store.stopReply(botId) } : nil,
+            }, stop: store.turnRunning(botId) && !store.readOnly ? { store.stopReply(botId) } : nil,
                stopping: store.control.stopping.contains(botId))
-            .disabled(store.readOnly)
+            // not connected, what is said waits under the chat (AppStore+Reconnect.swift)
+            .disabled(store.readOnly && !store.waits(botId))
             .frame(maxWidth: 720)
             .padding(.horizontal, 40)
             .padding(.bottom, 16)
@@ -84,6 +85,7 @@ struct ChatView: View {
                         switch line {
                         case .item(let item):
                             ChatRow(item: item, bot: bot, showHead: showsHead(lines, index))
+                                .modifier(DeliveryMark(item: item, botId: botId))
                         case .tools(let id, let tools):
                             ToolRun(tools: tools, open: openRuns.contains(id)) {
                                 openRuns.formSymmetricDifference([id])
@@ -92,6 +94,8 @@ struct ChatView: View {
                     }
                     .environment(\.findMarks, found.marks(line))
                 }
+                // said while not connected (ChatDelivery.swift)
+                WaitingMessages(botId: botId, bot: bot)
             }
             .padding(.horizontal, 40)
             .padding(.vertical, 24)

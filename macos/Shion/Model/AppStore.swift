@@ -54,6 +54,8 @@ final class AppStore {
     let control = ChatControl()
     /// The server's data as it last was, for when it cannot be reached (AppStore+LastData.swift).
     let lastData = LastData()
+    /// Messages sent that the server has not said it has (AppStore+Reconnect.swift).
+    let deliveries = Deliveries()
     /// What `runtime.describe` says the server can do (`session-transcript-v1`, …).
     @ObservationIgnored var serverCapabilities: Set<String> = []
     /// Today, todos and reports come from the server's `shion` plugin (AppStore+Plugin.swift).
@@ -65,13 +67,13 @@ final class AppStore {
     @ObservationIgnored var demoTodos: [Todo] = []
     @ObservationIgnored var demoReports: [Report] = []
     /// bot id → how many of its rows came before the attach that is waiting for its first page
-    @ObservationIgnored private var attachMarks: [String: Int] = [:]
+    @ObservationIgnored var attachMarks: [String: Int] = [:]
     /// A kanban_create call shown as a card, waiting for its result to say the card's id:
     /// tool id → (bot id, chat row id).
     @ObservationIgnored private var madeCards: [String: (botId: String, itemId: String)] = [:]
     /// Bot ids whose rows are loaded: chats opened on this connection. The other Bot Chats are
     /// attached only for their approvals, questions and busy state.
-    @ObservationIgnored private var loadedChats: Set<String> = []
+    @ObservationIgnored private(set) var loadedChats: Set<String> = []
     @ObservationIgnored private var demoBots: [Bot] = []
     @ObservationIgnored private var demoChats: [String: [ChatItem]] = [:]
     @ObservationIgnored private var demoAsks: [Ask] = []
@@ -79,7 +81,7 @@ final class AppStore {
     @ObservationIgnored private(set) var sessions: [String: String] = [:]
     @ObservationIgnored private(set) var sessionBots: [String: String] = [:]
     /// bot id → the assistant message being streamed
-    @ObservationIgnored private var streaming: [String: String] = [:]
+    @ObservationIgnored var streaming: [String: String] = [:]
 
     init(now: Date) {
         let demo = DemoData(now: now)
@@ -105,6 +107,7 @@ final class AppStore {
         }
         gateway.onFrame = { [weak self] params in
             self?.noteFences(params)
+            self?.noteDelivery(params)
         }
         startLastData()
         if !LaunchOptions.current.snapshot {
@@ -182,7 +185,12 @@ final class AppStore {
 
     func send(_ text: String, to botId: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !readOnly else { return }
+        guard !trimmed.isEmpty else { return }
+        // not connected: it waits, with the ⌥Space window's sentences, and goes out once connected
+        if waits(botId) {
+            return QuickAsk.shared.wait(trimmed, for: botId)
+        }
+        guard !readOnly else { return }
         guard live else {
             chats[botId, default: []].append(ChatItem(id: UUID().uuidString, role: .user, at: now, text: trimmed))
             return
@@ -191,22 +199,8 @@ final class AppStore {
             chatErrors[botId] = "对话还没打开"
             return
         }
-        // the submission id names the item: the turn's end says which row it was stored as
-        let id = UUID().uuidString
-        chats[botId, default: []].append(ChatItem(id: id, role: .user, at: Date(), text: trimmed))
-        let params: JSONValue = [
-            "profile": .string(botId),
-            "session_id": .string(sessionId),
-            "text": .string(trimmed),
-            "submission_id": .string(id),
-        ]
-        Task {
-            do {
-                try await gateway.call("prompt.submit", params)
-            } catch {
-                note("没发出去：\(error.localizedDescription)", in: botId)
-            }
-        }
+        // with its receipt, or checked once the connection is back (AppStore+Reconnect.swift)
+        say(trimmed, to: botId, sessionId: sessionId)
     }
 }
 
@@ -331,6 +325,7 @@ extension AppStore {
         olderErrors[botId] = nil
         chats[botId] = nil
         replying.remove(botId)
+        deliveries.forget(botId)
         for ask in asks where ask.botId == botId {
             Notifier.shared.withdraw(ask.id)
         }
@@ -485,13 +480,13 @@ extension AppStore {
 
     /// With paging, the resume only attaches (`omit_messages`) and the rows come a page at a time;
     /// otherwise it carries the whole transcript, projected for display.
-    private func resumeParams(_ botId: String, _ sessionId: String) -> JSONValue {
+    func resumeParams(_ botId: String, _ sessionId: String) -> JSONValue {
         pagesTranscripts
             ? ["profile": .string(botId), "session_id": .string(sessionId), "omit_messages": true]
             : ["profile": .string(botId), "session_id": .string(sessionId), "display_projection": true]
     }
 
-    private func attach(_ botId: String, snapshot: JSONValue) {
+    func attach(_ botId: String, snapshot: JSONValue) {
         guard let sessionId = snapshot["session_id"]?.string else { return }
         noteFences(snapshot)
         sessions[botId] = sessionId
@@ -515,7 +510,7 @@ extension AppStore {
 
     /// The newest page of a resumed transcript (`session.transcript`, latest first), in place of
     /// whatever was held, keeping what streamed in since the attach.
-    private func loadLatestPage(_ botId: String) async throws {
+    func loadLatestPage(_ botId: String) async throws {
         guard let sessionId = sessions[botId] else { return }
         let page = try await gateway.call("session.transcript", [
             "profile": .string(botId), "session_id": .string(sessionId),
@@ -593,21 +588,10 @@ extension AppStore {
         }
     }
 
-    /// Attachments are per socket: after a reconnect every attached Bot Chat resumes, and the ones
-    /// open on screen start again from their newest page.
+    /// Attachments are per socket: after a reconnect every attached Bot Chat gets what it missed
+    /// and resumes (AppStore+Reconnect.swift).
     private func reattach() {
-        let open = sessions
-        Task {
-            for (botId, sessionId) in open {
-                guard let snapshot = try? await gateway.call("session.resume", resumeParams(botId, sessionId)) else { continue }
-                attach(botId, snapshot: snapshot)
-                if loadedChats.contains(botId), snapshot["messages_omitted"]?.bool == true {
-                    try? await loadLatestPage(botId)
-                }
-            }
-            // the plugin's pushes are not replayed: catch up on what changed while away
-            await syncPluginData()
-        }
+        Task { await comeBack() }
     }
 
     /// A transcript row as the chat shows it: usually one item, none for a row that is not for you,
@@ -953,6 +937,8 @@ extension AppStore {
         let method = remote.isClarify ? "clarify.respond" : "approval.respond"
         Task {
             do {
+                // on a new socket, once the chat is attached again (AppStore+Reconnect.swift)
+                await waitForChat(ask.botId)
                 try await gateway.call(method, params, timeout: 300)
             } catch {
                 note("没能回复：\(error.localizedDescription)", in: ask.botId)

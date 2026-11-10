@@ -32,8 +32,10 @@ final class QuickAsk {
     private(set) var shown = false
     /// The sentence this window sent last: what follows it in the chat is the answer.
     private(set) var asked: Asked?
-    /// Sentences sent while no server was connected, oldest first: they go out, together, as soon
-    /// as one is, and are kept across launches until then (QuickAskWaiting.swift).
+    /// Sentences sent while no server was connected, oldest first: they go out as soon as one is,
+    /// and are kept across launches until then (QuickAskWaiting.swift). The window's own go to
+    /// 总秘书 together; those said in a chat of the main window go to that chat, a message each
+    /// (AppStore+Reconnect.swift).
     private(set) var waiting: [QuickAskWaiting] = []
 
     struct Asked: Equatable {
@@ -303,13 +305,48 @@ final class QuickAsk {
         }
     }
 
-    /// What waits, once a server is connected.
+    /// What waits, once a server is connected: the window's own, to 总秘书 together; the main
+    /// window's, chat by chat, in order.
     private func sendWaiting() {
         guard let store, Self.connected(store), !waiting.isEmpty else { return }
         let sentences = waiting
         waiting = []
         saveWaiting()
-        deliver(sentences, to: store)
+        let own = sentences.filter { $0.botId == nil }
+        if !own.isEmpty {
+            deliver(own, to: store)
+        }
+        var chats: [String] = []
+        for case let botId? in sentences.map(\.botId) where !chats.contains(botId) {
+            chats.append(botId)
+        }
+        for botId in chats {
+            let said = sentences.filter { $0.botId == botId }
+            Task { await store.sendWaiting(said, to: botId) }
+        }
+    }
+
+    // MARK: the main window's
+
+    /// Said in a chat of the main window while not connected (AppStore.send): it waits with the
+    /// window's sentences, and goes out with them, as its own message.
+    func wait(_ text: String, for botId: String, at written: Date? = nil) {
+        let at = written ?? Date().addingTimeInterval(-Self.writtenAgo)
+        waiting.append(QuickAskWaiting(id: UUID().uuidString, text: text, at: at, botId: botId))
+        saveWaiting()
+        sendWaiting()
+    }
+
+    /// What waits: the window's own (nil), or what was said in a chat of the main window.
+    func sentences(for botId: String?) -> [QuickAskWaiting] {
+        waiting.filter { $0.botId == botId }
+    }
+
+    /// Back in front of what waits, in their order: they could not go out after all.
+    func putBack(_ sentences: [QuickAskWaiting]) {
+        guard !sentences.isEmpty else { return }
+        waiting = sentences + waiting
+        saveWaiting()
     }
 
     /// Follows the connection: when it comes up, what waits goes out.
