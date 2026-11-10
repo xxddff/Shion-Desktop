@@ -269,9 +269,10 @@ final class SignInTests: XCTestCase {
         note(notes.joined(separator: "\n"), "signin-inspector")
     }
 
-    /// The demo's 詩音 chat, at its end: ⌘↑ to its top (Home if the key does not move it, one turn of
-    /// the wheel all the way if neither does), and two seconds later it is still there; a jump to
-    /// the top is the reader's, not something to follow back down. No server.
+    /// The demo's 詩音 chat, at its end: one turn of the wheel all the way to its top, and two
+    /// seconds later it is still there; a jump to the top is the reader's, not something to follow
+    /// back down. The keyboard is the sidebar's (the app starts it there), where ⌘↑ goes to the page
+    /// above, so the jump is the wheel's. No server.
     @MainActor
     func testJumpToTheTopStays() throws {
         continueAfterFailure = true
@@ -290,28 +291,21 @@ final class SignInTests: XCTestCase {
         Thread.sleep(forTimeInterval: 1.5)
         var notes = ["opened: the scroll bar at \(barText(layout(of: transcript)))"]
         XCTAssertGreaterThan(layout(of: transcript).bar ?? 0, 0.98, "the chat did not open at its end. \(notes[0])")
-        // the keys go to what has the keyboard: the transcript, once its margin is clicked
         let margin = transcript.coordinate(withNormalizedOffset: CGVector(dx: 0.03, dy: 0.5))
-        margin.click()
-        var how = "⌘↑"
-        app.typeKey(.upArrow, modifierFlags: .command)
-        Thread.sleep(forTimeInterval: 0.5)
-        if (layout(of: transcript).bar ?? 1) > 0.02 {
-            how = "Home"
-            app.typeKey(.home, modifierFlags: [])
-            Thread.sleep(forTimeInterval: 0.5)
-        }
+        margin.hover()
+        Thread.sleep(forTimeInterval: 0.3)
         // a first turn of the wheel sometimes moves nothing on the runner (see upward): up to three
+        var turns = 0
         for _ in 0..<3 where (layout(of: transcript).bar ?? 1) > 0.02 {
-            how = "the wheel, all the way in one turn"
             margin.scroll(byDeltaX: 0, deltaY: 100_000)
+            turns += 1
             Thread.sleep(forTimeInterval: 0.5)
         }
         let jumped = layout(of: transcript).bar
         Thread.sleep(forTimeInterval: 2)
         let later = layout(of: transcript).bar
         keep(window.screenshot(), "signin-10-jumped-to-top")
-        notes.append("to the top by \(how): the scroll bar at \(jumped.map { String(format: "%.3f", $0) } ?? "not there"), "
+        notes.append("to the top in \(turns) turn(s) of the wheel: the scroll bar at \(jumped.map { String(format: "%.3f", $0) } ?? "not there"), "
                      + "two seconds later \(later.map { String(format: "%.3f", $0) } ?? "not there")")
         note(notes.joined(separator: "\n"), "signin-jump")
         XCTAssertLessThan(jumped ?? 1, 0.02, "nothing took the chat to its top. \(notes.last ?? "")")
