@@ -227,6 +227,9 @@ final class ExtrasTests: XCTestCase {
         if let clicked, let json = try? JSONSerialization.data(withJSONObject: clicked) {
             app.launchArguments += ["-ShionLaunchNotification", String(decoding: json, as: UTF8.self)]
         }
+        // the stand-in's todos and reports are dated in Tokyo: the app's today is Tokyo's too, at
+        // whatever hour the runner (on UTC) gets to this
+        app.launchEnvironment["TZ"] = "Asia/Tokyo"
         app.launch()
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 20), "no window")
         return app
