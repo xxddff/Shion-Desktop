@@ -24,16 +24,18 @@ struct AssistantView: View {
 
     var body: some View {
         let entries = tab == .work ? store.workLog(for: botId) : []
-        ChatView(botId: botId)
-            .disabled(tab == .work)
-            .allowsHitTesting(tab == .chat)
-            .opacity(tab == .chat ? 1 : 0)
-            .accessibilityHidden(tab == .work)
-            .overlay {
-                if tab == .work {
-                    workLog(entries)
-                }
+        ZStack {
+            // Keep both pages at the same level so hiding/disabling the chat cannot also hide
+            // the log's hit targets from macOS accessibility, including on cold launch.
+            ChatView(botId: botId)
+                .disabled(tab == .work)
+                .allowsHitTesting(tab == .chat)
+                .opacity(tab == .chat ? 1 : 0)
+                .accessibilityHidden(tab == .work)
+            if tab == .work {
+                workLog(entries)
             }
+        }
             // over the top of the page, which runs under them as it runs under the toolbar: the
             // chat keeps the geometry its paging was made for (a VStack cut it off below the tabs,
             // and older pages stopped coming after the second)

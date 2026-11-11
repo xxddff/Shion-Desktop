@@ -63,6 +63,24 @@ jobs:
             -derivedDataPath build/DerivedData \
             -quiet 2>&1 | tee build/xcodebuild.log
 
+      # Exercise the cold-start tab before the longer integrations: it must be clickable even
+      # when the chat underneath has never been shown. The rest of the screenshot suite is below.
+      - name: Open work log cards in light and dark
+        run: |
+          set -o pipefail
+          if ! xcodebuild test-without-building \
+                 -project Shion.xcodeproj \
+                 -scheme Shion \
+                 -destination 'platform=macOS' \
+                 -derivedDataPath build/DerivedData \
+                 -only-testing:ShionUITests/ScreenshotTests/testWorkLog \
+                 -resultBundlePath build/WorkLogShots.xcresult \
+                 -quiet 2>&1 | tee build/work-log-shots.log; then
+            xcrun xcresulttool get test-results summary --path build/WorkLogShots.xcresult 2>/dev/null \
+              | grep -E '"(failureText|testName)"' | head -20 || true
+            exit 1
+          fi
+
       # Real Cloudflare Access and a real Hermes are not on the runner: the stand-in plays both,
       # checks what Shion sends (Access headers, PKCE, the loopback redirect, the bearer) and logs
       # each request. Failures block the check; diagnostic artifacts are still exported below.
@@ -130,6 +148,7 @@ jobs:
                  -destination 'platform=macOS' \
                  -derivedDataPath build/DerivedData \
                  -only-testing:ShionUITests/ScreenshotTests \
+                 -skip-testing:ShionUITests/ScreenshotTests/testWorkLog \
                  -only-testing:ShionUITests/LocalScreenshotTests \
                  -only-testing:ShionUITests/ReconnectScreenshotTests \
                  -only-testing:ShionUITests/SecretScreenshotTests \
@@ -180,7 +199,7 @@ jobs:
         if: always()
         run: |
           mkdir -p build/shots
-          for bundle in Shots SignInTests BoardTests BotsTests BotPageTests QuickAskTests ChatControlTests MediaTests LocalDataTests ReconnectTests WorkTests SecretsTests ExtrasTests; do
+          for bundle in Shots WorkLogShots SignInTests BoardTests BotsTests BotPageTests QuickAskTests ChatControlTests MediaTests LocalDataTests ReconnectTests WorkTests SecretsTests ExtrasTests; do
             if [ -d "build/$bundle.xcresult" ]; then
               mkdir -p "build/export-$bundle"
               xcrun xcresulttool export attachments --path "build/$bundle.xcresult" --output-path "build/export-$bundle" \
@@ -191,7 +210,7 @@ jobs:
           python3 - <<'PY'
           import json, os, re, shutil
           out = 'build/shots'
-          for folder in ('build/export-Shots', 'build/export-SignInTests', 'build/export-BoardTests', 'build/export-BotsTests',
+          for folder in ('build/export-Shots', 'build/export-WorkLogShots', 'build/export-SignInTests', 'build/export-BoardTests', 'build/export-BotsTests',
                          'build/export-BotPageTests', 'build/export-QuickAskTests', 'build/export-ChatControlTests',
                          'build/export-MediaTests', 'build/export-LocalDataTests',
                          'build/export-ReconnectTests', 'build/export-WorkTests', 'build/export-SecretsTests',

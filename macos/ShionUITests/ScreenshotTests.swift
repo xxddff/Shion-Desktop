@@ -117,11 +117,22 @@ final class ScreenshotTests: XCTestCase {
             }
             Thread.sleep(forTimeInterval: 1)
             keep(window.screenshot(), name: "work-study-\(appearance)")
-            let row = window.descendants(matching: .any).matching(identifier: "work-g5d2").firstMatch
+            let row = window.buttons["work-g5d2"]
             if row.waitForExistence(timeout: 5) {
-                row.click()
-                Thread.sleep(forTimeInterval: 1)
-                keep(window.screenshot(), name: "work-study-detail-\(appearance)")
+                let clickable = XCTWaiter().wait(for: [XCTNSPredicateExpectation(
+                    predicate: NSPredicate(format: "hittable == true"), object: row)], timeout: 5) == .completed
+                if clickable {
+                    row.click()
+                    XCTAssertTrue(window.buttons["work-detail-close"].waitForExistence(timeout: 5),
+                                  "Clicking the work log card did not open its detail (\(appearance))")
+                    keep(window.screenshot(), name: "work-study-detail-\(appearance)")
+                } else {
+                    let tree = XCTAttachment(string: window.debugDescription)
+                    tree.name = "work-study-\(appearance)-accessibility.txt"
+                    tree.lifetime = .keepAlways
+                    add(tree)
+                    XCTFail("The visible work log card is not clickable (\(appearance)): \(row.debugDescription)")
+                }
             } else {
                 XCTFail("No card in 工作记录 (\(appearance))")
             }
