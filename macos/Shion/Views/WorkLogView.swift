@@ -26,6 +26,8 @@ struct AssistantView: View {
         let entries = tab == .work ? store.workLog(for: botId) : []
         ChatView(botId: botId)
             .disabled(tab == .work)
+            .allowsHitTesting(tab == .chat)
+            .opacity(tab == .chat ? 1 : 0)
             .accessibilityHidden(tab == .work)
             .overlay {
                 if tab == .work {
@@ -134,8 +136,11 @@ struct WorkLogView: View {
                 // a day's cards are few: laid out at once
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(entries) { entry in
-                        WorkLogRow(entry: entry, selected: entry.id == selection, showsBoard: showsBoard)
-                            .onTapGesture { open(entry) }
+                        Button { open(entry) } label: {
+                            WorkLogRow(entry: entry, selected: entry.id == selection, showsBoard: showsBoard)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("work-\(entry.cardId)")
                         if entry.id != entries.last?.id {
                             Divider()
                         }
@@ -194,8 +199,7 @@ struct WorkLogRow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(selected ? Palette.accent.opacity(0.08) : Color.clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .contentShape(Rectangle())
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("work-\(entry.cardId)")
+        .accessibilityElement(children: .combine)
     }
 }
 

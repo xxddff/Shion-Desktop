@@ -3,6 +3,7 @@ import SwiftUI
 
 /// AppKit owns selection, IME composition and newline insertion at the caret.
 struct ComposerText: NSViewRepresentable {
+    @Environment(\.isEnabled) private var isEnabled
     @Binding var text: String
     var send: () -> Void
     func makeNSView(context: Context) -> NSScrollView {
@@ -24,6 +25,7 @@ struct ComposerText: NSViewRepresentable {
         field.setAccessibilityIdentifier("composer")
         field.delegate = context.coordinator
         field.submit = send
+        configure(field)
         scroll.documentView = field
         return scroll
     }
@@ -32,6 +34,13 @@ struct ComposerText: NSViewRepresentable {
         guard let field = view.documentView as? Input else { return }
         if field.string != text && !field.hasMarkedText() { field.string = text }
         field.submit = send
+        configure(field)
+    }
+    private func configure(_ field: Input) {
+        // SwiftUI's disabled environment does not set NSTextView's editability or AX state.
+        field.isEditable = isEnabled
+        field.setAccessibilityEnabled(isEnabled)
+        field.textColor = isEnabled ? .labelColor : .disabledControlTextColor
     }
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     final class Coordinator: NSObject, NSTextViewDelegate {
@@ -44,6 +53,7 @@ struct ComposerText: NSViewRepresentable {
     final class Input: NSTextView {
         var submit: (() -> Void)?
         override func keyDown(with event: NSEvent) {
+            guard isEditable else { return }
             if (event.keyCode == 36 || event.keyCode == 76), !hasMarkedText() {
                 if event.modifierFlags.contains(.shift) { insertNewline(nil) }
                 else { submit?() }

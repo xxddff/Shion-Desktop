@@ -8,7 +8,10 @@ final class AppStore {
     /// The demo's pinned moment; with the server's own data, the last of it, or this Mac's
     /// calendars, `now` is the real time, ticking every 30 seconds.
     let demoClock: Date
-    var now: Date { LaunchOptions.current.snapshot ? demoClock : local.clock }
+    var now: Date {
+        let pinned = LaunchOptions.current.snapshot && !pluginData && !lastData.shown && !local.realTime
+        return pinned ? demoClock : local.clock
+    }
     /// This Mac's calendars, the focus check and the app usage record (AppStore+Local.swift).
     let local = LocalData.forLaunch()
     var route: Route? = LaunchOptions.current.route

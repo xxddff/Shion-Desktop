@@ -261,6 +261,9 @@ final class ChatControlTests: XCTestCase {
         XCTAssertTrue(note, "the sidebar does not say the data is the last the server gave")
         // what is said now waits for a connection (ReconnectTests); a todo stays read-only
         XCTAssertTrue(element("composer", in: app).isEnabled, "the composer takes nothing to send later while not connected")
+        composer.click()
+        composer.typeText("offline-draft")
+        XCTAssertEqual(composer.value as? String, "offline-draft", "the offline composer is not editable")
         element("nav-todos", in: app).click()
         let todos = waitForText("CI：交实验报告", in: app, timeout: 5)
         keep(app.windows.firstMatch.screenshot(), "chatctl-9-offline-todos")

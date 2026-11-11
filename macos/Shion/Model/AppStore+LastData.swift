@@ -121,7 +121,8 @@ extension AppStore {
     /// Before connecting and while the connection is down, the window shows the last data, and what
     /// would change it (a todo ticked, a message sent, a card moved) waits for the server.
     var readOnly: Bool {
-        lastData.shown || (!LaunchOptions.current.snapshot && (!live || gateway.phase != .online)) || Self.readOnlyDemo
+        lastData.shown || (live && gateway.phase != .online)
+            || (!live && !LaunchOptions.current.snapshot) || Self.readOnlyDemo
     }
 
     /// Never connected to this server: the demo's data.

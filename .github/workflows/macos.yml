@@ -52,6 +52,7 @@ jobs:
         run: sudo automationmodetool enable-automationmode-without-authentication || true
 
       - name: Build
+        id: build
         run: |
           mkdir -p build
           set -o pipefail
@@ -64,9 +65,8 @@ jobs:
 
       # Real Cloudflare Access and a real Hermes are not on the runner: the stand-in plays both,
       # checks what Shion sends (Access headers, PKCE, the loopback redirect, the bearer) and logs
-      # each request. A failure here warns, and the screenshots and the package still go out.
+      # each request. Failures block the check; diagnostic artifacts are still exported below.
       - name: Sign-in, board, assistants, media and local data against a stand-in Hermes
-        continue-on-error: true
         run: |
           set -o pipefail
           # each test gets a fresh stand-in: its one-off events (课程's approval, the todo it adds)
@@ -116,11 +116,12 @@ jobs:
             wait "$standin" 2>/dev/null || true
           done
           if [ -n "$failed" ]; then
-            echo "::warning title=End to end::failed:$failed; see the signin-*, board-*, bots-*, page-*, quick-*, chatctl-*, media-*, local-*, reconnect-*, work-*, secrets-* and extras-* screenshots and the fake_hermes-*.log files in the shots artifact"
+            echo "::error title=End to end::failed:$failed; see the signin-*, board-*, bots-*, page-*, quick-*, chatctl-*, media-*, local-*, reconnect-*, work-*, secrets-* and extras-* screenshots and the fake_hermes-*.log files in the shots artifact"
             exit 1
           fi
 
       - name: Screenshot every page
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           set -o pipefail
           if ! xcodebuild test-without-building \
