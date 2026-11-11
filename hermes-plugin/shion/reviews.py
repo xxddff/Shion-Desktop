@@ -120,10 +120,18 @@ class Reviews:
                     session = (entry.get("evidence") or {}).get("session_id", "")
                     ctx = contexts.get(session)
                     # Historical mutations must never inherit today's unrelated conversation.
-                    if not ctx or not ctx.get("turn") or str(entry.get("ts", "")) < ctx.get("at", ""):
+                    try:
+                        timely = ctx and datetime.fromisoformat(entry.get("ts", "")) >= datetime.fromisoformat(ctx.get("at", ""))
+                    except (ValueError, TypeError):
+                        timely = False
+                    if not timely or not ctx.get("turn"):
                         ctx = {"turn": entry["id"], "messages": []}
                     key = hashlib.sha256(f'{self.profile}|{session}|{ctx["turn"]}|{entry["skill"]}'.encode()).hexdigest()[:24]
                     existing = c.execute("SELECT body FROM skill_reviews WHERE profile=? AND id=?", (self.profile, key)).fetchone()
+                    if existing and (json.loads(existing[0]).get("review_session") or json.loads(existing[0])["status"] != "pending"):
+                        # Once reviewed (or opened for review), that card's version is frozen.
+                        key = hashlib.sha256((key + "|" + entry["id"]).encode()).hexdigest()[:24]
+                        existing = None
                     body = json.loads(existing[0]) if existing else {
                         "id": key, "profile": self.profile, "session": session, "skill": entry["skill"],
                         "at": entry.get("ts", ""), "status": "pending", "entries": [],
@@ -207,20 +215,26 @@ class Reviews:
                 if current != digest:
                     raise ShionError("conflict", "技能已被后续修改，不能覆盖；请重新审核")
             if decision == "rejected":
-                if entries[0]["action"] == "create":
-                    ledger.command("archive", row["skill"])
-                else:
-                    completed = []
-                    try:
+                creating = entries[0]["action"] == "create"
+                if creating:
+                    # An unrecorded file added since creation is also a later modification.
+                    roots = [ledger.file(p).parent for p in after if Path(p).name == "SKILL.md"]
+                    known = {ledger.file(p) for p, digest in after.items() if digest}
+                    if not roots or any(f.is_file() and f.resolve() not in known for root in roots for f in root.rglob("*")):
+                        raise ShionError("conflict", "技能目录有未记录的新文件，不能整包归档")
+                completed = []
+                try:
+                    if creating:
+                        ledger.command("archive", row["skill"])
+                    else:
                         for entry in reversed(entries):
                             ledger.command("rollback", entry["id"], "--yes")
                             completed.append(entry["id"])
-                    except ShionError:
-                        # Do not offer the original buttons after a partial rollback.
-                        row["status"] = "rollback_failed"
-                        row["rolled_back"] = completed
-                        self.save(row)
-                        raise
+                except ShionError:
+                    row["status"] = "rollback_failed"
+                    row["rolled_back"] = completed
+                    self.save(row)
+                    raise
             row["status"] = decision
             self.save(row)
             return row

@@ -34,13 +34,7 @@ struct ChatView: View {
     var body: some View {
         let bot = store.bot(botId)
         // and under them, what was said while not connected, waiting (ChatDelivery.swift)
-        let extra = store.learningItems(botId)
-        let transcript = (store.chats[botId] ?? []).filter { item in
-            // A persisted board notification has an event card; its injected user row
-            // is the same notice, not another event.
-            !extra.contains { $0.eventKind == "board" && $0.text.contains(item.text) && item.role == .card && !item.text.isEmpty }
-        }
-        let items = store.withAskCards((transcript + extra).filter(ChatPresentation.visible).sorted { $0.at < $1.at }, of: botId) + WaitingMessages.items(for: botId)
+        let items = visibleItems
         let lines = ChatLine.lines(items, replying: store.replying.contains(botId))
         let found = find.found(in: lines)
         // before the rows are laid out: older rows coming in above (the row at the top of what
@@ -136,7 +130,32 @@ struct ChatView: View {
         .task(id: "\(botId)|\(store.live)|\(store.gateway.phase == .online)") {
             await store.openChat(botId)
         }
-        .safeAreaInset(edge: .bottom) {
+        .safeAreaInset(edge: .bottom) { composerPanel }
+        // dropped and pasted pictures and files go to the composer
+        .chatAttachments(botId)
+        .environment(\.chatBotId, botId)
+        .navigationTitle(bot?.name ?? "")
+        .navigationSubtitle(bot?.title ?? "")
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                FindButton(find: find)
+            }
+        }
+    }
+
+    private var visibleItems: [ChatItem] {
+        let extra = store.learningItems(botId)
+        let storedItems = (store.chats[botId] ?? []).filter { item in
+            // A persisted board notification has an event card; its injected user row
+            // is the same notice, not another event.
+            !extra.contains { ["board", "peer", "process"].contains($0.eventKind ?? "") && $0.text == item.text && item.role == .card && !item.text.isEmpty }
+        }
+        return store.withAskCards((storedItems + extra).filter(ChatPresentation.visible).sorted { $0.at < $1.at }, of: botId) + WaitingMessages.items(for: botId)
+    }
+
+    private var composerPanel: some View {
+        let bot = store.bot(botId)
+        return Group {
             // with what is about to go: pictures and files (AttachmentViews.swift)
             VStack(alignment: .leading, spacing: 6) {
                 if let quote = store.replyQuotes[store.draftKey(botId)] {
@@ -169,16 +188,6 @@ struct ChatView: View {
             .frame(maxWidth: 720)
             .padding(.horizontal, 40)
             .padding(.bottom, 16)
-        }
-        // dropped and pasted pictures and files go to the composer
-        .chatAttachments(botId)
-        .environment(\.chatBotId, botId)
-        .navigationTitle(bot?.name ?? "")
-        .navigationSubtitle(bot?.title ?? "")
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                FindButton(find: find)
-            }
         }
     }
 

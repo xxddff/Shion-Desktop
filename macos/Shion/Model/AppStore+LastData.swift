@@ -35,7 +35,7 @@ final class LastData {
 }
 
 /// last-data.json. A part is nil when the server did not have it (no shion plugin: no todos,
-/// paragraph or reports); the window shows the demo's for it.
+/// paragraph or reports); missing sections stay empty.
 nonisolated struct LastDataFile: Codable, Sendable {
     var version = 1
     /// The server it came from (`https://host[/prefix]`).
@@ -68,6 +68,7 @@ nonisolated struct StoredItem: Codable, Sendable {
     var role: String
     var at: Date
     var text: String
+    var eventKind: String?
     var cardId: String?
     var cardTitle: String?
     var cardAssignee: String?
@@ -157,7 +158,6 @@ extension AppStore {
         guard let file = lastData.file, file.server == serverSettings.trimmed.signInServer,
               let stored = file.bots, !stored.isEmpty
         else { return }
-        let demo = LaunchOptions.current.snapshot ? DemoData(now: demoClock) : nil
         bots = stored.map { $0.bot }
         let pages = file.chats ?? [:]
         chats = Dictionary(bots.map { bot in (bot.id, (pages[bot.id] ?? []).compactMap { $0.item }) },
@@ -236,7 +236,7 @@ extension AppStore {
         }
         var pages = previous?.chats ?? [:]
         for bot in bots {
-            let items = (chats[bot.id] ?? []).filter { !$0.streaming }
+            let items = ((chats[bot.id] ?? []) + (learningNotices[bot.id] ?? [])).filter { !$0.streaming && ChatPresentation.visible($0) }.sorted { $0.at < $1.at }
             if !items.isEmpty {
                 pages[bot.id] = items.suffix(LastData.chatRows).map { StoredItem($0) }
             }
@@ -349,7 +349,7 @@ extension StoredItem {
         case .card: "card"
         case .tool: "tool"
         }
-        self.init(id: item.id, role: name, at: item.at, text: item.text, cardId: item.cardId,
+        self.init(id: item.id, role: name, at: item.at, text: item.text, eventKind: item.eventKind, cardId: item.cardId,
                   cardTitle: item.cardTitle, cardAssignee: item.cardAssignee, stopped: item.stopped ? true : nil,
                   failure: item.failure)
     }
@@ -364,7 +364,7 @@ extension StoredItem {
         default: nil
         }
         guard let kind else { return nil }
-        return ChatItem(id: id, role: kind, at: at, text: text, cardId: cardId, cardTitle: cardTitle,
+        return ChatItem(id: id, role: kind, at: at, text: text, eventKind: eventKind, cardId: cardId, cardTitle: cardTitle,
                         cardAssignee: cardAssignee, stopped: stopped ?? false, failure: failure)
     }
 }

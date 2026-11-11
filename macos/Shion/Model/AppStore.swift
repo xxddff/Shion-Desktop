@@ -314,7 +314,7 @@ extension AppStore {
     static let pageSize = 50
 
     /// The transcript is paged where the server has `session.transcript`; older servers send it whole.
-    private var pagesTranscripts: Bool { serverCapabilities.contains("session-transcript-v1") }
+    var pagesTranscripts: Bool { serverCapabilities.contains("session-transcript-v1") }
 
     private func describeRuntime() async {
         guard let reply = try? await gateway.call("runtime.describe", [:]) else { return }
@@ -602,7 +602,7 @@ extension AppStore {
     /// A transcript page's rows, oldest first. A compaction row stands where older messages
     /// were folded into a summary. Hermes gives it the `row_id` of the message it was stored on,
     /// which shows as its own row right after it when it holds real content too: their ids differ.
-    private func transcriptItems(_ page: JSONValue) -> [ChatItem] {
+    func transcriptItems(_ page: JSONValue) -> [ChatItem] {
         uniqued((page["rows"]?.array ?? []).flatMap { row -> [ChatItem] in
             guard row["row_kind"]?.string == "compaction" else { return chatItems(from: row) }
             let at = row["timestamp"]?.number.map { Date(timeIntervalSince1970: $0) } ?? Date()
@@ -647,6 +647,13 @@ extension AppStore {
             let body = text(of: row)
             // the plugin's focus-check line that woke 詩音: for her, not for the transcript
             guard !body.hasPrefix("［专注检查］") else { return [] }
+            if body.hasPrefix("Message from 🤖 ") {
+                return [ChatItem(id: id, role: .card, at: at, text: body, eventKind: "peer")]
+            }
+            if ["process_complete", "async_delegation_complete"].contains(row["display_kind"]?.string ?? "") {
+                return [ChatItem(id: id, role: .card, at: at,
+                    text: row["display_metadata"]?["display_text"]?.string ?? body, eventKind: "process")]
+            }
             // the board's word on cards this chat made: Hermes sends it as a turn in your name
             let notices = Self.kanbanNotices(body)
             guard notices.isEmpty else {
@@ -669,6 +676,9 @@ extension AppStore {
             return [ChatItem(id: id, role: .assistant, at: at, text: body, stopped: stopped)]
         case "tool":
             let name = row["name"]?.string ?? row["tool_name"]?.string ?? "tool"
+            if let message = Self.peerMessage(name, args: row["args"]) {
+                return [ChatItem(id: id, role: .card, at: at, text: message, eventKind: "peer")]
+            }
             if let made = Self.madeCard(name, args: row["args"]) {
                 return [ChatItem(id: id, role: .card, at: at, cardTitle: made.title, cardAssignee: made.assignee)]
             }
@@ -679,6 +689,11 @@ extension AppStore {
     }
 
     /// A kanban_create call's card: the title it was made with and who it was handed to.
+    private static func peerMessage(_ name: String, args: JSONValue?) -> String? {
+        guard name == "message_agent", let body = args?["message"]?.string else { return nil }
+        return "发给 \(args?["target"]?.string ?? "助手")：\n" + body
+    }
+
     private static func madeCard(_ name: String, args: JSONValue?) -> (title: String, assignee: String?)? {
         guard name == "kanban_create", let title = args?["title"]?.string, !title.isEmpty else { return nil }
         let assignee = args?["assignee"]?.string ?? ""
@@ -763,6 +778,7 @@ extension AppStore {
         }
         switch type {
         case "message.start":
+            Task { await refreshReviews(botId); await refreshNotificationRows(botId) }
             if shown { beginReply(botId) }
         case "message.delta":
             if shown, let text = payload["text"]?.string {
@@ -774,7 +790,7 @@ extension AppStore {
                 endReply(botId)
             }
         case "message.complete":
-            Task { await refreshReviews(botId) }
+            Task { await refreshReviews(botId); await refreshNotificationRows(botId) }
             var text = payload["text"]?.string ?? ""
             if shown {
                 completeReply(botId, payload)
@@ -791,7 +807,10 @@ extension AppStore {
             guard shown else { break }
             endReply(botId)
             let name = payload["name"]?.string ?? payload["tool_name"]?.string ?? "tool"
-            if let made = Self.madeCard(name, args: payload["args"]) {
+            if let message = Self.peerMessage(name, args: payload["args"]) {
+                append(ChatItem(id: freshId(payload["tool_id"]?.string.map { "tool-\($0)" }, in: botId),
+                    role: .card, at: Date(), text: message, eventKind: "peer"), to: botId)
+            } else if let made = Self.madeCard(name, args: payload["args"]) {
                 let id = UUID().uuidString
                 if let call = payload["tool_id"]?.string {
                     madeCards[call] = (botId, id)

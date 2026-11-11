@@ -109,6 +109,11 @@ class ShionPlugin:
         """Remember each session's routing key: ``inject_message`` needs it, and the RPC that asks to wake
         the chief only knows the session id. Never changes the turn."""
         try:
+            text = kwargs.get("user_message")
+            turn = kwargs.get("turn_id")
+            if isinstance(text, str) and text.startswith("Message from 🤖 ") and session_id and turn:
+                self.reviews.notice("peer-" + str(turn), session_id, text,
+                                    datetime.now(timezone.utc).isoformat(), "peer")
             key = self.hermes.session_env("HERMES_SESSION_KEY")
             if not key or not session_id or self._seen_keys.get(session_id) == key:
                 return None

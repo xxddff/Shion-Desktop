@@ -82,6 +82,19 @@ extension AppStore {
         }
     }
 
+    /// Other assistants' deliveries are durable user rows on Hermes, but were not sent
+    /// through this composer's prompt.submit. Bring in just their cards during a live turn.
+    func refreshNotificationRows(_ profile: String) async {
+        guard let session = sessions[profile], pagesTranscripts,
+              let page = try? await gateway.call("session.transcript", ["profile": .string(profile),
+                "session_id": .string(session), "order": "latest", "limit": 100]),
+              sessions[profile] == session else { return }
+        let rows = transcriptItems(page).filter { $0.role == .card && ($0.eventKind != nil || !$0.text.isEmpty) }
+        for item in rows where chats[profile]?.contains(where: { $0.id == item.id || ($0.text == item.text && $0.role == .card) }) != true {
+            chats[profile, default: []].append(item)
+        }
+    }
+
     func refreshAllReviews() async {
         for bot in bots { await refreshReviews(bot.id) }
     }
