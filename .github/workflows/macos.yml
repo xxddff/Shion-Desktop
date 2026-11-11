@@ -66,6 +66,7 @@ jobs:
       # Exercise the cold-start tab before the longer integrations: it must be clickable even
       # when the chat underneath has never been shown. The rest of the screenshot suite is below.
       - name: Open work log cards in light and dark
+        id: work_log
         run: |
           set -o pipefail
           if ! xcodebuild test-without-building \
@@ -139,7 +140,7 @@ jobs:
           fi
 
       - name: Screenshot every page
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.work_log.outcome == 'success' }}
         run: |
           set -o pipefail
           if ! xcodebuild test-without-building \

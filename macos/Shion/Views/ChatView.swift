@@ -167,9 +167,19 @@ struct ChatView: View {
                         Button("取消引用") { store.replyQuotes[store.draftKey(botId)] = nil }
                     }
                 }
-                Picker("助手忙碌时", selection: Binding(get: { store.sendMode }, set: { store.sendMode = $0 })) {
-                    ForEach(SendMode.allCases, id: \.rawValue) { Text($0.label).tag($0) }
-                }.pickerStyle(.segmented).accessibilityIdentifier("send-mode")
+                HStack {
+                    // macOS exposes a segmented picker's native label across the whole page
+                    // when its chat starts hidden, blocking work-log accessibility hit testing.
+                    // A separate SwiftUI label follows the page's visibility; the picker keeps
+                    // its accessible name without that extra native label.
+                    Text("助手忙碌时").font(.t12).accessibilityHidden(true)
+                    Picker("助手忙碌时", selection: Binding(get: { store.sendMode }, set: { store.sendMode = $0 })) {
+                        ForEach(SendMode.allCases, id: \.rawValue) { Text($0.label).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .accessibilityIdentifier("send-mode")
+                }
                 ComposerBar(botId: botId) {
                 Composer(placeholder: "跟\(bot?.name ?? "")说…", text: draft, canSend: store.canSend(botId, draft.wrappedValue), send: {
                     // what one sends, and the reply to it, are followed down from wherever one was;

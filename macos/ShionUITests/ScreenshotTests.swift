@@ -117,6 +117,8 @@ final class ScreenshotTests: XCTestCase {
             }
             Thread.sleep(forTimeInterval: 1)
             keep(window.screenshot(), name: "work-study-\(appearance)")
+            XCTAssertFalse(window.staticTexts["助手忙碌时"].exists,
+                           "The hidden chat's picker label leaked into the work log accessibility tree")
             let row = window.buttons["work-g5d2"]
             if row.waitForExistence(timeout: 5) {
                 let clickable = XCTWaiter().wait(for: [XCTNSPredicateExpectation(
