@@ -102,6 +102,9 @@ struct ReviewConversationView: View {
                 Task { await conversation.send(using: store) }
             }.accessibilityIdentifier("review-composer").disabled(store.readOnly)
         }
+        .onChange(of: conversation.draft) {
+            store.composerDrafts[store.serverKey + "|review|" + conversation.id] = conversation.draft
+        }
         .padding(24).frame(minWidth: 700, idealWidth: 820, minHeight: 600, idealHeight: 740)
         .task(id: store.gateway.connection) {
             guard !conversation.opening, store.gateway.phase == .online else { return }

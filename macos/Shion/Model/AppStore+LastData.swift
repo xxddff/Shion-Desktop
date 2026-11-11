@@ -271,6 +271,8 @@ extension AppStore {
         withObservationTracking {
             _ = bots
             _ = chats
+            _ = skillReviews
+            _ = learningNotices
             _ = todos
             _ = reports
             _ = todaySummary

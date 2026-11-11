@@ -171,6 +171,7 @@ extension AppStore {
 
     func openReview(_ review: SkillReview) {
         let conversation = ReviewConversation(review: review)
+        conversation.draft = composerDrafts[serverKey + "|review|" + review.id] ?? ""
         reviewConversation = conversation
         Task { await conversation.open(using: self) }
     }
@@ -192,6 +193,7 @@ final class ReviewConversation: Identifiable {
     var detail: JSONValue?
     private let review: SkillReview
     private var streaming: String?
+    private var pendingSubmission: (id: String, text: String)?
 
     init(review: SkillReview) {
         self.review = review; id = review.id; profile = review.profile; title = review.skill
@@ -250,19 +252,22 @@ final class ReviewConversation: Identifiable {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !busy, !opening else { return }
         draft = ""
-        do { try await submit(text, id: UUID().uuidString, using: store) }
+        let requestId = pendingSubmission.flatMap { $0.text == text ? $0.id : nil } ?? UUID().uuidString
+        do { try await submit(text, id: requestId, using: store) }
         catch { draft = text; self.error = error.localizedDescription }
     }
     private func submit(_ text: String, id: String, using store: AppStore) async throws {
         guard let session else { throw GatewayError.offline }
         error = nil
         busy = true
+        pendingSubmission = (id, text)
+        if !items.contains(where: { $0.id == id }) {
+            items.append(ChatItem(id: id, role: .user, at: Date(), text: text))
+        }
         do {
             _ = try await store.gateway.call("prompt.submit", ["profile": .string(profile), "session_id": .string(session),
                 "text": .string(text), "submission_id": .string(id)])
-            if !items.contains(where: { $0.id == id }) {
-                items.append(ChatItem(id: id, role: .user, at: Date(), text: text))
-            }
+            pendingSubmission = nil
         } catch { busy = false; throw error }
     }
     func receive(_ type: String, sessionId: String?, payload: JSONValue) -> Bool {
