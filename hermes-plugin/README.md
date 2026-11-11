@@ -116,7 +116,7 @@ hermes -p shion plugins doctor shion  # 用 Hermes 自己的发现和注册流�
 - **`session_id` 只有 `focus.report` 要带**：詩音 Bot Chat 的会话 id。带了 `session_id` 的调用，Hermes 会先按这个会话检查权限（是不是这个 profile 的、是不是你的会话）。其他方法不要带（带了也只是多一次检查）。
 - `profile`、`session_id` 由 Hermes 留在 params 里，插件忽略它们。除此之外，不认识的参数一律报 `invalid_params`。
 - 连接要有 `session:control` 能力（Hermes 对插件方法的要求，同插件斜杠命令），Shion 的登录凭证和会话令牌都有。
-- 每次调用占着这个连接的请求通道直到返回。这里的方法都只读写本地 SQLite，很快。
+- 每次调用占着这个连接的请求通道直到返回。普通方法只读写本地 SQLite；拒绝技能变更时还会调用 Hermes 的 curator 命令，可能需要更久。
 
 ### 错误
 
@@ -146,7 +146,7 @@ hermes -p shion plugins doctor shion  # 用 Hermes 自己的发现和注册流�
 
 ### revision
 
-每次写入（真的改了东西的）都让全库的 `revision` 加一，并记下改了哪些**话题**：`todos`、`today`、`reports`、`usage`、`focus`、`settings`。写入方法的返回里带着写完后的 `revision`。推送和 `changes.since` 都靠它，见「推送」。
+每次公开数据的写入（真的改了东西的）都让全库的 `revision` 加一，并记下改了哪些**话题**：`todos`、`today`、`reports`、`usage`、`focus`、`settings`、`reviews`（技能审核和系统事件）。内部来源上下文的缓存不触发推送。推送和 `changes.since` 都靠 revision，见「推送」。
 
 ## 数据格式
 

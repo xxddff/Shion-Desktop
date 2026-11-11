@@ -28,6 +28,7 @@ struct StopButton: View {
 /// tools may run again asks first (AppStore.retryRisk).
 struct ReplyFooter: View {
     @Environment(AppStore.self) private var store
+    @Environment(\.chatBotId) private var composerBot
     let item: ChatItem
     let botId: String
     @State private var risk: RetryRisk?
@@ -43,9 +44,11 @@ struct ReplyFooter: View {
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(item.text, forType: .string)
                     }.buttonStyle(.plain).accessibilityIdentifier("copy-" + item.id)
-                    Button("回复", systemImage: "arrowshape.turn.up.left") {
-                        store.replyQuotes[store.draftKey(botId)] = item
-                    }.buttonStyle(.plain).accessibilityIdentifier("quote-" + item.id)
+                    if composerBot == botId {
+                        Button("回复", systemImage: "arrowshape.turn.up.left") {
+                            store.replyQuotes[store.draftKey(botId)] = item
+                        }.buttonStyle(.plain).accessibilityIdentifier("quote-" + item.id)
+                    }
                 }
                 if marked {
                     Text("已停止")

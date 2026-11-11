@@ -195,3 +195,19 @@ def test_staged_memory_is_not_reported_as_written_and_peer_card_is_not_injected(
         plugin.on_pre_llm_call(session_id="chat", user_message="Message from 🤖 little (@little): ready", turn_id="peer1")
     rows = ctx.call("notices.list", {"source_session": "chat"})["notices"]
     assert len(rows) == 1 and rows[0]["kind"] == "peer" and not ctx.injected
+
+
+def test_cli_pins_home_and_profile_without_shell_expansion(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import shion.reviews as module
+    captured = []
+    def run(args, **kw):
+        captured.append((args, kw))
+        return SimpleNamespace(returncode=0)
+    monkeypatch.setattr(module.subprocess, "run", run)
+    ledger = Ledger(tmp_path / "custom/profiles/little", "little")
+    ledger.command("rollback", "000000000001", "--yes")
+    args, kw = captured[0]
+    assert args == ["hermes", "-p", "little", "curator", "rollback", "000000000001", "--yes"]
+    assert kw["env"]["HERMES_HOME"] == str(ledger.home)
+    assert kw.get("shell") is not True

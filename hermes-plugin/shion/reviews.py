@@ -6,6 +6,7 @@ No dependency on private Hermes Python modules. All queries are scoped to the se
 from __future__ import annotations
 import hashlib
 import json
+import os
 import re
 import subprocess
 import threading
@@ -74,7 +75,8 @@ class Ledger:
     def command(self, *args):
         try:
             result = subprocess.run(["hermes", "-p", self.profile, "curator", *args],
-                                    capture_output=True, text=True, timeout=60, check=False)
+                                    capture_output=True, text=True, timeout=60, check=False,
+                                    env={**os.environ, "HERMES_HOME": str(self.home)})
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise ShionError("rollback_failed", "Hermes 撤销命令未完成，请刷新后检查") from exc
         if result.returncode:
