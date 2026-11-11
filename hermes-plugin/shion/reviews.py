@@ -186,7 +186,20 @@ class Reviews:
         def texts(manifest):
             return [{"path": path, "text": ledger.blob(digest).decode("utf-8", errors="replace") if digest else None}
                     for path, digest in sorted(manifest.items())]
-        return {**row, "before": texts(before), "after": texts(after)}
+        # Delta entries need not contain SKILL.md when only a support file changed.
+        # Supply the current skill document separately, clearly named, without archiving it.
+        document = None
+        for path in after.keys() | before.keys():
+            file = ledger.file(path)
+            for parent in file.parents:
+                if parent == (ledger.home / "skills").resolve(): break
+                candidate = parent / "SKILL.md"
+                if candidate.is_file():
+                    checked = ledger.file(str(candidate))
+                    document = {"path": str(checked), "text": checked.read_text(encoding="utf-8", errors="replace")}
+                    break
+            if document: break
+        return {**row, "before": texts(before), "after": texts(after), "current_skill": document}
 
     def decide(self, ident, decision, expected):
         row = self.get(ident)

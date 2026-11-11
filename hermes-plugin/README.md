@@ -1,6 +1,6 @@
 # shion 插件（Hermes 服务器端）
 
-Shion 的数据都存在这个 Hermes 插件里：待办、「今天」页顶部的一段话、日报、应用使用记录、专注检查的结论。所有助手经插件的**工具**读写，Shion 经插件 **RPC**（`plugin.shion.<名字>`，走 `/api/ws`）读写，看到的是同一份。
+插件保存待办、「今天」页顶部的一段话、日报、应用使用记录、专注检查结论，以及技能审核状态和系统事件卡片。聊天正文仍由 Hermes 保存。所有助手经插件的**工具**读写，Shion 经插件 **RPC**（`plugin.shion.<名字>`，走 `/api/ws`）读写，看到的是同一份。
 
 依据 Hermes `main`（2026-11-09，`8c1a9c0b`）的代码：`hermes_cli/plugin_rpc.py`、`hermes_cli/plugins_context.py`、`hermes_cli/plugins_injection.py`、`hermes_cli/plugin_events.py`、`gateway/session_plugin_rpc.py`、`gateway/session_controls.py`、`gateway/run_plugin_injection.py`。文档和代码对不上的地方以代码为准，下文会注明。
 
@@ -112,7 +112,7 @@ hermes -p shion plugins doctor shion  # 用 Hermes 自己的发现和注册流�
 ```
 
 - **先确认服务器支持**：`runtime.describe` 的 `capabilities` 里要有 `plugin-rpc-v1`。有它时，`-32601` 表示这个 profile 没加载 shion 插件（没装、没启用，或者方法名拼错）；没有它就当插件 RPC 不可用。
-- **每次都带 `profile: "shion"`。** Hermes 按 `params.profile` 把调用转给那个 profile（`gateway/session_controls.py` 的 `_sibling_for`），插件的处理函数在那个 profile 里运行；不带就是连接本身的 profile。插件只装在助手们的 profile 里，所以要带。`focus.report` 必须在 `chief_profile` 里运行，其他方法在哪个装了插件的 profile 都一样（数据是同一份）。连接只绑定一个 profile 时，Hermes 对别的 `profile` 回 `profile_mismatch`；Shion 打开各助手的 Bot Chat 用的也是这条路，能打开就能调。
+- **每次都带 `profile: "shion"`。** Hermes 按 `params.profile` 把调用转给那个 profile（`gateway/session_controls.py` 的 `_sibling_for`），插件的处理函数在那个 profile 里运行；不带就是连接本身的 profile。插件只装在助手们的 profile 里，所以要带。`focus.report` 必须在 `chief_profile` 里运行，待办等共享数据的方法在哪个装了插件的 profile 都一样；`reviews.*` 和 `notices.*` 必须调用事件所属 profile，查询和操作都按 profile 隔离。连接只绑定一个 profile 时，Hermes 对别的 `profile` 回 `profile_mismatch`；Shion 打开各助手的 Bot Chat 用的也是这条路，能打开就能调。
 - **`session_id` 只有 `focus.report` 要带**：詩音 Bot Chat 的会话 id。带了 `session_id` 的调用，Hermes 会先按这个会话检查权限（是不是这个 profile 的、是不是你的会话）。其他方法不要带（带了也只是多一次检查）。
 - `profile`、`session_id` 由 Hermes 留在 params 里，插件忽略它们。除此之外，不认识的参数一律报 `invalid_params`。
 - 连接要有 `session:control` 能力（Hermes 对插件方法的要求，同插件斜杠命令），Shion 的登录凭证和会话令牌都有。
@@ -140,9 +140,9 @@ hermes -p shion plugins doctor shion  # 用 Hermes 自己的发现和注册流�
 
 ### 时间和日期
 
-- **时间**：ISO 8601，返回时总是带设置里时区的偏移，精确到秒，比如 `2026-11-09T10:45:00+09:00`。传进来的时间带偏移（或 `Z`）就照用；不带偏移，按设置的时区理解。Mac 端请总是带偏移。只给日期（`2026-11-10`）当时间用会被拒绝。
+- **时间**：ISO 8601，返回时总是带设置里时区的偏移，精确到秒，比如 `2026-11-09T10:45:00+09:00`。传进来的时间带偏移（或 `Z`）就照用；不带偏移，按设置的时区理解。Mac 端请总是带偏移。待办的 `do_at` / `due_at` 也接受单独日期 `2026-11-10`，其余需要时刻的接口仍要求日期时间。
 - **日期**：`YYYY-MM-DD`，指设置时区里的那一天（`date`、`from`、`to`）。「今天」也按这个时区算，可以从 `info` / `sync.state` 的 `today` 拿到。
-- 时间在库里按 UTC 存，所以改了时区，已有的时间不变，只是显示的偏移和「哪一天」跟着变。
+- 带时刻的值按 UTC 存；纯日期保持 `YYYY-MM-DD`，切换时区不移动日期。纯日期截止项在当天结束后才算逾期，不加入按时段进行的专注计划。
 
 ### revision
 
@@ -179,11 +179,11 @@ hermes -p shion plugins doctor shion  # 用 Hermes 自己的发现和注册流�
 | `area` | `study` / `work` / `life` | |
 | `source` | string | 谁加的：助手的 profile 名（`shion`、`study`、`mail`…），或从 Shion 加的固定是 `你自己加的` |
 | `source_detail` | string \| null | 从哪来的，界面上显示在待办下面，比如「来自 中村老师 的邮件」。Mac 的示例数据里 `source` 写的就是这类话，接上插件后 `source` 是谁加的、这一行是从哪来的，两个分开 |
-| `do_at` | 时间 \| null | 执行时间 |
-| `due_at` | 时间 \| null | 截止时间，和执行时间分开 |
+| `do_at` | 日期或时间 \| null | 执行时间 |
+| `due_at` | 日期或时间 \| null | 截止时间，和执行时间分开 |
 | `done` | bool | |
 | `nudges` | int | 催过几次 |
-| `proposed` | bool | `true`：日期是助手建议的，等你在「等你确认」里确认 |
+| `proposed` | bool | `true`：日期是助手建议的，等你在「待你处理」里确认 |
 | `created_at` / `updated_at` | 时间 | `updated_at` 只在真的改了内容时变 |
 | `completed_at` | 时间 \| null | `done` 变成 `true` 时记下，改回 `false` 时清空 |
 
@@ -248,7 +248,7 @@ hermes -p shion plugins doctor shion  # 用 Hermes 自己的发现和注册流�
 参数：无。
 
 ```json
-{"plugin_version": "0.1.0", "schema_version": 1, "profile": "shion", "timezone": "Asia/Tokyo",
+{"plugin_version": "0.2.0", "schema_version": 1, "profile": "shion", "timezone": "Asia/Tokyo",
  "today": "2026-11-09", "revision": 42, "tz_database": true}
 ```
 
@@ -310,7 +310,7 @@ hermes -p shion plugins doctor shion  # 用 Hermes 自己的发现和注册流�
 | --- | --- | --- |
 | `title` | 是 | |
 | `area` | 是 | |
-| `do_at` / `due_at` | | 时间或 `null` |
+| `do_at` / `due_at` | | 日期、时间或 `null` |
 | `proposed` | | 默认 `false` |
 | `source_detail` | | |
 | `id` | | 自己给 id。同一个 id 内容一样（标题、area、两个时间）再加一次，返回已有的那条、不算新写入，所以断线后可以放心重发；内容不一样报 `conflict` |
@@ -323,7 +323,7 @@ hermes -p shion plugins doctor shion  # 用 Hermes 自己的发现和注册流�
 | --- | --- |
 | `id` | 必填 |
 | `title`、`area` | |
-| `do_at`、`due_at` | 时间，`null` 清空 |
+| `do_at`、`due_at` | 日期或时间，`null` 清空 |
 | `done` | `true` 完成（记 `completed_at`），`false` 改回未完成 |
 | `proposed` | `false` = 确认助手建议的日期；改日期不会自动确认，要确认就一起传 `proposed: false` |
 | `nudges` | 直接设成某个数 |
@@ -517,3 +517,28 @@ python -m pytest -q
 测试不装 Hermes：`tests/conftest.py` 的 `FakeCtx` 照 `PluginContext` 的接口记下 `register_rpc`、`register_tool`、`register_hook`、`on_unload`、`inject_message`，`FakeHermes` 代替 `broadcast_plugin_event` 和 `get_session_env`；RPC 按 Hermes 的调用方式调（params 里留着 `profile`、`session_id`，`session_id` 另外作为关键字参数传）。存储用真的 SQLite。
 
 CI：`.github/workflows/hermes-plugin.yml`，只在 `hermes-plugin/**` 或这个工作流改了时跑，ubuntu runner，Python 3.11 和 3.13。
+
+
+## 0.2：系统卡片与写入后审核
+
+这部分核对 Hermes `78abaafcccec20a546c94e8734a70e38c08a6a69`（2026-11-11）。每个助手的插件都要升级；不需要安装到审核会话，审核沿用该 profile。
+
+- `post_llm_call` 留下最近至多 50 条用户／助手文字消息的来源上下文；工具输出、系统提示不带入审核。
+- `post_tool_call` 读取技能变更账本中 `actor=curator` 的成功创建／修改，记录卡片身份、来源、条目 id、决定和审核会话 id。技能文件已经生效，插件不加前置审批门。
+- 技能正文和版本不另建备份库；详情读取 Hermes 的 `skills/.curator_ledger.jsonl` 与 `.curator_backups/blobs`。仅支持文件发生变化的条目；账本关闭时不会伪造可回退记录。
+- 批准只记录决定。拒绝新建技能调用 `hermes -p PROFILE curator archive SKILL`；拒绝修改按倒序调用 `curator rollback ENTRY --yes`。使用 Hermes 的同一 per-skill 锁包住校验和操作，校验条目列表、备份哈希、当前文件与后续变更；有冲突就拒绝覆盖。撤销中途失败会显示单独状态，不继续把它当作待审核。
+- 卡片和决定不会随账本清理消失；详情／撤销需要的版本已清理时返回 `version_unavailable`。插件不延长 Hermes 的保留期。打开审核后的版本固定，新写入另起卡片。
+- 审核是独立 canonical session，`toolsets: []`、`ignore_rules: true`、`follow_profile_config: false`；只做对话审查，没有修改技能／记忆的工具，因此本会话不触发自动沉淀，不改变全局配置。再次点审核恢复绑定的会话。
+- 成功且已经写入的 `memory` 工具调用记录记忆卡片，已暂存待审批或失败的调用不冒充成功。记忆卡片没有技能的批准／拒绝按钮。助手间消息按 `Message from 🤖 …` 的 Hermes 标记记录／显示卡片。
+- `review.summary` 仍显示为摘要卡片。Mac 先暂存收到的事件，再通过幂等 `notices.record` 保存；重放用 epoch/seq 去重，重连补读。原始摘要若在客户端离线期间从未送达、又已离开 Hermes 的重放窗口，无法补造其原文；技能账本和记忆工具钩子保存的实际变更卡片仍可补读。卡片不通过 `inject_message` 塞回模型上下文。
+
+| RPC | 参数 | 结果 |
+| --- | --- | --- |
+| `reviews.list` | `profile` | 该 profile 的持久卡片；同步尚未收录的账本条目 |
+| `reviews.detail` | `profile, id` | 来源上下文、前后变更文件、单列的当前技能文档 |
+| `reviews.bind` | `profile, id, review_session` | 幂等绑定独立审核会话，不允许替换已有绑定 |
+| `reviews.decide` | `profile, id, decision, entries` | `approved` / `rejected`；`entries` 必须等于卡片版本 |
+| `notices.record` | `profile, id, source_session, text, at, kind` | 同 id 重试不重复写入 |
+| `notices.list` | `profile, source_session` | 持久系统事件，不进入模型历史 |
+
+新增错误：`version_unavailable`（账本或备份已不可用）、`invalid_ledger`（路径或哈希无效）、`rollback_failed`（Hermes 命令失败）。更新会在旧数据库中添加表；已有待办日期时间和已有客户端接口兼容。

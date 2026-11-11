@@ -792,12 +792,10 @@ extension AppStore {
         case "message.complete":
             Task { await refreshReviews(botId); await refreshNotificationRows(botId) }
             var text = payload["text"]?.string ?? ""
-            if shown {
-                completeReply(botId, payload)
-                if text.isEmpty {
-                    text = chats[botId]?.last(where: { $0.role == .assistant })?.text ?? ""
-                }
+            if text.isEmpty, let id = streaming[botId] {
+                text = chats[botId]?.first(where: { $0.id == id })?.text ?? ""
             }
+            if shown { completeReply(botId, payload) }
             if payload["status"]?.string == "error" {
                 notifyReply(botId, Self.failureLine(payload, streamed: ""), payload)
             } else if payload["status"]?.string != "interrupted" {
@@ -866,7 +864,7 @@ extension AppStore {
               let index = chats[botId]?.firstIndex(where: { $0.id == id })
         else { return }
         chats[botId]?[index].streaming = false
-        if chats[botId]?[index].text.isEmpty == true {
+        if chats[botId]?[index].text.isEmpty == true || ChatPresentation.silent(chats[botId]?[index].text ?? "") {
             chats[botId]?.remove(at: index)
         }
     }

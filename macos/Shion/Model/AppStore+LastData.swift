@@ -47,6 +47,8 @@ nonisolated struct LastDataFile: Codable, Sendable {
     var today: String?
     var reports: [StoredReport]?
     var cards: [StoredCard]?
+    var reviews: [SkillReview]?
+    var sessions: [String: String]?
 }
 
 nonisolated struct StoredBot: Codable, Sendable {
@@ -153,7 +155,7 @@ extension AppStore {
         }
     }
 
-    /// Shows the last data, if it is this server's. What the server did not have shows the demo's.
+    /// Shows this server's last data; sections never loaded stay empty.
     func showLastData() {
         guard let file = lastData.file, file.server == serverSettings.trimmed.signInServer,
               let stored = file.bots, !stored.isEmpty
@@ -167,6 +169,7 @@ extension AppStore {
         reports = file.reports?.map { $0.report } ?? []
         todaySummary = file.today
         cards = file.cards?.map { $0.card } ?? []
+        skillReviews = file.reviews ?? []
         lastData.savedAt = file.savedAt
         lastData.shown = true
         if case .chat(let id)? = lastData.route, bot(id) != nil {
@@ -241,6 +244,8 @@ extension AppStore {
                 pages[bot.id] = items.suffix(LastData.chatRows).map { StoredItem($0) }
             }
         }
+        file.reviews = skillReviews
+        file.sessions = sessions
         file.chats = pages.filter { id, _ in bots.contains { $0.id == id } }
         if pluginData {
             file.todos = todos.map { StoredTodo($0) }

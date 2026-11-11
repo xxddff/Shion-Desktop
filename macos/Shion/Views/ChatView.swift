@@ -134,6 +134,7 @@ struct ChatView: View {
         // dropped and pasted pictures and files go to the composer
         .chatAttachments(botId)
         .environment(\.chatBotId, botId)
+        .onChange(of: store.replyQuotes[store.draftKey(botId)]?.id) { composerKeys += 1 }
         .navigationTitle(bot?.name ?? "")
         .navigationSubtitle(bot?.title ?? "")
         .toolbar {
@@ -166,7 +167,7 @@ struct ChatView: View {
                 }
                 Picker("助手忙碌时", selection: Binding(get: { store.sendMode }, set: { store.sendMode = $0 })) {
                     ForEach(SendMode.allCases, id: \.rawValue) { Text($0.label).tag($0) }
-                }.pickerStyle(.segmented)
+                }.pickerStyle(.segmented).accessibilityIdentifier("send-mode")
                 ComposerBar(botId: botId) {
                 Composer(placeholder: "跟\(bot?.name ?? "")说…", text: draft, canSend: store.canSend(botId, draft.wrappedValue), send: {
                     // what one sends, and the reply to it, are followed down from wherever one was;

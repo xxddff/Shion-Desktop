@@ -30,7 +30,7 @@ struct ComposerText: NSViewRepresentable {
     func updateNSView(_ view: NSScrollView, context: Context) {
         context.coordinator.parent = self
         guard let field = view.documentView as? Input else { return }
-        if field.string != text { field.string = text }
+        if field.string != text && !field.hasMarkedText() { field.string = text }
         field.submit = send
     }
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -38,7 +38,7 @@ struct ComposerText: NSViewRepresentable {
         var parent: ComposerText
         init(_ parent: ComposerText) { self.parent = parent }
         func textDidChange(_ notification: Notification) {
-            if let field = notification.object as? NSTextView { parent.text = field.string }
+            if let field = notification.object as? NSTextView, !field.hasMarkedText() { parent.text = field.string }
         }
     }
     final class Input: NSTextView {

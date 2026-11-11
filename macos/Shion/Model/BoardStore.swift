@@ -938,7 +938,7 @@ final class BoardStore {
         case "scheduled": return "定时"
         case "ready": return "就绪"
         case "running": return "在做"
-        case "blocked": return "卡住"
+        case "blocked": return "受阻"
         case "review": return "待验收"
         case "done": return "完成"
         case KanbanWorkflow.archived: return "归档"

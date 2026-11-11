@@ -157,3 +157,41 @@ def test_memory_events_durable_deduped_and_never_injected(store, tmp_path):
     assert ctx.call("notices.record", event) == first
     assert len(ctx.call("notices.list", {"source_session": "chat"})["notices"]) == 2
     assert not ctx.call("notices.list", {"source_session": "other"})["notices"]
+
+
+def test_new_write_after_review_open_gets_a_new_card(system):
+    reviews, ledger = system
+    reviews.context("chat", [{"role": "user", "content": "learn"}], turn="turn-1")
+    ledger.add("000000000001", before="original", after="first")
+    row = reviews.list()[0]
+    reviews.bind(row["id"], "review-chat")
+    ledger.add("000000000002", before="first", after="second")
+    rows = reviews.list()
+    assert len(rows) == 2
+    assert reviews.get(row["id"])["entries"] == ["000000000001"]
+    assert next(r for r in rows if r["id"] != row["id"])["review_session"] is None
+    with pytest.raises(ShionError, match="conflict"): reviews.decide(row["id"], "rejected", row["entries"])
+
+
+def test_unrecorded_new_file_blocks_archive(system):
+    reviews, ledger = system
+    ledger.add("000000000001", action="create")
+    row = reviews.list()[0]
+    ledger.file("test-skill/new-notes.md").write_text("keep")
+    with pytest.raises(ShionError, match="conflict"): reviews.decide(row["id"], "rejected", row["entries"])
+    assert not ledger.calls
+
+
+def test_staged_memory_is_not_reported_as_written_and_peer_card_is_not_injected(store, tmp_path):
+    ctx, hermes = FakeCtx(), FakeHermes()
+    hermes.profile_home = lambda: tmp_path
+    plugin = ShionPlugin(ctx, hermes=hermes, store=store)
+    plugin.register()
+    plugin.on_post_tool_call(tool_name="memory", status="ok", session_id="chat", tool_call_id="staged",
+                            args={"target": "memory", "action": "patch", "content": "new"},
+                            result={"success": True, "staged": True, "pending_id": "approval"})
+    assert not ctx.call("notices.list", {"source_session": "chat"})["notices"]
+    for _ in range(2):
+        plugin.on_pre_llm_call(session_id="chat", user_message="Message from 🤖 little (@little): ready", turn_id="peer1")
+    rows = ctx.call("notices.list", {"source_session": "chat"})["notices"]
+    assert len(rows) == 1 and rows[0]["kind"] == "peer" and not ctx.injected

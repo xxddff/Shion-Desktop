@@ -139,7 +139,7 @@ struct TodoDateEditor: View {
                 Button("清除日期") { store.pluginWrite("todos.update", ["id": .string(todo.id), field: .null]) }
             }
         }.disabled(!store.pluginData || store.readOnly)
-        .onAppear {
+        .onChange(of: todo, initial: true) {
             let instant = field == "do_at" ? todo.doAt : todo.dueAt
             date = (field == "do_at" ? todo.plannedDate : todo.deadlineDate) ?? store.now
             timed = instant != nil

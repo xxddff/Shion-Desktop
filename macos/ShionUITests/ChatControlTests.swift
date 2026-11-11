@@ -7,7 +7,8 @@ import XCTest
 /// 詩音's chat a long reply stopped with ⌘. (session.interrupt for the turn's run) and kept as
 /// 已停止; 重试 on it (a fenced rewind, then the same words again); a turn the stand-in fails as a
 /// provider's rate limit does, explained in Chinese with Hermes's words under 详情, and retried; a
-/// turn that called a tool, whose 重试 asks first (取消, then 重试); ⌘F over the loaded rows,
+/// successful tool reply without 重试, preserved drafts, Shift Return, learning cards and an
+/// isolated skill review; ⌘F over the loaded rows,
 /// and back into older pages for a hit not loaded yet; then 断开, and the window keeps the server's
 /// data, read-only. A picture at each step (chatctl-*.png).
 final class ChatControlTests: XCTestCase {
@@ -72,7 +73,20 @@ final class ChatControlTests: XCTestCase {
         XCTAssertTrue(waitForText("CI 替身服务器连上了", in: app, timeout: 15), "詩音's chat did not open")
         let composer = element("composer", in: app)
         XCTAssertTrue(composer.waitForExistence(timeout: 5))
+        // Switching Shion pages preserves the draft. Shift Return inserts at the caret.
         composer.click()
+        composer.typeText("draft-151")
+        element("nav-todos", in: app).click()
+        chief.click()
+        XCTAssertTrue(composer.waitForExistence(timeout: 5))
+        XCTAssertEqual(composer.value as? String, "draft-151")
+        composer.click()
+        app.typeKey(.return, modifierFlags: .shift)
+        composer.typeText("second-line")
+        XCTAssertEqual(composer.value as? String, "draft-151\nsecond-line")
+        XCTAssertFalse(element("stop", in: app).exists, "Shift Return sent the draft")
+        app.typeKey("a", modifierFlags: .command)
+        app.typeKey(.delete, modifierFlags: [])
         composer.typeText("讲一个长故事")
         element("send", in: app).click()
         let stop = element("stop", in: app)
@@ -139,41 +153,31 @@ final class ChatControlTests: XCTestCase {
             XCTFail("no 重试 under a failure Hermes says can be retried")
         }
 
-        // a turn that called a tool: 重试 asks first, as the tool would run again; 取消 leaves the
-        // chat as it was, 重试 in the question goes ahead
+        // Successful replies offer copy/reply, and never replay completed tool calls.
         composer.click()
         composer.typeText("查一下明天的天气")
         element("send", in: app).click()
-        XCTAssertTrue(waitForText("明天晴，最高 18 度", in: app, timeout: 15), "the weather turn did not reply")
-        let retryTool = element("retry", in: app)
-        if retryTool.waitForExistence(timeout: 5) {
-            retryTool.click()
-            if let ask = question(in: app, timeout: 5) {
-                keep(app.windows.firstMatch.screenshot(), "chatctl-4c-confirm")
-                note(describe(ask, in: app), "chatctl-question")
-                let says = ask.staticTexts.allElementsBoundByIndex.map { "\($0.label) \(($0.value as? String) ?? "")" }
-                    .joined(separator: " ")
-                XCTAssertTrue(says.contains("web_search") && says.contains("可能会再做一次"), "the question does not name the tool: \(says)")
-                button("retry-cancel", "取消", in: ask).click()
-                XCTAssertTrue(waitUntil(timeout: 3) { !ask.exists }, "取消 did not close the question")
-                XCTAssertFalse(waitForText("（重试）明天晴", in: app, timeout: 2), "取消 retried all the same")
-                XCTAssertTrue(waitForText("明天晴，最高 18 度", in: app, timeout: 2), "取消 changed the chat")
-                element("retry", in: app).click()
-                if let ask = question(in: app, timeout: 5) {
-                    button("retry-confirm", "重试", in: ask).click()
-                    XCTAssertTrue(waitForText("（重试）明天晴，最高 18 度，傍晚起风", in: app, timeout: 15), "the confirmed 重试 did not reply")
-                    let asked = max(app.staticTexts.matching(NSPredicate(format: "label == %@", "查一下明天的天气")).count,
-                                    app.textViews.matching(NSPredicate(format: "value == %@", "查一下明天的天气")).count)
-                    XCTAssertLessThanOrEqual(asked, 1, "the weather prompt shows \(asked) times after 重试")
-                } else {
-                    XCTFail("重试 did not ask the second time")
-                }
-            } else {
-                XCTFail("重试 on a turn that called a tool did not ask first")
-            }
-        } else {
-            XCTFail("no 重试 under the weather reply")
-        }
+        XCTAssertTrue(waitForText("明天晴，最高 18 度", in: app, timeout: 15))
+        XCTAssertFalse(element("retry", in: app).exists, "a successful reply still offers retry")
+
+        // A successful silent marker has no bubble, while learning events are cards.
+        composer.click()
+        composer.typeText("RUN151-learning")
+        element("send", in: app).click()
+        XCTAssertTrue(waitForText("已生效 · 待审核", in: app, timeout: 15))
+        XCTAssertTrue(waitForText("用户记忆已更新（CI）", in: app, timeout: 10))
+        XCTAssertTrue(waitForText("已整理技能与记忆（CI）", in: app, timeout: 10))
+        XCTAssertFalse(app.staticTexts["[SILENT]"].exists)
+        XCTAssertFalse(app.textViews.matching(NSPredicate(format: "value == %@", "[SILENT]")).firstMatch.exists)
+        element("review-open-ci-review", in: app).click()
+        XCTAssertTrue(waitForText("审核结论：技能描述清楚（CI）", in: app, timeout: 15))
+        keep(app.windows.firstMatch.screenshot(), "chatctl-review-session")
+        element("review-close", in: app).click()
+        element("review-approve-ci-review", in: app).click()
+        XCTAssertTrue(waitForText("已批准 · 保留生效", in: app, timeout: 10))
+        element("review-open-ci-review", in: app).click()
+        XCTAssertTrue(waitForText("审核结论：技能描述清楚（CI）", in: app, timeout: 10), "the review conversation did not resume")
+        element("review-close", in: app).click()
 
         // ⌘F over the rows loaded: 第 120 to 129 条 are on the newest page
         app.typeKey("f", modifierFlags: .command)

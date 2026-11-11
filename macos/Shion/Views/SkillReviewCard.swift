@@ -11,9 +11,10 @@ struct SkillReviewCard: View {
                 Text("\(store.bot(review.profile)?.name ?? review.profile) · \(review.statusLabel)")
                     .font(.t12).foregroundStyle(.secondary)
                 HStack {
-                    Button("审核") { store.openReview(review) }
+                    Button("审核") { store.openReview(review) }.accessibilityIdentifier("review-open-" + review.id)
                     if review.status == "pending" {
                         Button("批准") { Task { await store.decideReview(review, decision: "approved") } }
+                            .accessibilityIdentifier("review-approve-" + review.id)
                         Button("拒绝", role: .destructive) { rejecting = true }
                     }
                     if store.reviewBusy.contains(review.id) { ProgressView().controlSize(.small) }
@@ -63,7 +64,7 @@ struct ReviewConversationView: View {
             HStack {
                 Text("审核技能 · " + conversation.title).font(.title3)
                 Spacer()
-                Button("关闭") { dismiss() }
+                Button("关闭") { dismiss() }.accessibilityIdentifier("review-close")
             }
             Text("独立审核会话 · 本会话关闭自动沉淀 · 不改变其他会话的设置")
                 .font(.t12).foregroundStyle(.secondary)
@@ -99,7 +100,7 @@ struct ReviewConversationView: View {
             Composer(placeholder: "讨论这个技能…", text: $conversation.draft,
                 canSend: !conversation.busy && !conversation.opening && !conversation.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) {
                 Task { await conversation.send(using: store) }
-            }.disabled(store.readOnly)
+            }.accessibilityIdentifier("review-composer").disabled(store.readOnly)
         }
         .padding(24).frame(minWidth: 700, idealWidth: 820, minHeight: 600, idealHeight: 740)
         .task(id: store.gateway.connection) {
