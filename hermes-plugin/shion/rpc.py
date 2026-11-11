@@ -15,7 +15,7 @@ from .store import SCHEMA_VERSION, USER_SOURCE
 if TYPE_CHECKING:
     from .plugin import ShionPlugin
 
-PLUGIN_VERSION = "0.1.0"
+PLUGIN_VERSION = "0.2.0"
 _ROUTING = {"profile", "session_id"}
 
 
@@ -141,7 +141,42 @@ def methods(plugin: "ShionPlugin") -> dict:
         _take(params, set())
         return {"latest": store.latest_focus()}
 
+    def reviews_list(params):
+        _take(params, set())
+        return {"reviews": plugin.reviews.list()}
+
+    def reviews_detail(params):
+        p = _take(params, {"id"}, {"id"})
+        return plugin.reviews.detail(p["id"])
+
+    def reviews_decide(params):
+        p = _take(params, {"id", "decision", "entries"}, {"id", "decision", "entries"})
+        return plugin.reviews.decide(p["id"], p["decision"], p["entries"])
+
+    def reviews_bind(params):
+        p = _take(params, {"id", "review_session"}, {"id", "review_session"})
+        return plugin.reviews.bind(p["id"], p["review_session"])
+
+    def notices_record(params):
+        p = _take(params, {"id", "source_session", "text", "at", "kind"}, {"id", "source_session", "text", "at"})
+        kind = p.get("kind", "review.summary")
+        if kind not in ("review.summary", "board", "peer", "process"):
+            raise ShionError("invalid_params", "invalid notice kind")
+        return {"revision": plugin.reviews.notice(p["id"], p["source_session"], p["text"], p["at"], kind)}
+
+    def notices_list(params):
+        p = _take(params, {"source_session"}, {"source_session"})
+        return {"notices": store._read(lambda c: [dict(r) for r in c.execute(
+            "SELECT id, session, text, at, kind FROM review_notices WHERE profile=? AND session=? ORDER BY at",
+            (plugin.profile(), p["source_session"]))])}
+
     return {
+        "reviews.list": reviews_list,
+        "reviews.detail": reviews_detail,
+        "reviews.decide": reviews_decide,
+        "reviews.bind": reviews_bind,
+        "notices.record": notices_record,
+        "notices.list": notices_list,
         "info": info,
         "sync.state": sync_state,
         "changes.since": changes_since,

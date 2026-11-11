@@ -54,10 +54,11 @@ extension AppStore {
     func say(_ text: String, to botId: String, sessionId: String) {
         let id = UUID().uuidString
         let written = Date()
+        let mode = sendMode
         // as the transcript will show it: words a retry sends again can start with their files' `@file:` lines
         chats[botId, default: []].append(Self.userItem(id: id, at: written, text: text))
         Task {
-            if await !submit(text, id: id, to: botId, sessionId: sessionId) {
+            if await !submit(text, id: id, to: botId, sessionId: sessionId, mode: mode) {
                 requeue(id, text: text, at: written, to: botId)
             }
         }
@@ -69,7 +70,7 @@ extension AppStore {
     /// leaves it unsure until the server can say (`comeBack`). False when it did not go out at all:
     /// no connection by the time it could.
     @discardableResult
-    func submit(_ text: String, id: String, to botId: String, sessionId: String) async -> Bool {
+    func submit(_ text: String, id: String, to botId: String, sessionId: String, mode: SendMode = .queue) async -> Bool {
         deliveries.track(id, botId: botId, text: text, at: Date())
         await waitForChat(botId)
         guard gateway.phase == .online, sessions[botId] == sessionId else {
@@ -77,17 +78,24 @@ extension AppStore {
             return false
         }
         do {
-            try await gateway.call("prompt.submit", [
+            try await sendWithMode([
                 "profile": .string(botId),
                 "session_id": .string(sessionId),
                 "text": .string(text),
                 "submission_id": .string(id),
-            ])
+            ], botId: botId, mode: mode)
             deliveries.arrived(id)
         } catch GatewayError.rpc(_, let message, let reason) {
             deliveries.set(id, .unsent(DeliveryCheck.refusal(reason) ?? reason ?? message))
+        } catch let error as ControlError {
+            deliveries.set(id, .unsent(error.localizedDescription))
         } catch {
-            deliveries.set(id, .unsure)
+            if mode == .steer {
+                // session.steer has no idempotent submission ID. Do not resend it automatically.
+                deliveries.untrack(id)
+                chats[botId, default: []].append(ChatItem(id: UUID().uuidString, role: .system, at: Date(),
+                    text: "引导的接收状态未确认，请核对助手的回复。原消息：" + text))
+            } else { deliveries.set(id, .unsure) }
         }
         return true
     }
@@ -193,6 +201,7 @@ extension AppStore {
         guard gateway.connection == socket, live, gateway.phase == .online else { return }
         // the plugin's pushes are not replayed: catch up on what changed while away
         await syncPluginData()
+        await refreshAllReviews()
         // the 总秘书 chosen on this Mac, where the plugin's setting differs (LocalData.swift)
         await local.syncChief()
     }

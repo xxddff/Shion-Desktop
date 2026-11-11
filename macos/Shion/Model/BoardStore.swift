@@ -939,7 +939,7 @@ final class BoardStore {
         case "ready": return "就绪"
         case "running": return "在做"
         case "blocked": return "卡住"
-        case "review": return "待检查"
+        case "review": return "待验收"
         case "done": return "完成"
         case KanbanWorkflow.archived: return "归档"
         default: return server ?? key

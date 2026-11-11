@@ -1,10 +1,14 @@
+import AppKit
 import SwiftUI
 
 /// An assistant's Bot Chat. The composer floats over the transcript, so it gets Liquid Glass.
 struct ChatView: View {
     @Environment(AppStore.self) private var store
     let botId: String
-    @State private var draft = ""
+    private var draft: Binding<String> {
+        Binding(get: { store.composerDrafts[store.draftKey(botId)] ?? "" },
+                set: { store.composerDrafts[store.draftKey(botId)] = $0 })
+    }
     /// The visible height, which the transcript fills even when it is short.
     @State private var viewport: CGFloat = 0
     /// The transcript is too short to scroll, so its top is always in view.
@@ -30,7 +34,13 @@ struct ChatView: View {
     var body: some View {
         let bot = store.bot(botId)
         // and under them, what was said while not connected, waiting (ChatDelivery.swift)
-        let items = store.withAskCards(store.chats[botId] ?? [], of: botId) + WaitingMessages.items(for: botId)
+        let extra = store.learningItems(botId)
+        let transcript = (store.chats[botId] ?? []).filter { item in
+            // A persisted board notification has an event card; its injected user row
+            // is the same notice, not another event.
+            !extra.contains { $0.eventKind == "board" && $0.text.contains(item.text) && item.role == .card && !item.text.isEmpty }
+        }
+        let items = store.withAskCards((transcript + extra).filter(ChatPresentation.visible).sorted { $0.at < $1.at }, of: botId) + WaitingMessages.items(for: botId)
         let lines = ChatLine.lines(items, replying: store.replying.contains(botId))
         let found = find.found(in: lines)
         // before the rows are laid out: older rows coming in above (the row at the top of what
@@ -128,19 +138,31 @@ struct ChatView: View {
         }
         .safeAreaInset(edge: .bottom) {
             // with what is about to go: pictures and files (AttachmentViews.swift)
-            ComposerBar(botId: botId) {
-                Composer(placeholder: "跟\(bot?.name ?? "")说…", text: $draft, canSend: store.canSend(botId, draft), send: {
+            VStack(alignment: .leading, spacing: 6) {
+                if let quote = store.replyQuotes[store.draftKey(botId)] {
+                    HStack {
+                        Text("回复：" + quote.text).lineLimit(2).font(.t12)
+                        Button("取消引用") { store.replyQuotes[store.draftKey(botId)] = nil }
+                    }
+                }
+                Picker("助手忙碌时", selection: Binding(get: { store.sendMode }, set: { store.sendMode = $0 })) {
+                    ForEach(SendMode.allCases, id: \.rawValue) { Text($0.label).tag($0) }
+                }.pickerStyle(.segmented)
+                ComposerBar(botId: botId) {
+                Composer(placeholder: "跟\(bot?.name ?? "")说…", text: draft, canSend: store.canSend(botId, draft.wrappedValue), send: {
                     // what one sends, and the reply to it, are followed down from wherever one was;
                     // a send that does not go (a picture still going up) leaves following as it was
                     let following = follow.on
                     follow.on = true
-                    if store.sendMessage(draft, to: botId) {
-                        draft = ""
+                    if store.sendMessage(store.quoted(draft.wrappedValue, to: botId), to: botId) {
+                        draft.wrappedValue = ""
+                        store.replyQuotes[store.draftKey(botId)] = nil
                     } else {
                         follow.on = following
                     }
                 }, stop: store.turnRunning(botId) && !store.readOnly ? { store.stopReply(botId) } : nil,
                    stopping: store.control.stopping.contains(botId), keys: composerKeys)
+            }
             }
             // not connected, what is said waits under the chat (AppStore+Reconnect.swift)
             .disabled(store.readOnly && !store.waits(botId))
@@ -263,6 +285,12 @@ struct ChatView: View {
             ChatRow(item: item, bot: bot, showHead: showsHead(lines, index))
                 // waiting, unsure or not sent (ChatDelivery.swift)
                 .modifier(DeliveryMark(item: item, botId: botId))
+                .contextMenu {
+                    if item.role == .user || item.role == .assistant {
+                        Button("复制") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(item.text, forType: .string) }
+                        Button("回复这条消息") { store.replyQuotes[store.draftKey(botId)] = item }
+                    }
+                }
         case .tools(let id, let tools):
             ToolRun(tools: tools, open: openRuns.contains(id)) {
                 openRuns.formSymmetricDifference([id])
@@ -582,11 +610,18 @@ struct ChatRow: View {
         case .system:
             TurnNote(item: item, botId: bot?.id ?? "")
         case .card:
-            if let askId = item.askId {
+            if let id = item.reviewId, let review = store.skillReviews.first(where: { $0.id == id }) {
+                SkillReviewCard(review: review)
+            } else if item.eventKind != nil {
+                EventCard(item: item)
+            } else if let askId = item.askId {
                 // a password or a key the assistant asked for, or what became of an ask (SecretCard.swift)
                 AskTrailCard(askId: askId)
             } else if let found = store.chatCard(item) {
-                CardChip(card: found.card, showsStatus: found.known)
+                VStack(alignment: .leading, spacing: 6) {
+                    CardChip(card: found.card, showsStatus: found.known)
+                    if !item.text.isEmpty { Text(item.text).font(.t12).textSelection(.enabled) }
+                }
             } else if !item.text.isEmpty {
                 // the board's notice about a card it no longer lists
                 FoundText(item.text)
@@ -715,19 +750,20 @@ struct Composer: View {
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 10) {
-            TextField(placeholder, text: $text, axis: .vertical)
-                .textFieldStyle(.plain)
-                .font(.system(size: 14))
-                .lineLimit(1...6)
-                .onSubmit(send)
-                .padding(.vertical, 7)
-                .accessibilityIdentifier("composer")
+            ComposerText(text: $text) {
+                if canSend ?? !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { send() }
+            }
+            .frame(height: 70)
+            .accessibilityLabel(placeholder)
+            .overlay(alignment: .topLeading) {
+                if text.isEmpty { Text(placeholder).font(.t13).foregroundStyle(.tertiary).padding(.top, 8).allowsHitTesting(false) }
+            }
                 // the keys, when the chat gives them back
                 .background(KeyTarget(request: keys))
             if let stop {
                 StopButton(stopping: stopping, action: stop)
-            } else {
-                Button(action: send) {
+            }
+            Button(action: send) {
                     Image(systemName: "arrow.up")
                         .font(.system(size: 13, weight: .bold))
                         .frame(width: 18, height: 18)
@@ -737,7 +773,6 @@ struct Composer: View {
                 .disabled(!(canSend ?? !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
                 .accessibilityLabel("发送")
                 .accessibilityIdentifier("send")
-            }
         }
         .padding(.leading, 16)
         .padding(.trailing, 6)

@@ -49,6 +49,8 @@ struct Todo: Identifiable, Hashable {
     var source: String
     var doAt: Date?
     var dueAt: Date?
+    var doDay: String? = nil
+    var dueDay: String? = nil
     var done = false
     var nudges = 0
     /// Dates suggested by an assistant, not yet confirmed by you.
@@ -80,7 +82,7 @@ enum CardStatus: CaseIterable {
         switch self {
         case .queued: return "排队"
         case .running: return "在做"
-        case .waiting: return "等你"
+        case .waiting: return "受阻／待验收"
         case .done: return "完成"
         }
     }
@@ -139,6 +141,8 @@ struct ChatItem: Identifiable, Hashable {
     let role: ChatRole
     let at: Date
     var text = ""
+    var eventKind: String?
+    var reviewId: String?
     var cardId: String?
     /// What was asked in this chat that its card or line stands for: a password or a key
     /// (SecretRequest.swift), or an answered approval or question (AskTrail.swift).

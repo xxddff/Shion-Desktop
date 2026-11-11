@@ -33,7 +33,7 @@ struct ReplyFooter: View {
     @State private var risk: RetryRisk?
 
     var body: some View {
-        let retry = !item.streaming && store.retryTarget(botId) == item.id
+        let retry = !item.streaming && (item.stopped || item.failure != nil) && store.retryTarget(botId) == item.id
         // a line (a stop before any words) says 已停止 itself
         let marked = item.stopped && item.role == .assistant
         if marked || retry {

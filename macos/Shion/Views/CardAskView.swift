@@ -42,6 +42,7 @@ struct CardAskView: View {
                         }
                     }
                 }
+                if ask.ask.kind != "review" {
                 HStack(spacing: 8) {
                     TextField("补充它需要的信息", text: $draft)
                         .textFieldStyle(.roundedBorder)
@@ -58,6 +59,7 @@ struct CardAskView: View {
                 // the last data, or the connection down: an answer waits for the server
                 .disabled(store.readOnly)
                 .padding(.top, 2)
+                }
                 HStack(spacing: 8) {
                     Button("打开卡片") { store.openCard(ask.cardId, board: ask.board) }
                         .buttonStyle(.link)

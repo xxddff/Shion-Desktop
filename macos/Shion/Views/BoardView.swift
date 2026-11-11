@@ -115,7 +115,7 @@ struct BoardView: View {
     private func subtitle(_ items: [BoardItem]) -> String {
         let running = items.filter { $0.group == .running }.count
         let waiting = items.filter { $0.group == .waiting }.count
-        return waiting > 0 ? "\(running) 件在做 · \(waiting) 件等你" : "\(running) 件在做"
+        return waiting > 0 ? "\(running) 件在做 · \(waiting) 件受阻／待验收" : "\(running) 件在做"
     }
 }
 

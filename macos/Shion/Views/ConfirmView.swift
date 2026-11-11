@@ -11,13 +11,19 @@ struct ConfirmView: View {
     var body: some View {
         let cards = store.cardAsks
         Group {
-            if store.asks.isEmpty && cards.isEmpty {
+            if store.confirmCount == 0 {
                 ContentUnavailableView("都处理完了", systemImage: "checkmark.circle")
             } else {
                 ScrollViewReader { reader in
                     ScrollView {
                         VStack(spacing: 16) {
-                            ForEach(store.asks) { ask in
+                            ForEach(store.todos.filter { $0.proposed && !$0.done }) { todo in
+                            Box { TodoRow(todo: todo, showDay: true) }
+                        }
+                        ForEach(store.skillReviews.filter { $0.status == "pending" }) { review in
+                            SkillReviewCard(review: review)
+                        }
+                        ForEach(store.asks) { ask in
                                 if ask.kind == .secret {
                                     // a password's or a key's card is one element already, named for
                                     // its request (SecretCard.swift): marked selected as it is, since
@@ -67,7 +73,7 @@ struct ConfirmView: View {
                 }
             }
         }
-        .navigationTitle("等你确认")
-        .navigationSubtitle(store.asks.count + cards.count == 0 ? "" : "\(store.asks.count + cards.count) 件")
+        .navigationTitle("待你处理")
+        .navigationSubtitle(store.confirmCount == 0 ? "" : "\(store.confirmCount) 件")
     }
 }

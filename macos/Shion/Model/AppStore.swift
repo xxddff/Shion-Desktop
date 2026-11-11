@@ -2,15 +2,13 @@ import AppKit
 import Observation
 import SwiftUI
 
-/// Everything the window shows. Starts on demo data; once connected to a Hermes server, the
-/// assistants and their Bot Chats come from it (the other pages stay on demo data until the
-/// `shion` plugin exists).
+/// Server-backed app state. Only explicit screenshot runs load fixtures.
 @Observable
 final class AppStore {
     /// The demo's pinned moment; with the server's own data, the last of it, or this Mac's
     /// calendars, `now` is the real time, ticking every 30 seconds.
     let demoClock: Date
-    var now: Date { pluginData || lastData.shown || local.realTime ? local.clock : demoClock }
+    var now: Date { LaunchOptions.current.snapshot ? demoClock : local.clock }
     /// This Mac's calendars, the focus check and the app usage record (AppStore+Local.swift).
     let local = LocalData.forLaunch()
     var route: Route? = LaunchOptions.current.route
@@ -21,6 +19,18 @@ final class AppStore {
     var asks: [Ask]
     var chats: [String: [ChatItem]]
     var reports: [Report]
+    var composerDrafts: [String: String] = [:]
+    var replyQuotes: [String: ChatItem] = [:]
+    var sendMode: SendMode = SendMode(rawValue: UserDefaults.standard.string(forKey: "ShionSendMode") ?? "") ?? .queue {
+        didSet { UserDefaults.standard.set(sendMode.rawValue, forKey: "ShionSendMode") }
+    }
+    var skillReviews: [SkillReview] = []
+    var learningNotices: [String: [ChatItem]] = [:]
+    var pendingLearningEvents = LearningEvent.loadPending()
+    var reviewErrors: [String: String] = [:]
+    var reviewBusy: Set<String> = []
+    var reviewConversation: ReviewConversation?
+    @ObservationIgnored var savingLearningEvents = false
     var screens: [BotScreen]
 
     // the Hermes server
@@ -90,16 +100,16 @@ final class AppStore {
     @ObservationIgnored var streaming: [String: String] = [:]
 
     init(now: Date) {
-        let demo = DemoData(now: now)
+        let demo = LaunchOptions.current.snapshot ? DemoData(now: now) : nil
         self.demoClock = now
-        bots = demo.bots
-        todos = demo.todos
-        events = demo.events
-        cards = demo.cards
-        asks = demo.asks
-        chats = demo.chats
-        reports = demo.reports
-        screens = demo.screens
+        bots = demo?.bots ?? []
+        todos = demo?.todos ?? []
+        events = demo?.events ?? []
+        cards = demo?.cards ?? []
+        asks = demo?.asks ?? []
+        chats = demo?.chats ?? [:]
+        reports = demo?.reports ?? []
+        screens = demo?.screens ?? []
         gateway.onEvent = { [weak self] type, sessionId, payload in
             self?.apply(type, sessionId: sessionId, payload: payload)
         }
@@ -114,6 +124,7 @@ final class AppStore {
         gateway.onFrame = { [weak self] params in
             self?.noteFences(params)
             self?.noteDelivery(params)
+            self?.noteLearningFrame(params)
         }
         startLastData()
         // screenshot and test runs post nothing and ask for no permission: Notifier sees to that
@@ -137,11 +148,11 @@ final class AppStore {
         todos
             .filter { todo in
                 guard !todo.done, !todo.proposed else { return false }
-                let planned = todo.doAt.map { Fmt.dayDiff($0, now) <= 0 } ?? false
-                let due = todo.dueAt.map { Fmt.dayDiff($0, now) <= 0 } ?? false
+                let planned = todo.plannedDate.map { Fmt.dayDiff($0, now) <= 0 } ?? false
+                let due = todo.deadlineDate.map { Fmt.dayDiff($0, now) <= 0 } ?? false
                 return planned || due
             }
-            .sorted { ($0.dueAt ?? $0.doAt ?? .distantFuture) < ($1.dueAt ?? $1.doAt ?? .distantFuture) }
+            .sorted { ($0.deadlineDate ?? $0.plannedDate ?? .distantFuture) < ($1.deadlineDate ?? $1.plannedDate ?? .distantFuture) }
     }
 
     /// Events on that day, including ones that began the day before and run into it.
@@ -343,6 +354,8 @@ extension AppStore {
         olderPages[botId] = nil
         olderErrors[botId] = nil
         chats[botId] = nil
+        learningNotices[botId] = nil
+        skillReviews.removeAll { $0.profile == botId }
         replying.remove(botId)
         deliveries.forget(botId)
         for ask in asks where ask.botId == botId {
@@ -449,6 +462,10 @@ extension AppStore {
         olderErrors = [:]
         attachMarks = [:]
         loadedChats = []
+        learningNotices = [:]
+        skillReviews = []
+        reviewErrors = [:]
+        reviewConversation = nil
         replying = []
         Notifier.shared.withdrawAll()
         endSecrets()
@@ -478,6 +495,7 @@ extension AppStore {
                 }
             }
             loadedChats.insert(botId)
+            await refreshReviews(botId)
         } catch {
             chatErrors[botId] = error.localizedDescription
         }
@@ -618,7 +636,7 @@ extension AppStore {
 
     /// A transcript row as the chat shows it: usually one item, none for a row that is not for you,
     /// one card per line for the board's notices.
-    private func chatItems(from row: JSONValue) -> [ChatItem] {
+    func chatItems(from row: JSONValue) -> [ChatItem] {
         let at = row["timestamp"]?.number.map { Date(timeIntervalSince1970: $0) } ?? Date()
         // Hermes's tool rows have no row_id; their call's id keeps them the same across reads
         let id = row["row_id"]?.int.map { "row-\($0)" } ?? row["row_id"]?.string
@@ -644,6 +662,7 @@ extension AppStore {
             if let failed = Self.failedTurn(row, id: id, at: at, body: body) { return [failed] }
             // a reply you stopped: Hermes marks the row it kept (an empty one when nothing had come)
             let stopped = row["display_metadata"]?["interrupted"]?.bool == true
+            guard !ChatPresentation.silent(body), row["display_kind"]?.string != "hidden" else { return [] }
             guard !body.isEmpty else {
                 return stopped ? [ChatItem(id: id, role: .system, at: at, text: "已停止", stopped: true)] : []
             }
@@ -727,6 +746,7 @@ extension AppStore {
         if type == "plugin.shion.changed" {
             return pluginChanged(payload)
         }
+        if reviewConversation?.receive(type, sessionId: sessionId, payload: payload) == true { return }
         guard let sessionId, let botId = sessionBots[sessionId] else { return }
         secretEvent(type, sessionId: sessionId, payload: payload)
         // a chat not opened yet has no rows to add to: its first page brings them
@@ -754,6 +774,7 @@ extension AppStore {
                 endReply(botId)
             }
         case "message.complete":
+            Task { await refreshReviews(botId) }
             var text = payload["text"]?.string ?? ""
             if shown {
                 completeReply(botId, payload)
@@ -764,7 +785,7 @@ extension AppStore {
             if payload["status"]?.string == "error" {
                 notifyReply(botId, Self.failureLine(payload, streamed: ""), payload)
             } else if payload["status"]?.string != "interrupted" {
-                notifyReply(botId, text, payload)
+                if !ChatPresentation.silent(text) { notifyReply(botId, text, payload) }
             }
         case "tool.start":
             guard shown else { break }
@@ -789,13 +810,8 @@ extension AppStore {
                   let index = chats[made.botId]?.firstIndex(where: { $0.id == made.itemId })
             else { break }
             chats[made.botId]?[index].cardId = cardId
-        case "status.update":
-            // the board's word on a card this chat made, just before the turn it starts
-            guard shown, payload["kind"]?.string == "process", let text = payload["text"]?.string else { break }
-            for notice in Self.kanbanNotices(text) {
-                append(ChatItem(id: UUID().uuidString, role: .card, at: Date(), text: notice.line,
-                                cardId: notice.taskId, cardAssignee: notice.assignee), to: botId)
-            }
+        case "status.update", "review.summary":
+            break // noteLearningFrame persists and displays these independently of the reply
         case "session.info":
             if let running = payload["running"]?.bool {
                 setRunning(botId, running)
@@ -846,6 +862,11 @@ extension AppStore {
             return failReply(botId, payload, reply: streaming.removeValue(forKey: botId))
         }
         let final = payload["text"]?.string ?? ""
+        let shownText = final.isEmpty ? (streaming[botId].flatMap { id in chats[botId]?.first { $0.id == id }?.text } ?? "") : final
+        if ChatPresentation.silent(shownText) {
+            if let id = streaming.removeValue(forKey: botId) { chats[botId]?.removeAll { $0.id == id } }
+            return
+        }
         if let id = streaming[botId], let index = chats[botId]?.firstIndex(where: { $0.id == id }) {
             if !final.isEmpty {
                 chats[botId]?[index].text = final

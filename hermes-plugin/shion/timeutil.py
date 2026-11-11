@@ -53,6 +53,8 @@ def to_wire(text: str | None, tz: ZoneInfo) -> str | None:
     """A stored instant as ISO 8601 with the user's offset, e.g. ``2026-11-09T10:45:00+09:00``."""
     if text is None:
         return None
+    if _DATE_RE.fullmatch(text):
+        return text
     return from_storage(text).astimezone(tz).isoformat(timespec="seconds")
 
 
@@ -102,3 +104,12 @@ def parse_bound(value, tz: ZoneInfo, field: str, *, upper: bool) -> datetime:
         start, end = day_bounds(parse_date(value, field), tz)
         return end if upper else start
     return parse_instant(value, tz, field)
+
+
+def todo_time(value, tz, field):
+    """Preserve a floating calendar date; only timed values become UTC instants."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, str) and _DATE_RE.fullmatch(value.strip()):
+        return parse_date(value, field)
+    return to_storage(parse_instant(value, tz, field))

@@ -259,6 +259,7 @@ extension AppStore {
         }
         guard let sessionId = sessions[botId] else { return false }
         let drafts = media.takeDrafts(botId)
+        let mode = sendMode
         // the submission id names the item, as send's does: the turn's end says which row it was
         // stored as, which 重试 needs (AppStore+Control.swift)
         let id = UUID().uuidString
@@ -269,7 +270,7 @@ extension AppStore {
             for hash in drafts.filter({ $0.kind == .image }).compactMap(\.sha256) {
                 await media.disk.keep(hash)
             }
-            await submit(words, drafts, botId: botId, sessionId: sessionId, submission: id, again: false)
+            await submit(words, drafts, botId: botId, sessionId: sessionId, submission: id, again: false, mode: mode)
         }
         return true
     }
@@ -290,7 +291,7 @@ extension AppStore {
     /// 没发出去 under it, with 重发 (the same id and references; a picture cleared meanwhile goes
     /// up again, as below).
     func submit(_ words: String, _ drafts: [Draft], botId: String, sessionId: String, submission: String,
-                again: Bool) async {
+                again: Bool, mode: SendMode = .queue) async {
         let refs = drafts.compactMap(\.ref).joined(separator: "\n")
         var body = [refs, words].filter { !$0.isEmpty }.joined(separator: "\n\n")
         let pictures = drafts.filter { $0.kind == .image }
@@ -314,7 +315,7 @@ extension AppStore {
             return deliveries.set(submission, .unsent(nil))
         }
         do {
-            try await gateway.call("prompt.submit", .object(params))
+            try await sendWithMode(params, botId: botId, mode: mode)
             deliveries.arrived(submission)
         } catch GatewayError.rpc(_, let message, let reason) where !again && !pictures.isEmpty && (reason ?? message) == "invalid_params" {
             // a picture staged too long ago was cleared: up again from the Mac's copy, once
@@ -331,6 +332,8 @@ extension AppStore {
             await submit(words, fresh, botId: botId, sessionId: sessionId, submission: renewed, again: true)
         } catch GatewayError.rpc(_, let message, let reason) {
             deliveries.set(submission, .unsent(DeliveryCheck.refusal(reason) ?? reason ?? message))
+        } catch let error as ControlError {
+            deliveries.set(submission, .unsent(error.localizedDescription))
         } catch {
             // no answer before the connection went: unsure until the server can say
             deliveries.set(submission, .unsure)

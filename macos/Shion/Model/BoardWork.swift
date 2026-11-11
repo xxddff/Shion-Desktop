@@ -50,7 +50,15 @@ enum BoardWork {
     /// card's detail: the reason is only there, and the card's own `block_kind` may be left from
     /// an earlier block (the failure breaker blocks a card without changing it).
     static func ask(_ task: KanbanTask, detail: KanbanDetail?) -> CardAsk? {
-        guard let detail else { return nil }
+        if task.status == "review" {
+            return CardAsk(kind: "review", reason: task.latestSummary ?? task.result, at: task.completedAt, again: false)
+        }
+        guard let detail else {
+            if task.status == "blocked", let kind = task.blockKind, yours.contains(kind) {
+                return CardAsk(kind: kind, reason: nil, at: nil, again: false)
+            }
+            return nil
+        }
         switch task.status {
         case "blocked":
             guard let stop = detail.stop else {
@@ -132,6 +140,7 @@ struct CardAsk: Equatable {
 
     /// Why it stopped, the way the board says it.
     var words: String {
+        if kind == "review" { return reason.map { "待验收：\($0)" } ?? "任务已提交，待你验收" }
         if again {
             return reason.map { "又卡在同一处：\($0)" } ?? "又卡在同一处了"
         }
@@ -211,7 +220,7 @@ extension KanbanRun {
         switch outcome ?? "" {
         case "": return endedAt == nil ? "进行中" : "结束了"
         case "completed": return "做完了"
-        case "blocked": return "停下来等你"
+        case "blocked": return "任务受阻"
         case "crashed": return "中途出错"
         case "timed_out": return "超时了"
         case "reclaimed": return "收回了"

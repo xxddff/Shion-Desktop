@@ -33,7 +33,7 @@ def test_utc_input_is_shown_with_the_local_offset(store):
 def test_validation(store):
     assert codes(lambda: store.add_todo(title="", area="life", source="s")) == "invalid_params"
     assert codes(lambda: store.add_todo(title="x", area="fun", source="s")) == "invalid_params"
-    assert codes(lambda: store.add_todo(title="x", area="life", source="s", do_at="2026-11-10")) == "invalid_params"
+    assert codes(lambda: store.add_todo(title="x", area="life", source="s", do_at="2026-11-31")) == "invalid_params"
     assert codes(lambda: store.add_todo(title="x", area="life", source="s", do_at="soon")) == "invalid_params"
     assert codes(lambda: store.add_todo(title="x", area="life", source="s", proposed="yes")) == "invalid_params"
     assert codes(lambda: store.get_todo("nope")) == "not_found"
@@ -144,7 +144,7 @@ def test_changes_since_and_topic_revisions(store, clock):
     assert store.changes_since(1)["topics"] == ["today"]
     assert store.changes_since(2)["topics"] == []
     assert store.changes_since(99)["reset"] is True  # ahead of this store
-    assert store.topic_revisions() == {"todos": 1, "today": 2, "reports": 0, "usage": 0, "focus": 0, "settings": 0}
+    assert store.topic_revisions() == {"todos": 1, "today": 2, "reports": 0, "usage": 0, "focus": 0, "settings": 0, "reviews": 0}
     # A week later the log is trimmed: an old cursor must refetch everything.
     clock.set("2026-11-20T10:00:00+09:00")
     store.add_todo(title="y", area="life", source="s")
@@ -277,3 +277,18 @@ def test_focus_reports(store, clock):
     assert latest["woke"] and latest["age_minutes"] == 8
     assert codes(lambda: store.add_focus(plan="x", off_minutes=-1, activity="fun", on_track=False)) == "invalid_params"
     assert codes(lambda: store.add_focus(plan="x", off_minutes=1, activity="games", on_track=False)) == "invalid_params"
+
+
+def test_date_only_roundtrip_filter_update_and_timezone(store):
+    todo, _ = store.add_todo(title="calendar day", area="life", source="s", do_at="2026-11-10", due_at="2026-11-12")
+    assert todo["do_at"] == "2026-11-10" and todo["due_at"] == "2026-11-12"
+    assert [t["id"] for t in store.list_todos(date="2026-11-10", field="do_at")] == [todo["id"]]
+    assert not store.list_todos(date="2026-11-09", field="do_at")
+    assert not store.list_todos(date="2026-11-11", field="do_at")
+    store.update_settings({"timezone": "America/New_York"})
+    assert store.get_todo(todo["id"])["do_at"] == "2026-11-10"
+    assert len(store.list_todos(date="2026-11-10", field="do_at")) == 1
+    updated, _ = store.update_todo(todo["id"], {"do_at": "2026-11-10T09:00:00-05:00", "due_at": None})
+    assert updated["do_at"] == "2026-11-10T09:00:00-05:00" and updated["due_at"] is None
+    updated, _ = store.update_todo(todo["id"], {"do_at": "2026-11-10"})
+    assert updated["do_at"] == "2026-11-10"

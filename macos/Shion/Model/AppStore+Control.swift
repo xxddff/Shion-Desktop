@@ -216,6 +216,7 @@ extension AppStore {
         guard live, !readOnly, sessions[botId] != nil, !turnRunning(botId), !control.retrying.contains(botId),
               let items = chats[botId],
               let end = items.lastIndex(where: { Self.endsTurn($0) }),
+              items[end].stopped || items[end].failure != nil,
               items[end].failure?.retryable ?? true,
               let prompt = items[..<end].lastIndex(where: { Self.startsTurn($0) }),
               items[prompt].role == .user, Self.retryable(items[prompt]),

@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 TOOLSET = "shion"
 
-_DATETIME = ("ISO 8601 date-time, e.g. 2026-11-10T15:00 (no offset = the user's time zone, "
+_DATETIME = ("A date (YYYY-MM-DD, no time) or ISO 8601 date-time, e.g. 2026-11-10T15:00 (no offset = the user's time zone, "
              "Asia/Tokyo unless changed) or with an offset such as +09:00")
 _DATE = "Date as YYYY-MM-DD in the user's time zone; omit for today"
 

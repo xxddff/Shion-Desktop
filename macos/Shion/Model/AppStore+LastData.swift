@@ -82,6 +82,8 @@ nonisolated struct StoredTodo: Codable, Sendable {
     var source: String
     var doAt: Date?
     var dueAt: Date?
+    var doDay: String? = nil
+    var dueDay: String? = nil
     var done: Bool
     var nudges: Int
     var proposed: Bool
@@ -116,15 +118,15 @@ extension AppStore {
     /// Before connecting and while the connection is down, the window shows the last data, and what
     /// would change it (a todo ticked, a message sent, a card moved) waits for the server.
     var readOnly: Bool {
-        lastData.shown || (live && gateway.phase != .online) || Self.readOnlyDemo
+        lastData.shown || (!LaunchOptions.current.snapshot && (!live || gateway.phase != .online)) || Self.readOnlyDemo
     }
 
     /// Never connected to this server: the demo's data.
-    var showsDemo: Bool { !live && !lastData.shown }
+    var showsDemo: Bool { LaunchOptions.current.snapshot && !live && !lastData.shown }
 
     /// The sidebar's line under the server: the data is the last the server gave, from then.
     var lastDataNote: String? {
-        guard readOnly else { return nil }
+        guard readOnly, lastData.shown else { return nil }
         return "上次的数据 · \(Fmt.when(lastData.savedAt ?? Date(), now: Date()))"
     }
 
@@ -155,16 +157,16 @@ extension AppStore {
         guard let file = lastData.file, file.server == serverSettings.trimmed.signInServer,
               let stored = file.bots, !stored.isEmpty
         else { return }
-        let demo = DemoData(now: demoClock)
+        let demo = LaunchOptions.current.snapshot ? DemoData(now: demoClock) : nil
         bots = stored.map { $0.bot }
         let pages = file.chats ?? [:]
         chats = Dictionary(bots.map { bot in (bot.id, (pages[bot.id] ?? []).compactMap { $0.item }) },
                            uniquingKeysWith: { first, _ in first })
         asks = []
-        todos = file.todos?.map { $0.todo } ?? demo.todos
-        reports = file.reports?.map { $0.report } ?? demo.reports
+        todos = file.todos?.map { $0.todo } ?? []
+        reports = file.reports?.map { $0.report } ?? []
         todaySummary = file.today
-        cards = file.cards?.map { $0.card } ?? demo.cards
+        cards = file.cards?.map { $0.card } ?? []
         lastData.savedAt = file.savedAt
         lastData.shown = true
         if case .chat(let id)? = lastData.route, bot(id) != nil {
@@ -179,9 +181,9 @@ extension AppStore {
     func settleLastData() {
         guard live else { return }
         if lastData.shown && !pluginData {
-            let demo = DemoData(now: demoClock)
-            todos = demo.todos
-            reports = demo.reports
+            let demo = LaunchOptions.current.snapshot ? DemoData(now: demoClock) : nil
+            todos = demo?.todos ?? []
+            reports = demo?.reports ?? []
             todaySummary = nil
         }
         lastData.shown = false
@@ -206,14 +208,14 @@ extension AppStore {
             try? FileManager.default.removeItem(at: LastData.url)
         }
         guard lastData.shown else { return }
-        let demo = DemoData(now: demoClock)
-        bots = demo.bots
-        chats = demo.chats
-        asks = demo.asks
-        todos = demo.todos
-        reports = demo.reports
+        let demo = LaunchOptions.current.snapshot ? DemoData(now: demoClock) : nil
+        bots = demo?.bots ?? []
+        chats = demo?.chats ?? [:]
+        asks = demo?.asks ?? []
+        todos = demo?.todos ?? []
+        reports = demo?.reports ?? []
         todaySummary = nil
-        cards = demo.cards
+        cards = demo?.cards ?? []
         lastData.shown = false
         if case .chat(let id)? = route, bot(id) == nil {
             route = .today
@@ -370,12 +372,12 @@ extension StoredItem {
 extension StoredTodo {
     init(_ todo: Todo) {
         self.init(id: todo.id, title: todo.title, area: todo.area.rawValue, source: todo.source, doAt: todo.doAt,
-                  dueAt: todo.dueAt, done: todo.done, nudges: todo.nudges, proposed: todo.proposed)
+                  dueAt: todo.dueAt, doDay: todo.doDay, dueDay: todo.dueDay, done: todo.done, nudges: todo.nudges, proposed: todo.proposed)
     }
 
     var todo: Todo {
         Todo(id: id, title: title, area: Area(rawValue: area) ?? .life, source: source, doAt: doAt, dueAt: dueAt,
-             done: done, nudges: nudges, proposed: proposed)
+             doDay: doDay, dueDay: dueDay, done: done, nudges: nudges, proposed: proposed)
     }
 }
 
