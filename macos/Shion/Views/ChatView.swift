@@ -146,10 +146,12 @@ struct ChatView: View {
 
     private var visibleItems: [ChatItem] {
         let extra = store.learningItems(botId)
+        let eventTexts = Set(extra.flatMap { item -> [String] in
+            if item.eventKind == "board" { return AppStore.kanbanNotices(item.text).map(\.line) }
+            return ["peer", "process"].contains(item.eventKind ?? "") ? [item.text] : []
+        })
         let storedItems = (store.chats[botId] ?? []).filter { item in
-            // A persisted board notification has an event card; its injected user row
-            // is the same notice, not another event.
-            !extra.contains { ["board", "peer", "process"].contains($0.eventKind ?? "") && $0.text == item.text && item.role == .card && !item.text.isEmpty }
+            !(item.role == .card && !item.text.isEmpty && eventTexts.contains(item.text))
         }
         return store.withAskCards((storedItems + extra).filter(ChatPresentation.visible).sorted { $0.at < $1.at }, of: botId) + WaitingMessages.items(for: botId)
     }
@@ -622,7 +624,7 @@ struct ChatRow: View {
         case .card:
             if let id = item.reviewId, let review = store.skillReviews.first(where: { $0.id == id }) {
                 SkillReviewCard(review: review)
-            } else if item.eventKind != nil {
+            } else if item.eventKind != nil || (item.cardId != nil && !item.text.isEmpty) {
                 EventCard(item: item)
             } else if let askId = item.askId {
                 // a password or a key the assistant asked for, or what became of an ask (SecretCard.swift)

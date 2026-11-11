@@ -16,7 +16,7 @@ import XCTest
 /// 3. after a sentence was admitted, before its receipt: 等连上后确认 while down, then an ordinary
 ///    message with its answer, once;
 /// 4. before a sentence was admitted: once back, 没发出去 with 重发, which sends it, once;
-/// 5. while an approval waits: once back it is still in 等你确认, and answering it there lets the
+/// 5. while an approval waits: once back it is still in 待你处理, and answering it there lets the
 ///    turn finish in the same bubble;
 /// 6. before a reply longer than the session keeps: the replay cannot reach back, the newest page
 ///    stands in, and the reply is there whole, once, with nothing still replying;
@@ -46,7 +46,7 @@ final class ReconnectTests: XCTestCase {
         guard signIn(app) else { return }
 
         // 课程's approval comes once its Bot Chat is attached: answered first, so that the one asked
-        // later is the only one in 等你确认
+        // later is the only one in 待你处理
         element("nav-confirm", in: app).click()
         if waitForText("要在课程的云桌面上登录 Moodle 吗？", in: app, timeout: 15) {
             app.buttons["拒绝"].firstMatch.click()

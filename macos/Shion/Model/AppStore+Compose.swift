@@ -5,7 +5,7 @@ extension AppStore {
     func quoted(_ text: String, to botId: String) -> String {
         guard let quote = replyQuotes[draftKey(botId)] else { return text }
         let body = quote.text.split(separator: "\n", omittingEmptySubsequences: false).map { "> " + $0 }.joined(separator: "\n")
-        return "回复消息（\(quote.id)）：\n\(body)\n\n\(text)"
+        return "回复这条消息：\n\(body)\n\n\(text)"
     }
     func sendWithMode(_ params: [String: JSONValue], botId: String, mode: SendMode) async throws {
         guard let session = params["session_id"]?.string else { throw GatewayError.offline }

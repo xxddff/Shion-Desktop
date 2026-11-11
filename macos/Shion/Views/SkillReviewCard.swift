@@ -34,18 +34,36 @@ struct SkillReviewCard: View {
 }
 
 struct EventCard: View {
+    @Environment(AppStore.self) private var store
     let item: ChatItem
     var body: some View {
         Box {
             VStack(alignment: .leading, spacing: 8) {
                 Label(title, systemImage: item.eventKind == "memory" ? "brain" : "bell.badge").font(.t13.weight(.medium))
-                Text(item.text).font(.t13).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                if kind == "board" {
+                    ForEach(Array(AppStore.kanbanNotices(item.text).enumerated()), id: \.offset) { _, notice in
+                        let reference = ChatItem(id: item.id, role: .card, at: item.at, cardId: notice.taskId, cardAssignee: notice.assignee)
+                        if let found = store.chatCard(reference) {
+                            CardChip(card: found.card, showsStatus: found.known)
+                        }
+                        Text(boardText(notice.line)).font(.t13).textSelection(.enabled)
+                    }
+                } else {
+                    Text(item.text).font(.t13).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                }
                 Text(Fmt.hm(item.at)).font(.t11).foregroundStyle(.secondary)
             }.padding(.vertical, 5)
         }
     }
+    private var kind: String { item.eventKind ?? (item.cardId == nil ? "review.summary" : "board") }
+    private func boardText(_ line: String) -> String {
+        let parts = line.components(separatedBy: " — ")
+        let head = parts.first ?? ""
+        let state = head.contains(" done") ? "已完成" : head.contains(" review") ? "待验收" : head.contains(" blocked") ? "任务受阻" : "任务进展"
+        return parts.count > 1 ? state + "：" + parts.dropFirst().joined(separator: " — ") : state
+    }
     private var title: String {
-        switch item.eventKind {
+        switch kind {
         case "memory": "记忆更新 · 已生效"
         case "board": "看板进展"
         case "peer": "助手消息"

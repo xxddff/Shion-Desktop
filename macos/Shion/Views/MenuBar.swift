@@ -106,7 +106,7 @@ struct MenuBarPanel: View {
                     store.route = .confirm
                     MainWindow.show()
                 } label: {
-                    PanelRow(systemImage: "hand.raised", text: "\(store.confirmCount) 件事等你确认") {
+                    PanelRow(systemImage: "hand.raised", text: "\(store.confirmCount) 件事待你处理") {
                         Image(systemName: "arrow.right").foregroundStyle(.secondary)
                     }
                 }

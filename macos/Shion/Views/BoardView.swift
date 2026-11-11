@@ -49,7 +49,7 @@ struct BoardView: View {
                 selection = nil
                 showInspector = false
             }
-            // a card asked for from elsewhere (a notification, 等你确认): open it once its board is up
+            // a card asked for from elsewhere (a notification, 待你处理): open it once its board is up
             .task(id: "\(store.board.revealing?.id ?? "")|\(store.board.slug ?? "")|\(items.count)") {
                 guard let wanted = store.board.revealing,
                       !store.board.active || wanted.board == nil || wanted.board == store.board.slug,

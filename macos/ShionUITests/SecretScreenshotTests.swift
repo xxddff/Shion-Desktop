@@ -3,7 +3,7 @@ import XCTest
 
 /// The cards for a password or a key an assistant asked for, light and dark, on made-up requests
 /// (`-ShionSecretsDemo YES`): 课程's chat with one that expired and two that wait (the sudo password
-/// for a command, NOTION_API_KEY for the notion skill), 等你确认 with the two, and 今天's
+/// for a command, NOTION_API_KEY for the notion skill), 待你处理 with the two, and 今天's
 /// 「需要你」 rows; and what Settings says about them. Nothing is dialled. The real thing, against
 /// the stand-in, is SecretsTests.
 final class SecretScreenshotTests: XCTestCase {

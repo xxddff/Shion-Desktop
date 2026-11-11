@@ -257,7 +257,7 @@ final class QuickAsk {
             // on its way into the chat
             return [ChatItem(id: "quick-asked", role: .user, at: asked.at, text: asked.text)]
         }
-        return Array(items[start...])
+        return items[start...].filter(ChatPresentation.visible)
     }
 
     /// The turn is over and something came after the sentence: a reply, a card, a note.

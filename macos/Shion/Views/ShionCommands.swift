@@ -58,7 +58,7 @@ struct SidebarPage {
     /// In sidebar order: ⌘1 is the first.
     static let all: [SidebarPage] = [
         SidebarPage(route: .today, title: "今天", symbol: "sun.max", token: "today"),
-        SidebarPage(route: .confirm, title: "等你确认", symbol: "hand.raised", token: "confirm"),
+        SidebarPage(route: .confirm, title: "待你处理", symbol: "hand.raised", token: "confirm"),
         SidebarPage(route: .todos, title: "待办", symbol: "checklist", token: "todos"),
         SidebarPage(route: .calendar, title: "日程", symbol: "calendar", token: "calendar"),
         SidebarPage(route: .reports, title: "日报", symbol: "doc.text", token: "reports"),

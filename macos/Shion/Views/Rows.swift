@@ -129,7 +129,7 @@ struct AskRow: View {
     }
 }
 
-/// An ask on the 「等你确认」 page, with what would be sent.
+/// An ask on the 「待你处理」 page, with what would be sent.
 struct AskCard: View {
     @Environment(AppStore.self) private var store
     let ask: Ask
