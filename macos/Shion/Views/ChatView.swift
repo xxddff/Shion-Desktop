@@ -16,7 +16,8 @@ struct ChatView: View {
     /// Where the transcript shows between updates: the row at the top put back as older rows
     /// come in above, the find bar's hits gone to, in that order (TranscriptPlace).
     @State private var place = TranscriptPlace()
-    /// Bumped as the transcript is made: once its rows are laid out, it goes to the newest one.
+    /// Bumped as the transcript is made, and as its lines change while its end is followed: once
+    /// its rows are laid out, it goes to the newest one.
     @State private var placing = 0
     /// ⌘F (ChatControls.swift)
     @State private var find = ChatFind()
@@ -69,6 +70,21 @@ struct ChatView: View {
                             guard follow.on, let last = lines.last else { return }
                             follow.until = Date().addingTimeInterval(1)
                             reader.scrollTo(last.id, anchor: .bottom)
+                        }
+                        // the lines themselves changed while the end is followed: a turn's calls
+                        // fold into one line as it ends, a row comes or goes, the last one is there
+                        // again under its row's id. The scroll asked for in the update that changed
+                        // them lands short of the new end, by the folded line's height (run 181: a
+                        // reply's last words under the composer; the 重试 every finished turn used
+                        // to have was what hid there). Once more, then, when the rows are laid out
+                        .onChange(of: LineShape(lines)) {
+                            guard follow.on else { return }
+                            Task {
+                                try? await Task.sleep(for: .milliseconds(60))
+                                if follow.on {
+                                    placing += 1
+                                }
+                            }
                         }
                         // the reader scrolled: to the end, or away from it. When the content's
                         // height changed it was not the reader: the newest rows taking their real
@@ -486,6 +502,18 @@ final class TranscriptPlace {
         let across = frames.filter { $0.value.minY < 0 && $0.value.maxY > 0 }
             .min { $0.value.minY < $1.value.minY }
         return (starting ?? across).map { (id: $0.key, frame: $0.value) }
+    }
+}
+
+/// Which lines a transcript has, as far as where its end is goes: how many, and the last one.
+private nonisolated struct LineShape: Equatable {
+    let count: Int
+    let last: String?
+
+    @MainActor
+    init(_ lines: [ChatLine]) {
+        count = lines.count
+        last = lines.last?.id
     }
 }
 
