@@ -78,7 +78,7 @@ struct ConfirmView: View {
 
     /// A heading and what is under it; nothing at all when there is nothing under it.
     @ViewBuilder
-    private func section(_ title: String, count: Int, @ViewBuilder content: () -> some View) -> some View {
+    private func section<Content: View>(_ title: String, count: Int, @ViewBuilder content: () -> Content) -> some View {
         if count > 0 {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 6) {

@@ -254,8 +254,12 @@ extension AppStore {
         var tools: [String] = []
         for item in items[(prompt + 1)...] {
             // as the folded line names the calls (ChatLines.swift), and the cards the chat made
-            let name = item.role == .tool ? item.toolName
+            var name = item.role == .tool ? item.toolName
                 : item.role == .card && item.text.isEmpty ? item.cardTitle.map { "建卡片「\($0)」" } : nil
+            // a message to another assistant went out, and would go out again
+            if case .sent(let to)? = item.event {
+                name = "给\(bot(to)?.name ?? to)发消息"
+            }
             if let name, !tools.contains(name) {
                 tools.append(name)
             }
