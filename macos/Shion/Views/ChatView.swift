@@ -16,8 +16,7 @@ struct ChatView: View {
     /// Where the transcript shows between updates: the row at the top put back as older rows
     /// come in above, the find bar's hits gone to, in that order (TranscriptPlace).
     @State private var place = TranscriptPlace()
-    /// Bumped as the transcript is made, and as its lines change while its end is followed: once
-    /// its rows are laid out, it goes to the newest one.
+    /// Bumped as the transcript is made: once its rows are laid out, it goes to the newest one.
     @State private var placing = 0
     /// ⌘F (ChatControls.swift)
     @State private var find = ChatFind()
@@ -71,20 +70,11 @@ struct ChatView: View {
                             follow.until = Date().addingTimeInterval(1)
                             reader.scrollTo(last.id, anchor: .bottom)
                         }
-                        // the lines themselves changed while the end is followed: a turn's calls
-                        // fold into one line as it ends, a row comes or goes, the last one is there
-                        // again under its row's id. The scroll asked for in the update that changed
-                        // them lands short of the new end, by the folded line's height (run 181: a
-                        // reply's last words under the composer; the 重试 every finished turn used
-                        // to have was what hid there). Once more, then, when the rows are laid out
+                        // the lines themselves changed: a turn's calls fold into one line as it
+                        // ends, a row comes or goes. For a moment the newest line is watched as it
+                        // is laid out (in the rows, below)
                         .onChange(of: LineShape(lines)) {
-                            guard follow.on else { return }
-                            Task {
-                                try? await Task.sleep(for: .milliseconds(60))
-                                if follow.on {
-                                    placing += 1
-                                }
-                            }
+                            follow.relaid = Date().addingTimeInterval(0.3)
                         }
                         // the reader scrolled: to the end, or away from it. When the content's
                         // height changed it was not the reader: the newest rows taking their real
@@ -192,6 +182,16 @@ struct ChatView: View {
                             proxy.frame(in: .scrollView)
                         } action: { frame in
                             place.laidOut(line.id, at: frame)
+                            // the newest line, laid out ending below what shows just after the lines
+                            // changed, while the end is followed: the scroll asked for in the update
+                            // that changed them landed short, by the height of the line a turn's
+                            // calls folded into (run 181: a reply's last words under the composer;
+                            // the 重试 every finished turn used to have was what hid there). To its
+                            // end again, now that the rows are where they are
+                            if follow.on, index == lines.count - 1, Date() < follow.relaid,
+                               frame.maxY > place.viewport + 1 {
+                                place.proxy?.scrollTo(line.id, anchor: .bottom)
+                            }
                         }
                         .onDisappear {
                             place.gone(line.id)
@@ -300,6 +300,9 @@ struct ChatView: View {
 final class Follow {
     var on = true
     var until = Date.distantPast
+    /// The lines themselves changed a moment ago: until then the newest one, laid out short of
+    /// where it was scrolled to, is gone to again.
+    var relaid = Date.distantPast
     /// Put at its newest message since it was made: until then no older page is asked for.
     var placed = false
 }
