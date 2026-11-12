@@ -68,18 +68,26 @@ final class BotPageTests: XCTestCase {
         XCTAssertTrue(waitUntil(timeout: 10) { saveSoul.exists && !saveSoul.isEnabled }, "the SOUL was not written over the other")
 
         // a model the server warns about is chosen only once you agree
-        reveal("assistant-model", in: app).click()
-        let provider = app.menuItems["OpenRouter"].firstMatch
-        XCTAssertTrue(provider.waitForExistence(timeout: 5), "no OpenRouter in the model menu")
-        provider.hover()
-        let pricey = app.menuItems["ci-pricey"].firstMatch
-        if !pricey.waitForExistence(timeout: 2) {
-            // a submenu opens on hover; clicking its item opens it too
-            provider.click()
+        let choosePricey = {
+            self.reveal("assistant-model", in: app).click()
+            let provider = app.menuItems["OpenRouter"].firstMatch
+            XCTAssertTrue(provider.waitForExistence(timeout: 5), "no OpenRouter in the model menu")
+            provider.hover()
+            let pricey = app.menuItems["ci-pricey"].firstMatch
+            if !pricey.waitForExistence(timeout: 2) {
+                // a submenu opens on hover; clicking its item opens it too
+                provider.click()
+            }
+            XCTAssertTrue(pricey.waitForExistence(timeout: 5), "no ci-pricey under OpenRouter")
+            pricey.click()
         }
-        XCTAssertTrue(pricey.waitForExistence(timeout: 5), "no ci-pricey under OpenRouter")
-        pricey.click()
+        choosePricey()
         let agree = dialogButton("换成它", in: app)
+        if !agree.waitForExistence(timeout: 6) {
+            // the submenu's item took no click: the menu closed with nothing chosen, and nothing was
+            // sent (run 185). Once more
+            choosePricey()
+        }
         XCTAssertTrue(agree.waitForExistence(timeout: 10), "the pricey model did not ask first")
         keep(window.screenshot(), "page-3-model-asks")
         press(agree)

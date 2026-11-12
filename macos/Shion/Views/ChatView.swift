@@ -70,11 +70,15 @@ struct ChatView: View {
                             follow.until = Date().addingTimeInterval(1)
                             reader.scrollTo(last.id, anchor: .bottom)
                         }
-                        // the lines themselves changed: a turn's calls fold into one line as it
-                        // ends, a row comes or goes. For a moment the newest line is watched as it
-                        // is laid out (in the rows, below)
-                        .onChange(of: LineShape(lines)) {
-                            follow.relaid = Date().addingTimeInterval(0.3)
+                        // a turn ended: its calls fold into one line. For a moment the newest line
+                        // is watched as it is laid out (in the rows, below). Only then: any other
+                        // change of the lines (a chat opening on the message a notification was
+                        // about, an older page) is placed by what asked for it, and a reply taller
+                        // than what shows, gone to from its top, was pulled to its end (run 185)
+                        .onChange(of: store.replying.contains(botId)) { _, replying in
+                            if !replying {
+                                follow.folded = Date().addingTimeInterval(0.3)
+                            }
                         }
                         // the reader scrolled: to the end, or away from it. When the content's
                         // height changed it was not the reader: the newest rows taking their real
@@ -182,13 +186,13 @@ struct ChatView: View {
                             proxy.frame(in: .scrollView)
                         } action: { frame in
                             place.laidOut(line.id, at: frame)
-                            // the newest line, laid out ending below what shows just after the lines
-                            // changed, while the end is followed: the scroll asked for in the update
-                            // that changed them landed short, by the height of the line a turn's
-                            // calls folded into (run 181: a reply's last words under the composer;
+                            // the newest line, laid out ending below what shows just after a turn
+                            // ended, while the end is followed: the scroll asked for in the update
+                            // that folded the turn's calls landed short, by the height of the line
+                            // they folded into (run 181: a reply's last words under the composer;
                             // the 重试 every finished turn used to have was what hid there). To its
                             // end again, now that the rows are where they are
-                            if follow.on, index == lines.count - 1, Date() < follow.relaid,
+                            if follow.on, index == lines.count - 1, Date() < follow.folded,
                                frame.maxY > place.viewport + 1 {
                                 place.proxy?.scrollTo(line.id, anchor: .bottom)
                             }
@@ -300,9 +304,9 @@ struct ChatView: View {
 final class Follow {
     var on = true
     var until = Date.distantPast
-    /// The lines themselves changed a moment ago: until then the newest one, laid out short of
-    /// where it was scrolled to, is gone to again.
-    var relaid = Date.distantPast
+    /// A turn ended a moment ago, its calls folding into one line: until then the newest line,
+    /// laid out short of where it was scrolled to, is gone to again.
+    var folded = Date.distantPast
     /// Put at its newest message since it was made: until then no older page is asked for.
     var placed = false
 }
@@ -505,18 +509,6 @@ final class TranscriptPlace {
         let across = frames.filter { $0.value.minY < 0 && $0.value.maxY > 0 }
             .min { $0.value.minY < $1.value.minY }
         return (starting ?? across).map { (id: $0.key, frame: $0.value) }
-    }
-}
-
-/// Which lines a transcript has, as far as where its end is goes: how many, and the last one.
-private nonisolated struct LineShape: Equatable {
-    let count: Int
-    let last: String?
-
-    @MainActor
-    init(_ lines: [ChatLine]) {
-        count = lines.count
-        last = lines.last?.id
     }
 }
 
