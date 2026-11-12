@@ -96,12 +96,23 @@ final class BoardTests: XCTestCase {
         XCTAssertTrue(commented, "the comment did not show")
         XCTAssertTrue(yours, "the comment is not shown as yours: \(author.label) / \(String(describing: author.value))")
 
-        // drag 「下载第8回课件」 from 排队 to 完成; its child then queues behind 课程's running card
+        // the detail is put away from its own button, and the five columns are all in the window
+        // again (with it open the board scrolls sideways under what is left)
+        let close = element("card-close", in: app)
+        XCTAssertTrue(close.waitForExistence(timeout: 3), "no way to put the detail away")
+        close.click()
         let card = element("card-t_dl8", in: app)
         let done = element("board-column-done", in: app)
         XCTAssertTrue(card.waitForExistence(timeout: 5) && done.exists)
-        card.click(forDuration: 0.6, thenDragTo: done)
-        var moved = waitUntil(timeout: 8) { done.frame.contains(CGPoint(x: card.frame.midX, y: card.frame.midY)) }
+        let allInView = waitUntil(timeout: 5) { !self.element("card-comment", in: app).exists && done.isHittable }
+        XCTAssertTrue(allInView, "with the detail away the five columns are not all in view: 完成 at \(done.frame), the window \(window.frame)")
+
+        // drag 「下载第8回课件」 from 排队 to 完成; its child then queues behind 课程's running card
+        var moved = false
+        if done.isHittable {
+            card.click(forDuration: 0.6, thenDragTo: done)
+            moved = waitUntil(timeout: 8) { done.frame.contains(CGPoint(x: card.frame.midX, y: card.frame.midY)) }
+        }
         var how = moved ? "drag" : "none"
         if !moved {
             // the context menu does the same move

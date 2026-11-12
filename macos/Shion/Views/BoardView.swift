@@ -36,7 +36,7 @@ struct BoardView: View {
             }
             .inspector(isPresented: beside) {
                 if let item = chosen(items) {
-                    CardDetail(item: item, resize: { expanded = true }) { open($0) }
+                    CardDetail(item: item, resize: { expanded = true }, close: putAway) { open($0) }
                         .inspectorColumnWidth(min: 320, ideal: 400, max: 560)
                 }
             }
@@ -90,8 +90,8 @@ struct BoardView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if expanded, let item = chosen(items) {
-            // back beside the board: the card stays open there
-            CardDetail(item: item, wide: true, resize: { expanded = false }) { open($0) }
+            // back beside the board the card stays open; closed, the board is all there is
+            CardDetail(item: item, wide: true, resize: { expanded = false }, close: putAway) { open($0) }
                 .background(.background)
         } else {
             GeometryReader { space in
@@ -117,6 +117,12 @@ struct BoardView: View {
     private func open(_ id: String) {
         selection = id
         showInspector = true
+    }
+
+    /// The detail away, from beside the board or over it; the card stays marked on the board.
+    private func putAway() {
+        showInspector = false
+        expanded = false
     }
 
     private func chosen(_ items: [BoardItem]) -> BoardItem? {
@@ -233,8 +239,10 @@ struct BoardColumn: View {
         .accessibilityIdentifier("board-column-\(group.key)")
     }
 
-    /// The narrowest a card reads well at: a title in two or three lines.
-    static let narrowest: CGFloat = 184
+    /// The narrowest a card still reads at, a title in three lines: five of them fit a window
+    /// 1024 wide, so the board scrolls sideways only with the detail open beside it, or in a
+    /// window narrower than that.
+    static let narrowest: CGFloat = 144
 
     @ViewBuilder
     private func moveMenu(_ item: BoardItem) -> some View {

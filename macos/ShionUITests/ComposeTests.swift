@@ -215,9 +215,10 @@ final class ComposeTests: XCTestCase {
         XCTAssertFalse(waitForText("收到：", in: sheet, timeout: 1), "the review went to the Bot Chat's script")
         // the card in the review, not the one in the chat under it
         element("skill-review-reject-sr_ci2", in: sheet).click()
-        // by its identifier if the dialog kept it, else by its name
-        let confirm = app.buttons.matching(NSPredicate(format: "identifier == %@ OR label == %@ OR title == %@",
-                                                       "skill-review-reject-confirm", "拒绝并撤销", "拒绝并撤销")).firstMatch
+        // the dialog's button in the window, by its identifier if the dialog kept it, else by its
+        // name: the Touch Bar has one of the same name, which takes no click (run 179)
+        let confirm = app.windows.buttons.matching(NSPredicate(format: "identifier == %@ OR label == %@",
+                                                               "skill-review-reject-confirm", "拒绝并撤销")).firstMatch
         if confirm.waitForExistence(timeout: 5) {
             confirm.click()
         } else {
