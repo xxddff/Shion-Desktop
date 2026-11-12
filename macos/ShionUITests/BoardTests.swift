@@ -65,6 +65,22 @@ final class BoardTests: XCTestCase {
         runs.click()
         XCTAssertTrue(waitForText("停下了", in: app, timeout: 3), "the runs did not open")
 
+        // over the whole page, for a card with much to read: the columns give way and the runs are
+        // all there without a click; Esc puts it back beside the board, still open
+        let resize = element("card-resize", in: app)
+        XCTAssertTrue(resize.waitForExistence(timeout: 3), "no way to open the detail over the page")
+        resize.click()
+        let column = element("board-column-running", in: app)
+        let tookPage = waitUntil(timeout: 5) { !column.exists }
+        let wholeRuns = waitForText("停下了", in: app, timeout: 3)
+        Thread.sleep(forTimeInterval: 0.5)
+        keep(window.screenshot(), "board-3b-detail-wide")
+        XCTAssertTrue(tookPage, "the detail did not take the page")
+        XCTAssertTrue(wholeRuns && !element("card-runs", in: app).exists, "over the page the runs are not all open")
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(column.waitForExistence(timeout: 5), "Esc did not bring the board back")
+        XCTAssertTrue(element("card-comment", in: app).waitForExistence(timeout: 5), "the detail did not stay open beside the board")
+
         // you answer it: the comment goes out under the name you signed in with (the stand-in
         // keeps the author it is sent) and shows as yours; 让它继续 puts the card back in the queue
         let field = element("card-comment", in: app)

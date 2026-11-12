@@ -13,7 +13,7 @@ enum AssistantTab: Hashable {
 /// An assistant's page: its Bot Chat, and 工作记录, the cards it ran today on every board, as two
 /// tabs at the top of the page; the toolbar keeps its buttons (跟詩音说, 助手设置) to itself. The
 /// chat stays underneath while the log is up, so a draft and where the chat was scrolled to
-/// survive a look at the log. A card of the log opens on its right.
+/// survive a look at the log. A card of the log opens on its right, and from there over the log.
 struct AssistantView: View {
     @Environment(AppStore.self) private var store
     let botId: String
@@ -21,6 +21,8 @@ struct AssistantView: View {
     /// The log's card open on its right.
     @State private var selection: String?
     @State private var showDetail = false
+    /// The open card over the log, not beside it.
+    @State private var wideDetail = false
 
     var body: some View {
         let entries = tab == .work ? store.workLog(for: botId) : []
@@ -50,38 +52,41 @@ struct AssistantView: View {
             }
             .onChange(of: tab) { _, now in
                 if now == .chat {
-                    showDetail = false
+                    closeDetail()
                 }
             }
     }
 
-    /// The log, and the card open from it on its right: a panel of the page, not the window's
-    /// inspector. With an inspector on it, the page was taken in again by the window's split view
-    /// when you went to it, after the chat had put its new transcript at the newest message, and
-    /// the chat showed its top instead.
+    /// The log, and the card open from it on its right, or over the log when asked to: a panel of
+    /// the page, not the window's inspector. With an inspector on it, the page was taken in again
+    /// by the window's split view when you went to it, after the chat had put its new transcript
+    /// at the newest message, and the chat showed its top instead.
     private func workLog(_ entries: [WorkLogEntry]) -> some View {
-        HStack(spacing: 0) {
-            WorkLogView(entries: entries, selection: selection) { open($0) }
-            if showDetail, let entry = entries.first(where: { $0.id == selection }) {
-                Divider()
-                BoardInspector(item: store.workItem(entry)) { id in
-                    store.openCard(id, board: entry.board)
-                }
-                .frame(width: 280)
-                .overlay(alignment: .topTrailing) {
-                    Button {
-                        showDetail = false
-                    } label: {
-                        Image(systemName: "xmark")
-                    }
-                    .buttonStyle(.borderless)
-                    .help("关闭")
-                    .padding(12)
-                    .accessibilityIdentifier("work-detail-close")
+        let entry = showDetail ? entries.first { $0.id == selection } : nil
+        return HStack(spacing: 0) {
+            if let entry, wideDetail {
+                detail(entry, wide: true)
+            } else {
+                WorkLogView(entries: entries, selection: selection) { open($0) }
+                if let entry {
+                    Divider()
+                    detail(entry, wide: false)
+                        .frame(width: 320)
                 }
             }
         }
         .background(.background)
+    }
+
+    private func detail(_ entry: WorkLogEntry, wide: Bool) -> some View {
+        CardDetail(item: store.workItem(entry), wide: wide, resize: { wideDetail.toggle() }, close: closeDetail) { id in
+            store.openCard(id, board: entry.board)
+        }
+    }
+
+    private func closeDetail() {
+        showDetail = false
+        wideDetail = false
     }
 
     private var tabs: some View {

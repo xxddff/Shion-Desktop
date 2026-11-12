@@ -3,12 +3,15 @@ import SwiftUI
 /// Work handed to assistants on the Hermes kanban board. Five columns over Hermes's eight (排队,
 /// 在做, 卡住, 待验收, 完成) share the width; never narrower than a card reads well, so with the
 /// detail open, or in a narrow window, the board scrolls sideways instead of squeezing. A card
-/// says only what tells it from its neighbours, and a click opens the rest beside the board.
+/// says only what tells it from its neighbours, and a click opens the rest beside the board; from
+/// there it opens over the whole page, for a card with much to read, and back (CardDetail.swift).
 /// Drag a card to move it, where the board's workflow allows.
 struct BoardView: View {
     @Environment(AppStore.self) private var store
     @State private var selection: String?
     @State private var showInspector = false
+    /// The open card's detail over the whole page, the board behind it.
+    @State private var expanded = false
     @State private var composing = false
 
     var body: some View {
@@ -31,9 +34,10 @@ struct BoardView: View {
                     .accessibilityIdentifier("new-card")
                 }
             }
-            .inspector(isPresented: $showInspector) {
-                if let id = selection, let item = items.first(where: { $0.id == id }) {
-                    BoardInspector(item: item) { open($0) }
+            .inspector(isPresented: beside) {
+                if let item = chosen(items) {
+                    CardDetail(item: item, resize: { expanded = true }) { open($0) }
+                        .inspectorColumnWidth(min: 320, ideal: 400, max: 560)
                 }
             }
             .sheet(isPresented: $composing) {
@@ -50,6 +54,7 @@ struct BoardView: View {
             .onChange(of: store.board.slug) {
                 selection = nil
                 showInspector = false
+                expanded = false
             }
             // a card asked for from elsewhere (a notification, 待你处理): open it once its board is up
             .task(id: "\(store.board.revealing?.id ?? "")|\(store.board.slug ?? "")|\(items.count)") {
@@ -84,6 +89,10 @@ struct BoardView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if expanded, let item = chosen(items) {
+            // back beside the board: the card stays open there
+            CardDetail(item: item, wide: true, resize: { expanded = false }) { open($0) }
+                .background(.background)
         } else {
             GeometryReader { space in
                 // the width shared out, down to the narrowest a card reads well at
@@ -108,6 +117,22 @@ struct BoardView: View {
     private func open(_ id: String) {
         selection = id
         showInspector = true
+    }
+
+    private func chosen(_ items: [BoardItem]) -> BoardItem? {
+        selection.flatMap { id in items.first { $0.id == id } }
+    }
+
+    /// The detail beside the board: put away while it is over the whole page.
+    private var beside: Binding<Bool> {
+        Binding(
+            get: { showInspector && !expanded },
+            set: { shown in
+                if !expanded {
+                    showInspector = shown
+                }
+            }
+        )
     }
 
     private var actionFailed: Binding<Bool> {
@@ -279,271 +304,6 @@ struct BoardCard: View {
         .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("card-\(item.id)")
-    }
-}
-
-/// A card's detail, beside the board and wide enough to read: where it stands and why (what it
-/// waits on, or what it handed in) first, then what was asked, the comments and a way to answer,
-/// and, folded until asked for, what comes before and after it and each run. The id and the board
-/// go at the bottom, in small type. The card may be on another board than the board page's (an
-/// assistant's 工作记录 opens cards from all).
-struct BoardInspector: View {
-    @Environment(AppStore.self) private var store
-    let item: BoardItem
-    let open: (String) -> Void
-    @State private var draft = ""
-    /// A long description shows its start; the whole on a click.
-    @State private var wholeBody = false
-    @State private var showsRuns = false
-
-    var body: some View {
-        let live = store.board.active
-        let task = store.board.task(item.id, on: item.board)
-        let detail = store.board.detail(item.id, on: item.board)
-        let bot = item.assignee.flatMap { store.bot($0) }
-        let now = live ? store.board.serverNow : store.now
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 8) {
-                        if archived {
-                            // only 工作记录 opens an archived card
-                            Text("已归档").font(.t12).foregroundStyle(.secondary)
-                        } else {
-                            CardStateTag(status: item.group)
-                            if let stuck = item.stuck {
-                                Text(stuck.label).font(.t12).foregroundStyle(stuck.yours ? Palette.warm : Color.secondary)
-                            } else if store.boardLabel(item.status) != item.group.label {
-                                Text(store.boardLabel(item.status)).font(.t12).foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                    Text(item.title)
-                        .font(.t20)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .textSelection(.enabled)
-                    HStack(spacing: 6) {
-                        Avatar(bot: bot, size: 16)
-                        Text(meta(bot: bot, task: task, now: now)).font(.t12).foregroundStyle(.secondary)
-                    }
-                }
-
-                // where it stands: what it waits on, or what it handed in
-                if item.group == .stuck || (item.group == .queued && !archived) || !live {
-                    Callout(text: item.line, warm: item.stuck?.yours == true)
-                }
-                if live, item.status == "done" || item.status == "review" || archived,
-                   let delivered = detail?.summary ?? detail?.result ?? task?.latestSummary ?? task?.result {
-                    Callout(text: delivered, warm: false)
-                }
-
-                if let text = detail?.body ?? task?.body {
-                    VStack(alignment: .leading, spacing: 6) {
-                        SectionTitle(title: "交代的事")
-                        Text(text)
-                            .font(.t13)
-                            .lineSpacing(2)
-                            .lineLimit(wholeBody ? nil : 8)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .textSelection(.enabled)
-                        if text.count > 320 || text.split(separator: "\n", omittingEmptySubsequences: false).count > 8 {
-                            Button(wholeBody ? "收起" : "展开全部") { wholeBody.toggle() }
-                                .buttonStyle(.link)
-                                .font(.t12)
-                        }
-                    }
-                }
-
-                if live {
-                    comments(detail, waiting: task.map { $0.status == "blocked" || BoardWork.looped($0) } ?? false, now: now)
-                    if let detail, !detail.parents.isEmpty || !detail.children.isEmpty {
-                        links(detail)
-                    }
-                    if let detail, !detail.runs.isEmpty {
-                        runsSection(detail.runs)
-                    }
-                    Text(technical)
-                        .font(.t11)
-                        .foregroundStyle(.tertiary)
-                        .textSelection(.enabled)
-                } else if !store.demoRuns(item.id).isEmpty {
-                    runsSection(store.demoRuns(item.id))
-                }
-            }
-            .padding(20)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .inspectorColumnWidth(min: 320, ideal: 400, max: 560)
-        .accessibilityIdentifier("card-inspector")
-    }
-
-    private var archived: Bool { item.status == KanbanWorkflow.archived }
-
-    private func meta(bot: Bot?, task: KanbanTask?, now: Date) -> String {
-        var parts = ["\(bot?.name ?? item.assignee ?? "还没有人") 负责"]
-        if let by = task?.createdBy {
-            parts.append("\(store.boardAuthor(by))交代的")
-        }
-        if let at = task?.createdAt {
-            parts.append(Ago.text(at, now: now))
-        }
-        return parts.joined(separator: " · ")
-    }
-
-    private var technical: String {
-        var parts = ["编号 \(item.id)"]
-        if let board = store.board.boardInfo(item.board) {
-            parts.append("看板 \(board.slug)")
-        }
-        if let assignee = item.assignee {
-            parts.append("profile \(assignee)")
-        }
-        return parts.joined(separator: " · ")
-    }
-
-    /// `waiting`: blocked, or moved to triage after it stopped on the same thing again; a comment
-    /// then lets it go on.
-    @ViewBuilder
-    private func comments(_ detail: KanbanDetail?, waiting: Bool, now: Date) -> some View {
-        let blocked = waiting
-        VStack(alignment: .leading, spacing: 10) {
-            SectionTitle(title: "评论", count: detail?.comments.count)
-            ForEach(detail?.comments ?? []) { comment in
-                HStack(alignment: .top, spacing: 8) {
-                    Avatar(bot: store.bot(comment.author), size: 20)
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack(spacing: 6) {
-                            Text(store.boardAuthor(comment.author))
-                                .font(.t12.weight(.semibold))
-                                .accessibilityIdentifier("comment-author-\(comment.id)")
-                            if let at = comment.at {
-                                Text(Ago.text(at, now: now)).font(.t11).foregroundStyle(.secondary)
-                            }
-                        }
-                        Text(comment.body)
-                            .font(.t13)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .textSelection(.enabled)
-                    }
-                }
-            }
-            HStack(spacing: 8) {
-                TextField(blocked ? "补充它需要的信息" : "留言", text: $draft)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit { send(resume: blocked) }
-                    .accessibilityIdentifier("card-comment")
-                Button(blocked ? "让它继续" : "发送") { send(resume: blocked) }
-                    .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    .accessibilityIdentifier("card-comment-send")
-            }
-            // the last data, or the connection down: a comment waits for the server
-            .disabled(store.readOnly)
-        }
-    }
-
-    private func send(resume: Bool) {
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-        draft = ""
-        let id = item.id
-        let board = item.board
-        Task { await store.board.comment(id, text, resume: resume, on: board) }
-    }
-
-    private func links(_ detail: KanbanDetail) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            SectionTitle(title: "前后")
-            ForEach(detail.parents) { link in
-                linkRow(link, side: "先做")
-            }
-            ForEach(detail.children) { link in
-                linkRow(link, side: "接着")
-            }
-        }
-    }
-
-    private func linkRow(_ link: KanbanLink, side: String) -> some View {
-        Button {
-            open(link.id)
-        } label: {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(side).font(.t12).foregroundStyle(.secondary)
-                Text(link.title).font(.t13).lineLimit(2).multilineTextAlignment(.leading)
-                Spacer(minLength: 4)
-                Text(store.boardLabel(link.status)).font(.t12).foregroundStyle(.secondary)
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-
-    /// Each time an assistant worked on it: how it ended first, the rest on a click.
-    private func runsSection(_ all: [KanbanRun]) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Button {
-                showsRuns.toggle()
-            } label: {
-                HStack(spacing: 6) {
-                    Text("经过").font(.t15)
-                    Text("\(all.count) 次").font(.t12).monospacedDigit().foregroundStyle(.secondary)
-                    if !showsRuns, let last = all.last {
-                        Text("· 最近一次\(last.outcomeText)").font(.t12).foregroundStyle(.secondary).lineLimit(1)
-                    }
-                    Spacer(minLength: 4)
-                    Image(systemName: showsRuns ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .accessibilityHidden(true)
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("card-runs")
-            if showsRuns {
-                runs(all)
-            }
-        }
-    }
-
-    private func runs(_ runs: [KanbanRun]) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            ForEach(Array(runs.enumerated()), id: \.element.id) { index, run in
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 8) {
-                        Text("第 \(index + 1) 次").font(.t12.weight(.medium))
-                        Text(run.spanText).font(.t12).monospacedDigit().foregroundStyle(.secondary)
-                        Spacer(minLength: 4)
-                        Text(run.outcomeText)
-                            .font(.t12)
-                            .foregroundStyle(run.outcome == "blocked" ? Palette.warm : Color.secondary)
-                    }
-                    if let note = run.error ?? run.summary {
-                        Text(note)
-                            .font(.t12)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(3)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// A line in a soft box: what the card is waiting on, or what it delivered.
-private struct Callout: View {
-    let text: String
-    let warm: Bool
-
-    var body: some View {
-        Text(text)
-            .font(.t13)
-            .foregroundStyle(warm ? Palette.warm : Color.primary)
-            .fixedSize(horizontal: false, vertical: true)
-            .textSelection(.enabled)
-            .padding(10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(warm ? Palette.warm.opacity(0.1) : Palette.fill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }
 
