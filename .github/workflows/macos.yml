@@ -56,14 +56,15 @@ concurrency:
 
 env:
   SHION_RUN: ${{ inputs.run || 'all' }}
-  # Xcode's compilation cache for the test build, in build/cas (what actions/cache keeps between runs)
-  SHION_COMPILE_CACHE: COMPILATION_CACHE_ENABLE_CACHING=YES
 
 jobs:
   build:
     name: Build for testing
     runs-on: xcode-27
     timeout-minutes: 20
+    env:
+      # Xcode's compilation cache, in build/cas (what actions/cache keeps between runs); this job only
+      SHION_COMPILE_CACHE: COMPILATION_CACHE_ENABLE_CACHING=YES
     defaults:
       run:
         working-directory: macos
