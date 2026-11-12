@@ -110,9 +110,10 @@ struct BusyModeMenu: View {
     }
 }
 
-/// Copy a message, or answer it: in its menu, and on two small buttons that show just above its
-/// corner while the pointer is on the message (in the gap between rows, so they cover none of it),
-/// and stay for the moment the pointer takes to reach them.
+/// Copy a message, or answer it: in its menu, and on two small buttons that show at the end of
+/// its row, just above it, while the pointer is anywhere on the row, and stay for the moment the
+/// pointer takes to reach them. The row is as wide as the chat, so the buttons are clear of an
+/// assistant's name and time, and above the corner of a bubble of yours.
 struct MessageActions: ViewModifier {
     @Environment(AppStore.self) private var store
     let item: ChatItem
@@ -125,6 +126,7 @@ struct MessageActions: ViewModifier {
     func body(content: Content) -> some View {
         if (item.role == .user || item.role == .assistant) && !item.streaming && !words.isEmpty {
             content
+                .frame(maxWidth: .infinity, alignment: item.role == .user ? .trailing : .leading)
                 .overlay(alignment: .topTrailing) {
                     if shown {
                         HStack(spacing: 2) {

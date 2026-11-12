@@ -134,6 +134,7 @@ struct SkillReviewSheet: View {
                     .controlSize(.small)
                     .disabled(talk.opening)
                 }
+                .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("skill-review-talk-failure")
             }
             Composer(placeholder: "和\(bot?.name ?? "助手")讨论这个技能…", text: $talk.draft,
@@ -148,6 +149,8 @@ struct SkillReviewSheet: View {
             guard store.gateway.phase == .online, !talk.opening else { return }
             try? await talk.read(in: store)
         }
+        // a container of its own: without it the name lands on everything inside, over their own
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("skill-review-sheet")
     }
 

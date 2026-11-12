@@ -36,10 +36,13 @@ extension AppStore {
             .sorted { $0.at > $1.at }
     }
 
-    /// An assistant's cards in its chat, each at the time the skill was written.
+    /// An assistant's cards in its chat, each at the time the skill was written. The plugin keeps
+    /// that time to the second, so a card goes after whatever else that second holds: a skill
+    /// written within a second of the message that led to it is not shown before the message.
     func skillCards(_ botId: String) -> [ChatItem] {
         (skillReviews[botId] ?? []).map { review in
-            ChatItem(id: "skill-\(review.id)", role: .card, at: review.at, event: .skill(review.id))
+            ChatItem(id: "skill-\(review.id)", role: .card, at: review.at.addingTimeInterval(0.999),
+                     event: .skill(review.id))
         }
     }
 

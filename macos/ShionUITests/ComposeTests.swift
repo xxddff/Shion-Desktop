@@ -179,6 +179,10 @@ final class ComposeTests: XCTestCase {
         keep(window.screenshot(), "compose-6-learned")
         XCTAssertTrue(learned, "what the review kept is not in the chat")
         XCTAssertTrue(filed, "the skill it wrote has no card")
+        let asked = text("学一个技能（CI）", in: app)
+        if filed && asked.exists {
+            XCTAssertGreaterThan(card.frame.minY, asked.frame.minY, "the skill's card is above the message that led to it")
+        }
         XCTAssertTrue(waitForText("已生效 · 待审核", in: app, timeout: 5), "the card does not say the skill is in effect")
         XCTAssertFalse(waitForText("[SILENT]", in: app, timeout: 1), "the marker for nothing to say shows")
         element("nav-confirm", in: app).click()
@@ -211,7 +215,9 @@ final class ComposeTests: XCTestCase {
         XCTAssertFalse(waitForText("收到：", in: sheet, timeout: 1), "the review went to the Bot Chat's script")
         // the card in the review, not the one in the chat under it
         element("skill-review-reject-sr_ci2", in: sheet).click()
-        let confirm = app.buttons["拒绝并撤销"].firstMatch
+        // by its identifier if the dialog kept it, else by its name
+        let confirm = app.buttons.matching(NSPredicate(format: "identifier == %@ OR label == %@ OR title == %@",
+                                                       "skill-review-reject-confirm", "拒绝并撤销", "拒绝并撤销")).firstMatch
         if confirm.waitForExistence(timeout: 5) {
             confirm.click()
         } else {
