@@ -9,6 +9,17 @@ name: macOS app
 # contains [package]. A manual run can also do less (`run`): only build, the debug app for the
 # tests and the release app as it is packaged (which leaves the screenshots' made-up day out), or
 # build and run one suite against the stand-in.
+#
+# UI tests own the screen, so a runner runs one suite at a time; the run is split over runners:
+#   build        compiles for testing once and hands the products on (test-products, a tar: a
+#                plain artifact zip drops symlinks, permissions and with them the signatures)
+#   screenshots  every page, from those products
+#   e2e          the suites against the stand-in, in three shards of about ten minutes
+#   package      the Release build and Shion.dmg; waits for nothing and for no test
+#   shots        puts every job's screenshots and stand-in logs in one artifact (Linux)
+# Compiling uses Xcode's compilation cache (results stored by what went into each compile: the
+# sources, the flags, the SDK), kept between runs with actions/cache. A changed file is another
+# entry, so an old result is never served for it.
 on:
   push:
     # the app's branch, and branches that work on part of it in parallel (claude/macos-board, …)
@@ -43,24 +54,47 @@ concurrency:
   group: macos-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  SHION_RUN: ${{ inputs.run || 'all' }}
+  # Xcode's compilation cache, in build/cas (what actions/cache keeps between runs)
+  SHION_COMPILE_CACHE: COMPILATION_CACHE_ENABLE_CACHING=YES
+
 jobs:
-  screenshots:
-    name: Build and screenshot
+  build:
+    name: Build for testing
     runs-on: xcode-27
-    timeout-minutes: 60
-    env:
-      SHION_RUN: ${{ inputs.run || 'all' }}
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: macos
+    outputs:
+      shards: ${{ steps.plan.outputs.shards }}
     steps:
       - uses: actions/checkout@v7
 
       - name: Toolchain
+        id: toolchain
         run: |
           sw_vers
           xcodebuild -version
           system_profiler SPDisplaysDataType | grep -E "Resolution|Retina|UI Looks" || true
+          # another Xcode or macOS starts another compile cache
+          echo "id=$( (sw_vers -buildVersion; xcodebuild -version; uname -m) | shasum -a 256 | cut -c1-12)" >> "$GITHUB_OUTPUT"
+
+      # which suites go to which runner: about ten minutes each (run 185's times), so the shards
+      # end with the screenshots; one suite when the run asks for one
+      - name: Plan the end-to-end shards
+        id: plan
+        run: |
+          if [ "$SHION_RUN" = all ] || [ "$SHION_RUN" = build ]; then
+            shards='[{"id":"1","suites":"SignInTests BoardTests BotsTests"},
+                     {"id":"2","suites":"ExtrasTests ReconnectTests MediaTests BotPageTests"},
+                     {"id":"3","suites":"QuickAskTests ChatControlTests ComposeTests LocalDataTests WorkTests SecretsTests"}]'
+          else
+            shards="[{\"id\":\"$SHION_RUN\",\"suites\":\"$SHION_RUN\"}]"
+          fi
+          echo "shards=$(printf '%s' "$shards" | tr -s '\n ' '  ')" >> "$GITHUB_OUTPUT"
+          echo "$shards"
 
       - name: Generate the Xcode project
         env:
@@ -73,41 +107,115 @@ jobs:
           xcodegen --version
           xcodegen generate
 
-      - name: Allow UI automation without a password
-        run: sudo automationmodetool enable-automationmode-without-authentication || true
+      # the key names what the compile reads; a run with other sources starts from the newest
+      # cache of this toolchain and saves its own
+      - name: Compile cache
+        uses: actions/cache@v5
+        with:
+          path: macos/build/cas
+          key: shion-cas-test-${{ steps.toolchain.outputs.id }}-${{ hashFiles('macos/Shion/**', 'macos/ShionUITests/**', 'macos/project.yml', 'macos/ShionUITests.entitlements') }}
+          restore-keys: shion-cas-test-${{ steps.toolchain.outputs.id }}-
 
       - name: Build
         run: |
           mkdir -p build
+          ci/compile_cache.sh before
           set -o pipefail
+          start=$(date +%s)
           xcodebuild build-for-testing \
             -project Shion.xcodeproj \
             -scheme Shion \
             -destination 'platform=macOS' \
             -derivedDataPath build/DerivedData \
+            $SHION_COMPILE_CACHE COMPILATION_CACHE_CAS_PATH="$PWD/build/cas" \
             -quiet 2>&1 | tee build/xcodebuild.log
+          echo "build-for-testing: $(( $(date +%s) - start )) s"
+          ci/compile_cache.sh after
 
-      # the app as it is packaged compiles without the screenshots' made-up day (#if DEBUG): a
-      # compile-only run checks that too, without signing or packaging anything
-      - name: Build the release app
-        if: env.SHION_RUN == 'build'
+      # tar keeps the symlinks, the permissions and the signatures; the artifact's own zip does not
+      - name: Pack the test build
         run: |
-          set -o pipefail
-          xcodebuild build \
-            -project Shion.xcodeproj \
-            -scheme Shion \
-            -configuration Release \
-            -destination 'platform=macOS' \
-            -derivedDataPath build/ReleaseCheck \
-            -quiet 2>&1 | tee build/xcodebuild-release.log
+          ls build/DerivedData/Build/Products build/DerivedData/Build/Products/Debug
+          ls build/DerivedData/Build/Products/*.xctestrun
+          codesign --verify --deep --strict --verbose=2 build/DerivedData/Build/Products/Debug/Shion.app
+          tar -czf build/test-products.tar.gz -C build/DerivedData/Build Products
+          ls -la build/test-products.tar.gz
+
+      - name: Hand the test build on
+        id: handon
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-products
+          path: macos/build/test-products.tar.gz
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: error
+
+      # run 186 lost an upload to "Failed to CreateArtifact: … ENOTFOUND": once more, a little later
+      - name: Wait before the second try
+        if: steps.handon.outcome == 'failure'
+        run: sleep 20
+      - name: Hand the test build on (second try)
+        if: steps.handon.outcome == 'failure'
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-products
+          path: macos/build/test-products.tar.gz
+          retention-days: 1
+          compression-level: 0
+          overwrite: true
+          if-no-files-found: error
+
+      # xcodebuild's warnings do not become annotations by themselves: list them, so a run with any
+      # shows them on its page (a compile served from the cache gives its warnings again)
+      - name: Compiler warnings
+        if: always()
+        run: ci/compiler_warnings.sh build/xcodebuild.log
+
+      - name: Show errors
+        if: failure()
+        run: |
+          grep -nE 'error:|Failing tests|failed' build/xcodebuild.log | head -120 || true
+
+  screenshots:
+    name: Screenshot every page
+    needs: build
+    if: ${{ (inputs.run || 'all') == 'all' }}
+    runs-on: xcode-27
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: macos
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Fetch the test build
+        id: fetch
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: test-products
+          path: macos/build
+
+      - name: Fetch the test build (second try)
+        if: steps.fetch.outcome == 'failure'
+        uses: actions/download-artifact@v8
+        with:
+          name: test-products
+          path: macos/build
+
+      - name: Unpack the test build
+        run: ci/unpack_test_build.sh
+
+      - name: Allow UI automation without a password
+        run: sudo automationmodetool enable-automationmode-without-authentication || true
 
       - name: Screenshot every page
-        if: env.SHION_RUN == 'all'
         run: |
           set -o pipefail
           if ! xcodebuild test-without-building \
-                 -project Shion.xcodeproj \
-                 -scheme Shion \
+                 -xctestrun "$XCTESTRUN" \
                  -destination 'platform=macOS' \
                  -derivedDataPath build/DerivedData \
                  -only-testing:ShionUITests/ScreenshotTests \
@@ -116,28 +224,95 @@ jobs:
                  -only-testing:ShionUITests/SecretScreenshotTests \
                  -only-testing:ShionUITests/ExtrasScreenshotTests \
                  -resultBundlePath build/Shots.xcresult \
-                 -quiet 2>&1 | tee -a build/xcodebuild.log; then
+                 -quiet 2>&1 | tee build/screenshots.log; then
             # -quiet leaves out what failed; the result bundle says
             xcrun xcresulttool get test-results summary --path build/Shots.xcresult 2>/dev/null \
               | grep -E '"(failureText|testName)"' | head -20 || true
+            grep -nE 'error:|Failing tests|failed' build/screenshots.log | head -120 || true
             exit 1
           fi
 
-      # Real Cloudflare Access and a real Hermes are not on the runner: the stand-in plays both,
-      # checks what Shion sends (Access headers, PKCE, the loopback redirect, the bearer) and logs
-      # each request. A failure here warns, and the screenshots and the package still go out.
-      - name: Sign-in, board, assistants, media and local data against a stand-in Hermes
-        if: env.SHION_RUN != 'build'
+      - name: No password written down
+        if: always()
+        run: ci/no_password_written.sh
+
+      - name: Export screenshots
+        if: always()
+        run: ci/export_shots.sh Shots
+
+      - name: Upload screenshots
+        id: upload
+        if: always()
         continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: shots-screenshots
+          path: macos/build/shots
+          retention-days: 3
+          if-no-files-found: ignore
+
+      - name: Upload screenshots (second try)
+        if: always() && steps.upload.outcome == 'failure'
+        uses: actions/upload-artifact@v7
+        with:
+          name: shots-screenshots
+          path: macos/build/shots
+          retention-days: 3
+          overwrite: true
+          if-no-files-found: ignore
+
+  # Real Cloudflare Access and a real Hermes are not on the runner: the stand-in plays both,
+  # checks what Shion sends (Access headers, PKCE, the loopback redirect, the bearer) and logs
+  # each request. A shard with a failed suite ends red; its screenshots and logs still go out,
+  # the other shards go on, and the package does not wait for any of them.
+  e2e:
+    name: End to end ${{ matrix.id }} (${{ matrix.suites }})
+    needs: build
+    if: ${{ (inputs.run || 'all') != 'build' }}
+    runs-on: xcode-27
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.build.outputs.shards) }}
+    defaults:
+      run:
+        working-directory: macos
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Fetch the test build
+        id: fetch
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: test-products
+          path: macos/build
+
+      - name: Fetch the test build (second try)
+        if: steps.fetch.outcome == 'failure'
+        uses: actions/download-artifact@v8
+        with:
+          name: test-products
+          path: macos/build
+
+      - name: Unpack the test build
+        run: ci/unpack_test_build.sh
+
+      - name: Allow UI automation without a password
+        run: sudo automationmodetool enable-automationmode-without-authentication || true
+
+      - name: The suites against a stand-in Hermes
+        env:
+          SUITES: ${{ matrix.suites }}
         run: |
           set -o pipefail
           # each test gets a fresh stand-in: its one-off events (课程's approval, the todo it adds)
           # would otherwise go to whichever test connects first, and BotsTests and BotPageTests change
           # its profiles
           failed=""
-          tests="SignInTests BoardTests BotsTests BotPageTests QuickAskTests ChatControlTests ComposeTests MediaTests LocalDataTests ReconnectTests WorkTests SecretsTests ExtrasTests"
-          if [ "$SHION_RUN" != all ]; then tests="$SHION_RUN"; fi
-          for test in $tests; do
+          for test in $SUITES; do
+            start=$(date +%s)
             python3 -u ci/fake_hermes.py --port 8765 > "build/fake_hermes-$test.log" 2>&1 &
             standin=$!
             for attempt in 1 2 3 4 5 6 7 8 9 10; do
@@ -160,16 +335,16 @@ jobs:
               pkill -KILL -f "ShionUITests/$test " || true ) &
             watchdog=$!
             if xcodebuild test-without-building \
-                 -project Shion.xcodeproj \
-                 -scheme Shion \
+                 -xctestrun "$XCTESTRUN" \
                  -destination 'platform=macOS' \
                  -derivedDataPath build/DerivedData \
                  -only-testing:ShionUITests/$test \
                  -resultBundlePath "build/$test.xcresult" \
                  -quiet 2>&1 | tee "build/$test.log"; then
-              echo "$test: passed"
+              echo "$test: passed in $(( $(date +%s) - start )) s"
             else
               failed="$failed $test"
+              echo "$test: failed after $(( $(date +%s) - start )) s"
               grep -nE 'error:|failed|Failing' "build/$test.log" | head -40 || true
               # -quiet leaves out what failed; the result bundle says
               xcrun xcresulttool get test-results summary --path "build/$test.xcresult" 2>/dev/null \
@@ -180,33 +355,13 @@ jobs:
             wait "$standin" 2>/dev/null || true
           done
           if [ -n "$failed" ]; then
-            echo "::warning title=End to end::failed:$failed; see the signin-*, board-*, bots-*, page-*, quick-*, chatctl-*, compose-*, media-*, local-*, reconnect-*, work-*, secrets-* and extras-* screenshots and the fake_hermes-*.log files in the shots artifact"
+            echo "::error title=End to end::failed:$failed; see their screenshots and the fake_hermes-*.log files in the shots artifact"
             exit 1
           fi
 
-      # The password SecretsTests types must never be written down: not by the stand-in (it logs
-      # names and ids only), not by Shion (its preferences, Application Support). An answer must go
-      # out once.
       - name: No password written down
         if: always()
-        run: |
-          found=""
-          for log in build/fake_hermes-*.log; do
-            if [ -f "$log" ] && grep -qF 'ci-sudo-Pa55' "$log"; then found="$found $log"; fi
-          done
-          if defaults read dev.shion.Shion 2>/dev/null | grep -qF 'ci-sudo-Pa55'; then found="$found preferences"; fi
-          if grep -rqF 'ci-sudo-Pa55' "$HOME/Library/Application Support/dev.shion.Shion" 2>/dev/null; then
-            found="$found application-support"
-          fi
-          if [ -n "$found" ]; then
-            echo "::error title=Secrets::the password SecretsTests typed is written down in:$found"
-            exit 1
-          fi
-          if grep -qF '!! answered twice' build/fake_hermes-SecretsTests.log 2>/dev/null; then
-            echo "::error title=Secrets::Shion answered a request twice (fake_hermes-SecretsTests.log)"
-            exit 1
-          fi
-          echo "the password is in none of the stand-in logs, the preferences or Application Support"
+        run: ci/no_password_written.sh
 
       - name: Stand-in Hermes logs
         if: always()
@@ -220,61 +375,95 @@ jobs:
 
       - name: Export screenshots
         if: always()
-        run: |
-          mkdir -p build/shots
-          for bundle in Shots SignInTests BoardTests BotsTests BotPageTests QuickAskTests ChatControlTests ComposeTests MediaTests LocalDataTests ReconnectTests WorkTests SecretsTests ExtrasTests; do
-            if [ -d "build/$bundle.xcresult" ]; then
-              mkdir -p "build/export-$bundle"
-              xcrun xcresulttool export attachments --path "build/$bundle.xcresult" --output-path "build/export-$bundle" \
-                || echo "attachment export failed for $bundle"
-            fi
-          done
-          cp build/fake_hermes-*.log build/shots/ 2>/dev/null || true
-          python3 - <<'PY'
-          import json, os, re, shutil
-          out = 'build/shots'
-          for folder in ('build/export-Shots', 'build/export-SignInTests', 'build/export-BoardTests', 'build/export-BotsTests',
-                         'build/export-BotPageTests', 'build/export-QuickAskTests', 'build/export-ChatControlTests',
-                         'build/export-ComposeTests',
-                         'build/export-MediaTests', 'build/export-LocalDataTests',
-                         'build/export-ReconnectTests', 'build/export-WorkTests', 'build/export-SecretsTests',
-                         'build/export-ExtrasTests'):
-              manifest = os.path.join(folder, 'manifest.json')
-              if not os.path.exists(manifest):
-                  continue
-              for test in json.load(open(manifest)):
-                  for item in test.get('attachments', []):
-                      source = os.path.join(folder, item.get('exportedFileName', ''))
-                      # XCTest's own UI snapshots and synthesized events have no extension; skip them
-                      if not source.endswith(('.png', '.txt', '.mp4')) or not os.path.isfile(source):
-                          continue
-                      name = item.get('suggestedHumanReadableName') or os.path.basename(source)
-                      name = re.sub(r'_\d+_[0-9A-Fa-f-]{36}', '', name)
-                      # upload-artifact refuses " : < > | * ? and line breaks (XCTest's debug descriptions quote ids)
-                      name = re.sub(r'["`:<>|*?\r\n]', '', name).strip()
-                      # newest first: an older attachment of the same name (the UI hierarchy XCTest
-                      # keeps at each failed lookup) gets a number instead of replacing it
-                      target, (stem, extension), count = os.path.join(out, name), os.path.splitext(name), 2
-                      while os.path.exists(target):
-                          target = os.path.join(out, f'{stem} {count}{extension}')
-                          count += 1
-                      shutil.move(source, target)
-          print('\n'.join(sorted(os.listdir(out))))
-          PY
+        env:
+          SUITES: ${{ matrix.suites }}
+        run: ci/export_shots.sh $SUITES
 
       - name: Upload screenshots
+        id: upload
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
-          name: shots
+          name: shots-e2e-${{ matrix.id }}
           path: macos/build/shots
-          retention-days: 14
+          retention-days: 3
           if-no-files-found: ignore
 
-      - name: Package a Release build
-        if: success() && env.SHION_RUN == 'all' && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[package]'))
+      - name: Upload screenshots (second try)
+        if: always() && steps.upload.outcome == 'failure'
+        uses: actions/upload-artifact@v7
+        with:
+          name: shots-e2e-${{ matrix.id }}
+          path: macos/build/shots
+          retention-days: 3
+          overwrite: true
+          if-no-files-found: ignore
+
+  # The Release build: compiled on its own runner while the tests run, so a failed suite does not
+  # cost the installer. A compile-only run builds the release app as it is packaged, without
+  # signing or packaging anything (it compiles without the screenshots' made-up day, #if DEBUG).
+  package:
+    name: ${{ inputs.run == 'build' && 'Build the release app' || 'Package a Release build' }}
+    if: ${{ inputs.run == 'build' || ((inputs.run || 'all') == 'all' && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[package]'))) }}
+    runs-on: xcode-27
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: macos
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Toolchain
+        id: toolchain
         run: |
+          sw_vers
+          xcodebuild -version
+          echo "id=$( (sw_vers -buildVersion; xcodebuild -version; uname -m) | shasum -a 256 | cut -c1-12)" >> "$GITHUB_OUTPUT"
+
+      - name: Generate the Xcode project
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
+        run: |
+          if ! command -v xcodegen >/dev/null; then
+            brew install xcodegen
+          fi
+          xcodegen --version
+          xcodegen generate
+
+      - name: Compile cache
+        uses: actions/cache@v5
+        with:
+          path: macos/build/cas
+          key: shion-cas-${{ env.SHION_RUN == 'build' && 'release-check' || 'package' }}-${{ steps.toolchain.outputs.id }}-${{ hashFiles('macos/Shion/**', 'macos/project.yml') }}
+          restore-keys: shion-cas-${{ env.SHION_RUN == 'build' && 'release-check' || 'package' }}-${{ steps.toolchain.outputs.id }}-
+
+      - name: Build the release app
+        if: env.SHION_RUN == 'build'
+        run: |
+          mkdir -p build
+          ci/compile_cache.sh before
           set -o pipefail
+          start=$(date +%s)
+          xcodebuild build \
+            -project Shion.xcodeproj \
+            -scheme Shion \
+            -configuration Release \
+            -destination 'platform=macOS' \
+            -derivedDataPath build/ReleaseCheck \
+            $SHION_COMPILE_CACHE COMPILATION_CACHE_CAS_PATH="$PWD/build/cas" \
+            -quiet 2>&1 | tee build/package.log
+          echo "release build: $(( $(date +%s) - start )) s"
+          ci/compile_cache.sh after
+
+      - name: Package a Release build
+        if: env.SHION_RUN != 'build'
+        run: |
+          mkdir -p build
+          ci/compile_cache.sh before
+          set -o pipefail
+          start=$(date +%s)
           xcodebuild build \
             -project Shion.xcodeproj \
             -scheme Shion \
@@ -282,7 +471,10 @@ jobs:
             -destination 'generic/platform=macOS' \
             -derivedDataPath build/Release \
             CURRENT_PROJECT_VERSION=${{ github.run_number }} \
+            $SHION_COMPILE_CACHE COMPILATION_CACHE_CAS_PATH="$PWD/build/cas" \
             -quiet 2>&1 | tee build/package.log
+          echo "release build: $(( $(date +%s) - start )) s"
+          ci/compile_cache.sh after
           mkdir -p build/dmg/Shion
           cp -R build/Release/Build/Products/Release/Shion.app build/dmg/Shion/
           ln -s /Applications build/dmg/Shion/Applications
@@ -301,28 +493,96 @@ jobs:
           fi
 
       - name: Upload the Release build
-        if: success() && env.SHION_RUN == 'all' && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[package]'))
+        id: upload
+        if: env.SHION_RUN != 'build'
+        continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
           name: Shion-macOS-${{ github.run_number }}
           path: macos/build/Shion.dmg
           retention-days: 30
+          if-no-files-found: error
 
-      # xcodebuild's warnings do not become annotations by themselves: list them, so a run with any
-      # shows them on its page
+      # run 186 lost its installer to "Failed to CreateArtifact: … ENOTFOUND": once more, a little later
+      - name: Wait before the second try
+        if: steps.upload.outcome == 'failure'
+        run: sleep 20
+      - name: Upload the Release build (second try)
+        if: steps.upload.outcome == 'failure'
+        uses: actions/upload-artifact@v7
+        with:
+          name: Shion-macOS-${{ github.run_number }}
+          path: macos/build/Shion.dmg
+          retention-days: 30
+          overwrite: true
+          if-no-files-found: error
+
       - name: Compiler warnings
         if: always()
-        run: |
-          warnings=$(cat build/xcodebuild.log build/package.log 2>/dev/null | grep -E '^/.*: warning: ' | sort -u || true)
-          if [ -z "$warnings" ]; then
-            echo "no compiler warnings"
-          else
-            while IFS= read -r line; do
-              echo "::warning title=Compiler::${line#"$PWD/"}"
-            done <<< "$warnings"
-          fi
+        run: ci/compiler_warnings.sh build/package.log
 
       - name: Show errors
         if: failure()
         run: |
-          grep -nE 'error:|Failing tests|failed' build/xcodebuild.log | head -120 || true
+          grep -nE 'error:|failed' build/package.log | head -120 || true
+
+  # One artifact, as before: every job's screenshots and stand-in logs in `shots`. The parts
+  # (shots-screenshots, shots-e2e-*) stay three days, in case this job is the one that fails.
+  shots:
+    name: Collect the screenshots
+    needs: [build, screenshots, e2e]
+    if: ${{ !cancelled() && needs.build.result == 'success' && (inputs.run || 'all') != 'build' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: macos/ci
+
+      - name: Fetch every job's screenshots
+        id: fetch
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          pattern: shots-*
+          path: parts
+
+      - name: Fetch every job's screenshots (second try)
+        if: steps.fetch.outcome == 'failure'
+        uses: actions/download-artifact@v8
+        with:
+          pattern: shots-*
+          path: parts
+
+      - name: Put them together
+        run: python3 macos/ci/collect_shots.py parts shots
+
+      # each job checked its own logs, preferences and Application Support; this is every
+      # stand-in log of the run in one place
+      - name: No password written down
+        run: |
+          if grep -lF 'ci-sudo-Pa55' shots/fake_hermes-*.log 2>/dev/null; then
+            echo "::error title=Secrets::the password SecretsTests typed is written down in a stand-in log"
+            exit 1
+          fi
+          ls shots/fake_hermes-*.log 2>/dev/null | wc -l | xargs echo "stand-in logs without the password:"
+
+      - name: Upload screenshots
+        id: upload
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: shots
+          path: shots
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Upload screenshots (second try)
+        if: steps.upload.outcome == 'failure'
+        uses: actions/upload-artifact@v7
+        with:
+          name: shots
+          path: shots
+          retention-days: 14
+          overwrite: true
+          if-no-files-found: ignore
