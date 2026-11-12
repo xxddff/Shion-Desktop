@@ -6,7 +6,7 @@ Hermes answers a plugin RPC that raised with error 4001, reason ``plugin_rpc_fai
 
 from __future__ import annotations
 
-CODES = ("invalid_params", "not_found", "conflict", "wrong_profile")
+CODES = ("invalid_params", "not_found", "conflict", "wrong_profile", "unavailable", "undo_failed")
 
 
 class ShionError(Exception):

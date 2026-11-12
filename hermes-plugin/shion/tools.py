@@ -19,17 +19,18 @@ TOOLSET = "shion"
 
 _DATETIME = ("ISO 8601 date-time, e.g. 2026-11-10T15:00 (no offset = the user's time zone, "
              "Asia/Tokyo unless changed) or with an offset such as +09:00")
+_WHEN = (f"A day alone as YYYY-MM-DD when no time of day was given (do not make one up), or an {_DATETIME}")
 _DATE = "Date as YYYY-MM-DD in the user's time zone; omit for today"
 
 _TODO_FIELDS = {
     "title": {"type": "string", "description": "What to do, short, in the user's language"},
     "area": {"type": "string", "enum": list(AREAS), "description": "study, work or life"},
-    "do_at": {"type": "string", "description": f"When to do it. {_DATETIME}. In an update, \"\" clears it"},
+    "do_at": {"type": "string", "description": f"When to do it. {_WHEN}. In an update, \"\" clears it"},
     "due_at": {"type": "string",
-               "description": f"Deadline, separate from when to do it. {_DATETIME}. In an update, \"\" clears it"},
+               "description": f"Deadline, separate from when to do it. {_WHEN}. In an update, \"\" clears it"},
     "proposed": {"type": "boolean",
                  "description": "true when do_at/due_at are your suggestion and the user still has to confirm "
-                                "them in Shion (they show up under 等你确认)"},
+                                "them in Shion (they show up under 待你处理)"},
     "source_detail": {"type": "string",
                       "description": "Where it came from, shown under the todo, e.g. 来自 中村老师 的邮件 or "
                                      "数据结构与算法 第7回"},

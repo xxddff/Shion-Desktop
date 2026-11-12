@@ -15,7 +15,7 @@ from .store import SCHEMA_VERSION, USER_SOURCE
 if TYPE_CHECKING:
     from .plugin import ShionPlugin
 
-PLUGIN_VERSION = "0.1.0"
+PLUGIN_VERSION = "0.2.0"
 _ROUTING = {"profile", "session_id"}
 
 
@@ -141,6 +141,22 @@ def methods(plugin: "ShionPlugin") -> dict:
         _take(params, set())
         return {"latest": store.latest_focus()}
 
+    def reviews_list(params):
+        _take(params, set())
+        return plugin.reviews.list()
+
+    def reviews_detail(params):
+        p = _take(params, {"id"}, {"id"})
+        return {"review": plugin.reviews.detail(p["id"])}
+
+    def reviews_bind(params):
+        p = _take(params, {"id", "review_session"}, {"id", "review_session"})
+        return plugin.reviews.bind(p["id"], p["review_session"])
+
+    def reviews_decide(params):
+        p = _take(params, {"id", "decision", "entries"}, {"id", "decision", "entries"})
+        return plugin.reviews.decide(p["id"], p["decision"], p["entries"])
+
     return {
         "info": info,
         "sync.state": sync_state,
@@ -161,4 +177,8 @@ def methods(plugin: "ShionPlugin") -> dict:
         "usage.categories.set": usage_categories_set,
         "focus.report": focus_report,
         "focus.latest": focus_latest,
+        "reviews.list": reviews_list,
+        "reviews.detail": reviews_detail,
+        "reviews.bind": reviews_bind,
+        "reviews.decide": reviews_decide,
     }

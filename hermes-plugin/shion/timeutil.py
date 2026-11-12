@@ -1,4 +1,7 @@
-"""Time handling: instants are stored in UTC, shown in the user's time zone, and "today" is that zone's date."""
+"""Time handling: instants are stored in UTC, shown in the user's time zone, and "today" is that zone's date.
+
+A todo's ``do_at`` / ``due_at`` may also be a whole day (``YYYY-MM-DD``): it has no time of day, and
+it stays that calendar day whatever the time zone becomes."""
 
 from __future__ import annotations
 
@@ -50,9 +53,10 @@ def from_storage(text: str) -> datetime:
 
 
 def to_wire(text: str | None, tz: ZoneInfo) -> str | None:
-    """A stored instant as ISO 8601 with the user's offset, e.g. ``2026-11-09T10:45:00+09:00``."""
-    if text is None:
-        return None
+    """A stored instant as ISO 8601 with the user's offset, e.g. ``2026-11-09T10:45:00+09:00``; a
+    stored whole day as it is."""
+    if text is None or is_day(text):
+        return text
     return from_storage(text).astimezone(tz).isoformat(timespec="seconds")
 
 
@@ -70,6 +74,26 @@ def parse_instant(value, tz: ZoneInfo, field: str) -> datetime:
     if moment.tzinfo is None:
         moment = moment.replace(tzinfo=tz)
     return moment.astimezone(timezone.utc)
+
+
+def is_day(text: str) -> bool:
+    """Whether a stored ``do_at`` / ``due_at`` is a whole day rather than an instant."""
+    return bool(_DATE_RE.match(text))
+
+
+def parse_when(value, tz: ZoneInfo, field: str) -> str:
+    """A todo's ``do_at`` / ``due_at`` as stored: a whole day as ``YYYY-MM-DD``, a date-time as its UTC instant."""
+    if isinstance(value, str) and _DATE_RE.match(value.strip()):
+        return parse_date(value, field)
+    return to_storage(parse_instant(value, tz, field))
+
+
+def when_sort_key(text: str | None, tz: ZoneInfo) -> tuple[bool, str]:
+    """Orders stored ``do_at`` / ``due_at`` values in time: a whole day sorts where it starts, ahead of
+    that day's timed todos; no value sorts last."""
+    if text is None:
+        return (True, "")
+    return (False, to_storage(day_bounds(text, tz)[0]) if is_day(text) else text)
 
 
 def parse_date(value, field: str) -> str:

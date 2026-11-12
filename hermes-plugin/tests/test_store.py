@@ -33,7 +33,7 @@ def test_utc_input_is_shown_with_the_local_offset(store):
 def test_validation(store):
     assert codes(lambda: store.add_todo(title="", area="life", source="s")) == "invalid_params"
     assert codes(lambda: store.add_todo(title="x", area="fun", source="s")) == "invalid_params"
-    assert codes(lambda: store.add_todo(title="x", area="life", source="s", do_at="2026-11-10")) == "invalid_params"
+    assert codes(lambda: store.add_todo(title="x", area="life", source="s", do_at="2026-11-31")) == "invalid_params"
     assert codes(lambda: store.add_todo(title="x", area="life", source="s", do_at="soon")) == "invalid_params"
     assert codes(lambda: store.add_todo(title="x", area="life", source="s", proposed="yes")) == "invalid_params"
     assert codes(lambda: store.get_todo("nope")) == "not_found"
@@ -144,7 +144,8 @@ def test_changes_since_and_topic_revisions(store, clock):
     assert store.changes_since(1)["topics"] == ["today"]
     assert store.changes_since(2)["topics"] == []
     assert store.changes_since(99)["reset"] is True  # ahead of this store
-    assert store.topic_revisions() == {"todos": 1, "today": 2, "reports": 0, "usage": 0, "focus": 0, "settings": 0}
+    assert store.topic_revisions() == {"todos": 1, "today": 2, "reports": 0, "usage": 0, "focus": 0, "settings": 0,
+                                       "reviews": 0}
     # A week later the log is trimmed: an old cursor must refetch everything.
     clock.set("2026-11-20T10:00:00+09:00")
     store.add_todo(title="y", area="life", source="s")
@@ -277,3 +278,49 @@ def test_focus_reports(store, clock):
     assert latest["woke"] and latest["age_minutes"] == 8
     assert codes(lambda: store.add_focus(plan="x", off_minutes=-1, activity="fun", on_track=False)) == "invalid_params"
     assert codes(lambda: store.add_focus(plan="x", off_minutes=1, activity="games", on_track=False)) == "invalid_params"
+
+
+def test_a_whole_day_has_no_time_and_keeps_its_date(store):
+    todo, _ = store.add_todo(title="交报告", area="study", source="s", do_at="2026-11-10", due_at=" 2026-11-12 ")
+    assert (todo["do_at"], todo["due_at"]) == ("2026-11-10", "2026-11-12")
+    # the same add again is the same todo; another day under that id is not
+    again, _ = store.add_todo(title="交报告", area="study", source="s", do_at="2026-11-10", due_at="2026-11-12",
+                              todo_id=todo["id"])
+    assert again["id"] == todo["id"]
+    assert codes(lambda: store.add_todo(title="交报告", area="study", source="s", do_at="2026-11-11",
+                                        due_at="2026-11-12", todo_id=todo["id"])) == "conflict"
+    # another time zone moves instants, not days
+    timed, _ = store.add_todo(title="上课", area="study", source="s", do_at="2026-11-10T09:00")
+    store.update_settings({"timezone": "America/New_York"})
+    assert store.get_todo(todo["id"])["do_at"] == "2026-11-10"
+    assert store.get_todo(timed["id"])["do_at"] == "2026-11-09T19:00:00-05:00"
+    # a day becomes a moment and back, and "" still clears through None
+    moved, _ = store.update_todo(todo["id"], {"do_at": "2026-11-10T15:00:00-05:00", "due_at": None})
+    assert (moved["do_at"], moved["due_at"]) == ("2026-11-10T15:00:00-05:00", None)
+    assert store.update_todo(todo["id"], {"do_at": "2026-11-10"})[0]["do_at"] == "2026-11-10"
+
+
+def test_whole_days_in_ranges_and_in_order(store):
+    def add(title, **when):
+        return store.add_todo(title=title, area="life", source="s", **when)[0]["id"]
+    day = add("全天", do_at="2026-11-10")
+    morning = add("早上", do_at="2026-11-10T08:00")
+    evening = add("晚上", do_at="2026-11-10T21:00")
+    eve = add("前一晚", do_at="2026-11-09T23:30")
+    due = add("截止", due_at="2026-11-10")
+    undated = add("没日期")
+
+    def ids(**query):
+        return [t["id"] for t in store.list_todos(**query)]
+    # that day: the whole-day todo first, then by the clock; the deadline that day counts too
+    assert ids(date="2026-11-10") == [day, morning, evening, due]
+    assert ids(date="2026-11-10", field="do_at") == [day, morning, evening]
+    assert ids(date="2026-11-09") == [eve] and ids(date="2026-11-11") == []
+    # a range that only touches part of the day still holds the day
+    assert ids(start="2026-11-10T20:00", end="2026-11-10T22:00", field="do_at") == [day, evening]
+    assert ids(start="2026-11-09", end="2026-11-10", field="do_at") == [eve, day, morning, evening]
+    assert ids(end="2026-11-09T23:00", field="do_at") == []
+    assert ids(start="2026-11-11", field="either") == []
+    # everything, in time: a day sorts where it starts
+    assert ids() == [eve, day, morning, evening, due, undated]
+    assert ids(date="2026-11-10", include_undated=True)[-1] == undated

@@ -13,6 +13,7 @@ from typing import Any, Callable, Optional
 
 from . import rpc, tools
 from .errors import ShionError
+from .reviews import HermesLedger, Reviews
 from .store import Store
 from .watcher import ChangeWatcher
 
@@ -55,10 +56,11 @@ def focus_message(plan: str, off_minutes: int, activity: str, on_track: bool) ->
 
 class ShionPlugin:
     def __init__(self, ctx, *, hermes: Any = HermesAdapter, store: Optional[Store] = None,
-                 watch_interval: float = 1.0):
+                 watch_interval: float = 1.0, ledger: Any = None):
         self.ctx = ctx
         self.hermes = hermes
         self.store = store or Store(hermes.data_dir() / DB_FILENAME)
+        self.reviews = Reviews(self.store, self.profile(), ledger or HermesLedger())
         self.watcher = ChangeWatcher(self.store, self._emit_change, interval=watch_interval)
         self._seen_keys: dict[str, str] = {}
 
@@ -80,6 +82,7 @@ class ShionPlugin:
         for name, schema in tools.SCHEMAS.items():
             self.ctx.register_tool(name=name, toolset=tools.TOOLSET, schema=schema, handler=handlers[name])
         self.ctx.register_hook("pre_llm_call", self.on_pre_llm_call)
+        self.ctx.register_hook("post_tool_call", self.on_post_tool_call)
         self.ctx.on_unload(self.watcher.stop)
 
     # -- push events -------------------------------------------------------------------------
@@ -106,6 +109,19 @@ class ShionPlugin:
             self._seen_keys[session_id] = key
         except Exception:
             logger.debug("shion: could not record the session key", exc_info=True)
+        return None
+
+    # -- skill reviews -----------------------------------------------------------------------
+
+    def on_post_tool_call(self, tool_name: str = "", **kwargs) -> None:
+        """A skill was just written: its card is filed now, so Shion hears of it (a change of the
+        ``reviews`` topic) without asking. Never changes the turn."""
+        if tool_name != "skill_manage":
+            return None
+        try:
+            self.reviews.sync()
+        except Exception:
+            logger.debug("shion: could not file the skill change", exc_info=True)
         return None
 
     # -- focus check -------------------------------------------------------------------------

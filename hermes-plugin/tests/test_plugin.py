@@ -37,9 +37,10 @@ def test_registers_every_method_tool_and_the_hook(make):
     assert set(ctx.rpc) == {
         "info", "sync.state", "changes.since", "settings.get", "settings.update", "todos.list", "todos.get",
         "todos.add", "todos.update", "todos.delete", "today.get", "reports.list", "reports.get", "usage.upload",
-        "usage.day", "usage.categories.list", "usage.categories.set", "focus.report", "focus.latest"}
+        "usage.day", "usage.categories.list", "usage.categories.set", "focus.report", "focus.latest",
+        "reviews.list", "reviews.detail", "reviews.bind", "reviews.decide"}
     assert set(ctx.tools) == set(tools.SCHEMAS)
-    assert set(ctx.hooks) == {"pre_llm_call"}
+    assert set(ctx.hooks) == {"pre_llm_call", "post_tool_call"}
     assert len(ctx.unload) == 1
 
 

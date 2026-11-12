@@ -1,6 +1,6 @@
 # shion 插件（Hermes 服务器端）
 
-Shion 的数据都存在这个 Hermes 插件里：待办、「今天」页顶部的一段话、日报、应用使用记录、专注检查的结论。所有助手经插件的**工具**读写，Shion 经插件 **RPC**（`plugin.shion.<名字>`，走 `/api/ws`）读写，看到的是同一份。
+Shion 的数据都存在这个 Hermes 插件里：待办、「今天」页顶部的一段话、日报、应用使用记录、专注检查的结论，还有你对助手自己沉淀的技能做的审核（技能本身留在 Hermes 的技能账本里，见「技能审核」）。所有助手经插件的**工具**读写，Shion 经插件 **RPC**（`plugin.shion.<名字>`，走 `/api/ws`）读写，看到的是同一份。
 
 依据 Hermes `main`（2026-11-09，`8c1a9c0b`）的代码：`hermes_cli/plugin_rpc.py`、`hermes_cli/plugins_context.py`、`hermes_cli/plugins_injection.py`、`hermes_cli/plugin_events.py`、`gateway/session_plugin_rpc.py`、`gateway/session_controls.py`、`gateway/run_plugin_injection.py`。文档和代码对不上的地方以代码为准，下文会注明。
 
@@ -116,7 +116,7 @@ hermes -p shion plugins doctor shion  # 用 Hermes 自己的发现和注册流�
 - **`session_id` 只有 `focus.report` 要带**：詩音 Bot Chat 的会话 id。带了 `session_id` 的调用，Hermes 会先按这个会话检查权限（是不是这个 profile 的、是不是你的会话）。其他方法不要带（带了也只是多一次检查）。
 - `profile`、`session_id` 由 Hermes 留在 params 里，插件忽略它们。除此之外，不认识的参数一律报 `invalid_params`。
 - 连接要有 `session:control` 能力（Hermes 对插件方法的要求，同插件斜杠命令），Shion 的登录凭证和会话令牌都有。
-- 每次调用占着这个连接的请求通道直到返回。这里的方法都只读写本地 SQLite，很快。
+- 每次调用占着这个连接的请求通道直到返回。这里的方法都只读写本地 SQLite，很快；`reviews.detail` 和 `reviews.decide` 还要读 Hermes 的技能账本、写回技能文件，也都在本机、不起子进程。
 
 ### 错误
 
@@ -134,19 +134,22 @@ hermes -p shion plugins doctor shion  # 用 Hermes 自己的发现和注册流�
 | --- | --- |
 | `invalid_params` | 参数缺了、多了、类型或取值不对；`detail` 里的说明写着是哪个参数 |
 | `not_found` | 按 id（或日期加种类）找不到 |
-| `conflict` | `todos.add` 带的 `id` 已经有一条内容不同的待办 |
+| `conflict` | `todos.add` 带的 `id` 已经有一条内容不同的待办；技能审核里：卡片已经处理过、又有了新变更，或者撤销会盖掉后来的修改 |
+| `unavailable` | 这台 Hermes 没有可读的技能账本，或者账本里已经没有这次变更的记录 |
+| `undo_failed` | Hermes 没能撤销（说明是 Hermes 给的原因）；卡片仍然待审核，可以再试 |
 
 `detail` 不是以 `ShionError:` 开头的，是插件内部出错（比如数据库打不开），当作服务器错误处理、稍后重试。Hermes 自己的错误照常：`-32601`（插件没加载）、`4001 permission_denied`、`4001 profile_mismatch` 等。
 
 ### 时间和日期
 
-- **时间**：ISO 8601，返回时总是带设置里时区的偏移，精确到秒，比如 `2026-11-09T10:45:00+09:00`。传进来的时间带偏移（或 `Z`）就照用；不带偏移，按设置的时区理解。Mac 端请总是带偏移。只给日期（`2026-11-10`）当时间用会被拒绝。
+- **时间**：ISO 8601，返回时总是带设置里时区的偏移，精确到秒，比如 `2026-11-09T10:45:00+09:00`。传进来的时间带偏移（或 `Z`）就照用；不带偏移，按设置的时区理解。Mac 端请总是带偏移。只给日期（`2026-11-10`）当时间用会被拒绝，待办的 `do_at` / `due_at` 除外（见下一条）。
 - **日期**：`YYYY-MM-DD`，指设置时区里的那一天（`date`、`from`、`to`）。「今天」也按这个时区算，可以从 `info` / `sync.state` 的 `today` 拿到。
+- **待办的 `do_at` / `due_at` 可以只是一天**：传 `2026-11-10`，存的、返回的都是 `2026-11-10`，没有时刻，也不随时区移动（改了时区它还是 11 月 10 日）。带时刻的照旧。按日期或范围筛选时，一整天的待办算在范围碰到的每个本地日里；排序时它排在那一天的开头、有时刻的之前。
 - 时间在库里按 UTC 存，所以改了时区，已有的时间不变，只是显示的偏移和「哪一天」跟着变。
 
 ### revision
 
-每次写入（真的改了东西的）都让全库的 `revision` 加一，并记下改了哪些**话题**：`todos`、`today`、`reports`、`usage`、`focus`、`settings`。写入方法的返回里带着写完后的 `revision`。推送和 `changes.since` 都靠它，见「推送」。
+每次写入（真的改了东西的）都让全库的 `revision` 加一，并记下改了哪些**话题**：`todos`、`today`、`reports`、`usage`、`focus`、`settings`、`reviews`。写入方法的返回里带着写完后的 `revision`。推送和 `changes.since` 都靠它，见「推送」。
 
 ## 数据格式
 
@@ -179,11 +182,11 @@ hermes -p shion plugins doctor shion  # 用 Hermes 自己的发现和注册流�
 | `area` | `study` / `work` / `life` | |
 | `source` | string | 谁加的：助手的 profile 名（`shion`、`study`、`mail`…），或从 Shion 加的固定是 `你自己加的` |
 | `source_detail` | string \| null | 从哪来的，界面上显示在待办下面，比如「来自 中村老师 的邮件」。Mac 的示例数据里 `source` 写的就是这类话，接上插件后 `source` 是谁加的、这一行是从哪来的，两个分开 |
-| `do_at` | 时间 \| null | 执行时间 |
-| `due_at` | 时间 \| null | 截止时间，和执行时间分开 |
+| `do_at` | 时间或日期 \| null | 执行时间；只定了哪天就是日期 `2026-11-10` |
+| `due_at` | 时间或日期 \| null | 截止时间，和执行时间分开；只是日期时，那一天过完才算逾期 |
 | `done` | bool | |
 | `nudges` | int | 催过几次 |
-| `proposed` | bool | `true`：日期是助手建议的，等你在「等你确认」里确认 |
+| `proposed` | bool | `true`：日期是助手建议的，等你在「待你处理」里确认 |
 | `created_at` / `updated_at` | 时间 | `updated_at` 只在真的改了内容时变 |
 | `completed_at` | 时间 \| null | `done` 变成 `true` 时记下，改回 `false` 时清空 |
 
@@ -248,7 +251,7 @@ hermes -p shion plugins doctor shion  # 用 Hermes 自己的发现和注册流�
 参数：无。
 
 ```json
-{"plugin_version": "0.1.0", "schema_version": 1, "profile": "shion", "timezone": "Asia/Tokyo",
+{"plugin_version": "0.2.0", "schema_version": 1, "profile": "shion", "timezone": "Asia/Tokyo",
  "today": "2026-11-09", "revision": 42, "tz_database": true}
 ```
 
@@ -298,7 +301,7 @@ hermes -p shion plugins doctor shion  # 用 Hermes 自己的发现和注册流�
 
 返回 `{"todos": [Todo...], "revision": n}`。排序：有执行时间的在前，按执行时间；再按截止时间；再按创建时间。
 
-常用：「今天」页 = `{"date": "<today>", "include_undated": true}`；「等你确认」= `{"proposed": true}`；「待办」页 = 不带参数（全部未完成）。
+常用：「今天」页 = `{"date": "<today>", "include_undated": true}`；「待你处理」里的待办 = `{"proposed": true}`；「待办」页 = 不带参数（全部未完成）。
 
 ### `todos.get`
 
@@ -310,7 +313,7 @@ hermes -p shion plugins doctor shion  # 用 Hermes 自己的发现和注册流�
 | --- | --- | --- |
 | `title` | 是 | |
 | `area` | 是 | |
-| `do_at` / `due_at` | | 时间或 `null` |
+| `do_at` / `due_at` | | 时间、日期（`2026-11-10`）或 `null` |
 | `proposed` | | 默认 `false` |
 | `source_detail` | | |
 | `id` | | 自己给 id。同一个 id 内容一样（标题、area、两个时间）再加一次，返回已有的那条、不算新写入，所以断线后可以放心重发；内容不一样报 `conflict` |
@@ -323,7 +326,7 @@ hermes -p shion plugins doctor shion  # 用 Hermes 自己的发现和注册流�
 | --- | --- |
 | `id` | 必填 |
 | `title`、`area` | |
-| `do_at`、`due_at` | 时间，`null` 清空 |
+| `do_at`、`due_at` | 时间或日期，`null` 清空 |
 | `done` | `true` 完成（记 `completed_at`），`false` 改回未完成 |
 | `proposed` | `false` = 确认助手建议的日期；改日期不会自动确认，要确认就一起传 `proposed: false` |
 | `nudges` | 直接设成某个数 |
@@ -443,6 +446,53 @@ hermes -p shion plugins doctor shion  # 用 Hermes 自己的发现和注册流�
 
 参数：无。返回 `{"latest": 专注检查结论（多一个 age_minutes：距现在几分钟） | null}`。
 
+## 技能审核
+
+按 Hermes `611bf53`（2026-11-12）的代码。Hermes 的后台复盘（background review）会自己新建、修改技能：**先写入生效**，再由你事后看。Hermes 把每次技能变更都记在自己的技能账本里（`tools/skill_ledger.py`：`<profile>/skills/.curator_ledger.jsonl`，文件内容按 sha256 存在 `<profile>/.curator_backups/blobs/`），每条有变更前后的文件、是谁改的（`actor`）、来自哪个会话。插件不另存技能内容，只存账本里没有的三样：哪几条变更算一张卡、你的决定、你讨论它用的会话。
+
+- **哪些变更有卡**：账本里 `actor` 是 `curator` 的（后台复盘和 curator 自己做的）。你在对话里让助手改的（`agent`）和你用命令行改的（`user`）没有卡。
+- **一张卡**：同一个技能、同一个来源会话、前后相隔不超过 5 分钟的连续变更（一次复盘常常先建 `SKILL.md` 再补参考文件）。卡片一旦处理过或者开过审核会话就不再收新变更，之后的变更另起一张。
+- **批准**只记下决定，技能不动。
+- **拒绝**把这张卡的变更撤回去：技能是这次新建的，整个归档到 `skills/.archive/`（Hermes 的 `archive_skill`，`hermes curator restore <名字>` 能找回）；是修改，就按从新到旧的顺序逐条调账本自己的回退（`rollback_entry`：先确认需要的旧内容都在，再把要被替换的现状记进账本，所以回退本身也能再回退）。这两步在账本里记成你（`user`）做的。
+- **不盖掉后来的修改**：拒绝前先核对，卡片改过的文件现在还是它改完的样子，并且这个技能在那之后没有别的、仍然有效的变更；不满足就报 `conflict`，什么都不动。
+- **撤到一半失败**（Hermes 拒绝某一条）报 `undo_failed`，已经撤回的保持撤回，卡片仍是待审核，再拒绝一次从剩下的接着撤。
+- **账本会被 Hermes 清理**（默认 5 MB，内容文件过后回收）：清理过的变更不能再拒绝（`unavailable`），`reviews.detail` 的 `available` 是 `false`、缺的文件内容是 `null`；批准不受影响。
+- 每个 profile 有自己的技能和账本，`reviews.*` 要带那个助手的 `profile`，只看得到它自己的卡。Hermes 没有账本可读时（版本太旧）`reviews.list` 回 `available: false` 和空列表。
+
+卡片：
+
+```json
+{"id": "sr_3f9a2c1d7b40", "profile": "study", "skill": "moodle-download", "session": "20261112_101500_ab12cd",
+ "kind": "created", "entries": ["3f9a2c1d7b40", "8b1e0c2a9d11"], "status": "pending",
+ "review_session": null, "at": "2026-11-12T10:21:07+09:00", "decided_at": null}
+```
+
+| 字段 | 说明 |
+| --- | --- |
+| `kind` | `created` 新建、`updated` 修改、`removed` 删除或归档 |
+| `entries` | 这张卡包含的账本条目 id，按时间先后 |
+| `session` | 来源会话（账本记的 `evidence.session_id`），没有就是空串 |
+| `status` | `pending` 已生效待审核、`approved`、`rejected` |
+| `review_session` | 讨论这张卡的会话 id，没开过是 `null` |
+
+### `reviews.list`
+
+参数：无（带 `profile`）。先把账本里新的变更归到卡片上，再返回 `{"reviews": [卡片…], "available": true}`，新的在前，最多 200 张。
+
+### `reviews.detail`
+
+参数：`id`。返回 `{"review": {…卡片, "files": […], "available": true, "document": {"path", "text"} | null}}`。`files` 是这张卡改过的每个文件，合并了卡里所有条目：`{"path": "moodle-download/SKILL.md", "before": 文本或 null, "after": 文本或 null, "diff": 统一 diff}`（`null` 是那时没有这个文件，或内容已被清理）；`document` 是这个技能现在的 `SKILL.md`。单个文本最多 10 万字符。
+
+### `reviews.bind`
+
+参数：`id`、`review_session`。记下这张卡的审核会话，只记一次：同一个 id 再记没事，换一个报 `conflict`。返回 `{"review": 卡片}`。
+
+### `reviews.decide`
+
+参数：`id`、`decision`（`approved` / `rejected`）、`entries`（你看到的那张卡的 `entries`，原样传回）。卡片在你看过之后又多了变更报 `conflict`。同一个决定再发一次返回同样的结果；已经是另一个决定报 `conflict`。返回 `{"review": 卡片, "revision": n}`。
+
+写了技能后（`post_tool_call` 钩子看到 `skill_manage`）插件马上把新变更归到卡片上，`reviews` 话题变了，Shion 收到推送再来读，不用轮询。
+
 ## 推送
 
 数据变了（助手加了一条待办、回顾写了日报、你在另一台设备上改了设置），所有连着这台 gateway 的 `/api/ws` 客户端会收到：
@@ -491,7 +541,7 @@ hermes -p shion plugins doctor shion  # 用 Hermes 自己的发现和注册流�
 
 工具是给所有 profile 的；要限制某个助手能用哪些，用 Hermes 自己的工具选择（`hermes -p <profile> tools`）。各助手的 SOUL 里写清楚谁用哪几个（比如只有回顾写 `study`/`work`/`life` 日报）。
 
-钩子：`pre_llm_call`，只记下会话的路由键（见 `focus.report`），不改这一轮的内容，不往对话里加任何东西。
+钩子：`pre_llm_call`，只记下会话的路由键（见 `focus.report`）；`post_tool_call`，只在 `skill_manage` 之后把技能账本里新的变更归到审核卡片上（见「技能审核」）。两个都不改这一轮的内容，不往对话里加任何东西。
 
 ## 限制
 
@@ -514,6 +564,6 @@ pip install pytest
 python -m pytest -q
 ```
 
-测试不装 Hermes：`tests/conftest.py` 的 `FakeCtx` 照 `PluginContext` 的接口记下 `register_rpc`、`register_tool`、`register_hook`、`on_unload`、`inject_message`，`FakeHermes` 代替 `broadcast_plugin_event` 和 `get_session_env`；RPC 按 Hermes 的调用方式调（params 里留着 `profile`、`session_id`，`session_id` 另外作为关键字参数传）。存储用真的 SQLite。
+测试不装 Hermes：`tests/conftest.py` 的 `FakeCtx` 照 `PluginContext` 的接口记下 `register_rpc`、`register_tool`、`register_hook`、`on_unload`、`inject_message`，`FakeHermes` 代替 `broadcast_plugin_event` 和 `get_session_env`，`tests/test_reviews.py` 的 `FakeLedger` 照 Hermes 技能账本的行为（只记改动的文件、按 digest 取内容、回退和归档各自记账）；RPC 按 Hermes 的调用方式调（params 里留着 `profile`、`session_id`，`session_id` 另外作为关键字参数传）。存储用真的 SQLite。
 
 CI：`.github/workflows/hermes-plugin.yml`，只在 `hermes-plugin/**` 或这个工作流改了时跑，ubuntu runner，Python 3.11 和 3.13。
