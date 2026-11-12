@@ -15,7 +15,7 @@ hermes-plugin/
     store.py        SQLite 存储（不依赖 Hermes）
     watcher.py      revision 变了就推送
     timeutil.py     时区、日期
-  tests/            pytest，不装 Hermes 也能跑
+  tests/            pytest，不装 Hermes 也能跑（装了会多跑技能审核对真账本的那几个）
 ```
 
 ## 安装到服务器
@@ -565,5 +565,12 @@ python -m pytest -q
 ```
 
 测试不装 Hermes：`tests/conftest.py` 的 `FakeCtx` 照 `PluginContext` 的接口记下 `register_rpc`、`register_tool`、`register_hook`、`on_unload`、`inject_message`，`FakeHermes` 代替 `broadcast_plugin_event` 和 `get_session_env`，`tests/test_reviews.py` 的 `FakeLedger` 照 Hermes 技能账本的行为（只记改动的文件、按 digest 取内容、回退和归档各自记账）；RPC 按 Hermes 的调用方式调（params 里留着 `profile`、`session_id`，`session_id` 另外作为关键字参数传）。存储用真的 SQLite。
+
+技能审核另外对着真的 Hermes 跑一遍（`tests/test_reviews_hermes.py`）：用 Hermes 自己的 `skill_manage` 以后台复盘的身份写技能和改技能，插件从它真的账本里读出卡片和变更前后的内容，拒绝时调它真的回滚和归档，再用它的 `restore_skill` 找回来。没装 Hermes 时这几个测试自己跳过；CI 的第二个任务装上 Hermes 再跑（`.github/workflows/hermes-plugin.yml`，`HERMES_REF` 是插件上次对照的那个提交，服务器上的 Hermes 升级后把它往前挪）。本地要跑：
+
+```sh
+pip install pytest "hermes-agent @ git+https://github.com/NousResearch/hermes-agent@<提交>"
+HERMES_HOME="$(mktemp -d)" python -m pytest -q tests/test_reviews_hermes.py
+```
 
 CI：`.github/workflows/hermes-plugin.yml`，只在 `hermes-plugin/**` 或这个工作流改了时跑，ubuntu runner，Python 3.11 和 3.13。
