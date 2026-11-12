@@ -85,17 +85,8 @@ extension AppStore {
                 "submission_id": .string(id),
             ], botId: botId, mode: mode)
             deliveries.arrived(id)
-        } catch GatewayError.rpc(_, let message, let reason) {
-            deliveries.set(id, .unsent(DeliveryCheck.refusal(reason) ?? reason ?? message))
-        } catch let error as ControlError {
-            deliveries.set(id, .unsent(error.localizedDescription))
         } catch {
-            if mode == .steer {
-                // session.steer has no idempotent submission ID. Do not resend it automatically.
-                deliveries.untrack(id)
-                chats[botId, default: []].append(ChatItem(id: UUID().uuidString, role: .system, at: Date(),
-                    text: "引导的接收状态未确认，请核对助手的回复。原消息：" + text))
-            } else { deliveries.set(id, .unsure) }
+            noteSubmissionFailure(error, id: id)
         }
         return true
     }
@@ -277,7 +268,7 @@ extension AppStore {
     /// What went out just before the connection went, now that the server can say: there (an
     /// ordinary message again), or 没发出去 with 重发 (DeliveryCheck).
     private func reconcile(_ botId: String, caughtUp: Bool, snapshot: JSONValue) {
-        let doubtful = deliveries.unsure(in: botId)
+        let doubtful = deliveries.unresolved(in: botId)
         guard !doubtful.isEmpty else { return }
         let pending = DeliveryCheck.pending(in: snapshot)
         let rows = (chats[botId] ?? []).filter { $0.role == .user && deliveries.state($0.id) == nil }
@@ -285,11 +276,13 @@ extension AppStore {
         for (id, sent) in doubtful {
             // as a row shows it: a file's `@file:` line is not among its words
             let row = Self.userItem(id: id, at: sent.at, text: sent.text)
-            if DeliveryCheck.arrived(id: id, text: row.text, at: sent.at, seen: deliveries.seen, caughtUp: caughtUp,
+            if sent.state == .unsure && DeliveryCheck.arrived(id: id, text: row.text, at: sent.at, seen: deliveries.seen, caughtUp: caughtUp,
                                      pending: pending, rows: rows) {
                 deliveries.arrived(id)
             } else {
-                deliveries.set(id, .unsent(nil))
+                // Steers have no admission keyed by submission_id. Missing that receipt is no
+                // evidence they were not delivered; keep the explicit unknown state, no resend.
+                if sent.state == .unsure { deliveries.set(id, .unsent(nil)) }
                 // a page read in its place: it goes back at the bottom, with what went with it
                 if chats[botId]?.contains(where: { $0.id == id }) != true {
                     var back = row

@@ -71,6 +71,7 @@ nonisolated struct StoredItem: Codable, Sendable {
     var at: Date
     var text: String
     var eventKind: String?
+    var sourceTool: String?
     var cardId: String?
     var cardTitle: String?
     var cardAssignee: String?
@@ -357,7 +358,7 @@ extension StoredItem {
         case .card: "card"
         case .tool: "tool"
         }
-        self.init(id: item.id, role: name, at: item.at, text: item.text, eventKind: item.eventKind, cardId: item.cardId,
+        self.init(id: item.id, role: name, at: item.at, text: item.text, eventKind: item.eventKind, sourceTool: item.sourceTool, cardId: item.cardId,
                   cardTitle: item.cardTitle, cardAssignee: item.cardAssignee, stopped: item.stopped ? true : nil,
                   failure: item.failure)
     }
@@ -372,7 +373,7 @@ extension StoredItem {
         default: nil
         }
         guard let kind else { return nil }
-        return ChatItem(id: id, role: kind, at: at, text: text, eventKind: eventKind, cardId: cardId, cardTitle: cardTitle,
+        return ChatItem(id: id, role: kind, at: at, text: text, eventKind: eventKind, sourceTool: sourceTool, cardId: cardId, cardTitle: cardTitle,
                         cardAssignee: cardAssignee, stopped: stopped ?? false, failure: failure)
     }
 }

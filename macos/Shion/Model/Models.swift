@@ -142,6 +142,9 @@ struct ChatItem: Identifiable, Hashable {
     let at: Date
     var text = ""
     var eventKind: String?
+    /// Present when a displayed card was produced by a tool in the current turn, rather than
+    /// an incoming notification that starts a new one. Kept for retry side-effect warnings.
+    var sourceTool: String?
     var reviewId: String?
     var cardId: String?
     /// What was asked in this chat that its card or line stands for: a password or a key

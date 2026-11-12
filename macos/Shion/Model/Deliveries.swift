@@ -53,8 +53,8 @@ final class Deliveries {
     }
 
     /// The messages of a chat whose receipt the connection took with it, oldest first.
-    func unsure(in botId: String) -> [(id: String, sent: Sent)] {
-        sent.filter { $0.value.botId == botId && $0.value.state == .unsure }
+    func unresolved(in botId: String) -> [(id: String, sent: Sent)] {
+        sent.filter { $0.value.botId == botId && [.unsure, .unconfirmedSteer].contains($0.value.state) }
             .map { (id: $0.key, sent: $0.value) }
             .sorted { $0.sent.at < $1.sent.at }
     }

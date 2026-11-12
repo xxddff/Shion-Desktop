@@ -22,7 +22,7 @@ nonisolated struct SkillReview: Identifiable, Codable, Sendable {
     }
     var statusLabel: String {
         switch status {
-        case "approved": "已批准 · 保留生效"
+        case "approved": "已批准 · 已记录决定"
         case "rejected": "已拒绝 · 已撤销"
         case "rollback_failed": "撤销未完成 · 请检查服务器"
         default: "已生效 · 待审核"
@@ -215,14 +215,23 @@ final class ReviewConversation: Identifiable {
             let source = try await store.reviewCall("reviews.detail", profile: profile, ["id": .string(id)])
             detail = source
             if session == nil {
+                // Hermes resolves a title before request_id. Create by this card's unique
+                // request alone; the sheet's friendly title is independent of the hidden session.
                 let created = try await store.gateway.call("session.create", [
                     "profile": .string(profile), "request_id": .string("shion-review-" + id),
-                    "title": .string("审核技能 · " + title), "source": "gui", "hidden": true,
+                    "source": "gui", "hidden": true,
                     "follow_profile_config": false, "ignore_rules": true, "toolsets": [],
                 ])
                 guard let sid = created["session_id"]?.string else { throw GatewayError.offline }
                 session = sid
                 _ = try await store.reviewCall("reviews.bind", profile: profile, ["id": .string(id), "review_session": .string(sid)])
+                // A repeated creation request can recover a session created before a lost
+                // binding receipt. Display its history before deciding whether to seed it.
+                try await resume(using: store)
+                if !items.isEmpty {
+                    await store.refreshReviews(profile)
+                    return
+                }
             }
             let context = source["context"] ?? []
             let files: JSONValue = ["before": source["before"] ?? [], "after": source["after"] ?? [],

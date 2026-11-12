@@ -680,7 +680,7 @@ extension AppStore {
         case "tool":
             let name = row["name"]?.string ?? row["tool_name"]?.string ?? "tool"
             if let message = Self.peerMessage(name, args: row["args"]) {
-                return [ChatItem(id: id, role: .card, at: at, text: message, eventKind: "peer")]
+                return [ChatItem(id: id, role: .card, at: at, text: message, eventKind: "peer", sourceTool: name)]
             }
             if let made = Self.madeCard(name, args: row["args"]) {
                 return [ChatItem(id: id, role: .card, at: at, cardTitle: made.title, cardAssignee: made.assignee)]
@@ -810,7 +810,7 @@ extension AppStore {
             let name = payload["name"]?.string ?? payload["tool_name"]?.string ?? "tool"
             if let message = Self.peerMessage(name, args: payload["args"]) {
                 append(ChatItem(id: freshId(payload["tool_id"]?.string.map { "tool-\($0)" }, in: botId),
-                    role: .card, at: Date(), text: message, eventKind: "peer"), to: botId)
+                    role: .card, at: Date(), text: message, eventKind: "peer", sourceTool: name), to: botId)
             } else if let made = Self.madeCard(name, args: payload["args"]) {
                 let id = UUID().uuidString
                 if let call = payload["tool_id"]?.string {

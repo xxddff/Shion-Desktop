@@ -6,6 +6,8 @@ nonisolated enum Delivery: Equatable, Sendable {
     case sending
     /// The connection went before the receipt came: once it is back, the server says (DeliveryCheck).
     case unsure
+    /// A non-idempotent steer may have reached the agent. Reconnection cannot prove otherwise.
+    case unconfirmedSteer
     /// Hermes does not have it: 重发 sends it again, under the same submission id. The reason is
     /// Hermes's refusal in words, when it refused it.
     case unsent(String?)

@@ -58,6 +58,8 @@ TOOLED = "查一下明天的天气"
 TOOLED_CALL = ("web_search", "明天 吉祥寺 天气")
 TOOLED_REPLY = "明天晴，最高 18 度。"
 TOOLED_RETRIED = "（重试）明天晴，最高 18 度，傍晚起风。"
+PEER_FAIL = "助手消息后出错（CI）"
+PEER_STOP = "助手消息后停止（CI）"
 MUTATE_KEYS = {"session_id", "request_id", "expected_revision", "operation", "payload"}
 
 state = {"log": print, "transcripts": None, "lock": threading.Lock()}
@@ -86,7 +88,7 @@ def handles(method, params):
     if method in ("session.interrupt", "session.mutate"):
         return True
     text = str(params.get("text", ""))
-    return method == "prompt.submit" and (STORY in text or FAIL in text or TOOLED in text)
+    return method == "prompt.submit" and any(word in text for word in (STORY, FAIL, TOOLED, PEER_FAIL, PEER_STOP))
 
 
 def handle(conn, method, params, rid):
@@ -94,7 +96,7 @@ def handle(conn, method, params, rid):
         return interrupt(conn, params, rid)
     if method == "session.mutate":
         return mutate(conn, params, rid)
-    if FAIL in str(params.get("text", "")):
+    if any(word in str(params.get("text", "")) for word in (FAIL, PEER_FAIL)):
         return fail(conn, params, rid)
     if TOOLED in str(params.get("text", "")):
         return tooled(conn, params, rid)
@@ -156,7 +158,7 @@ def story(conn, params, rid):
             {"row_id": user_row, "row_kind": "message", "role": "user", "text": fake_words.sent(text),
              "timestamp": time.time()})
         turn = {"generation": current["generation"], "stop": threading.Event(), "user_row": user_row,
-                "submission": params.get("submission_id")}
+                "submission": params.get("submission_id"), "peer": PEER_STOP in text}
         running[session_id] = turn
         short = text in rewound
     threading.Thread(target=run_story, args=(conn, session_id, turn, short), daemon=True).start()
@@ -168,6 +170,8 @@ def run_story(conn, session_id, turn, short):
     try:
         event(conn, "session.info", session_id, {"running": True, "execution_generation": generation}, generation)
         event(conn, "message.start", session_id, {}, generation)
+        if turn.get("peer") and not short:
+            peer_tool(conn, session_id, generation)
         for part in ([RETRIED] if short else STORY_PARTS):
             if turn["stop"].wait(0.3):
                 break
@@ -209,7 +213,7 @@ def fail(conn, params, rid):
             {"row_id": user_row, "row_kind": "message", "role": "user", "text": fake_words.sent(text),
              "timestamp": time.time()})
         turn = {"generation": current["generation"], "stop": threading.Event(), "user_row": user_row,
-                "submission": params.get("submission_id")}
+                "submission": params.get("submission_id"), "peer": PEER_FAIL in text}
         running[session_id] = turn
         retried = text in rewound
     threading.Thread(target=run_fail, args=(conn, session_id, turn, retried), daemon=True).start()
@@ -220,6 +224,8 @@ def run_fail(conn, session_id, turn, retried):
     generation = turn["generation"]
     try:
         event(conn, "session.info", session_id, {"running": True, "execution_generation": generation}, generation)
+        if turn.get("peer") and not retried:
+            peer_tool(conn, session_id, generation)
         if retried:
             event(conn, "message.start", session_id, {}, generation)
             time.sleep(0.3)
@@ -252,6 +258,18 @@ def run_fail(conn, session_id, turn, retried):
         idle_info(conn, session_id)
     except OSError:
         running.pop(session_id, None)
+
+
+def peer_tool(conn, session_id, generation):
+    """A message_agent call remains a tool in Hermes's history, even when Shion renders a card."""
+    call = f"call-ci-peer-{generation}"
+    args = {"target": "little", "message": "请准备审核资料（CI）。"}
+    event(conn, "tool.start", session_id, {"tool_id": call, "name": "message_agent", "args": args}, generation)
+    event(conn, "tool.complete", session_id, {"tool_id": call, "name": "message_agent", "result": "sent"}, generation)
+    with state["lock"]:
+        state["transcripts"].setdefault(session_id, []).append({
+            "row_kind": "message", "role": "tool", "name": "message_agent", "args": args,
+            "tool_call_id": call, "timestamp": time.time()})
 
 
 def tooled(conn, params, rid):

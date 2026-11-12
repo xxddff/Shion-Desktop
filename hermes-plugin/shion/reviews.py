@@ -219,6 +219,13 @@ class Reviews:
             if row["status"] == decision: return row
             if row["status"] != "pending":
                 raise ShionError("conflict", "这条审核已处理，请刷新")
+            if decision == "approved":
+                # Approval records a decision about these ledger entries; the skill was already
+                # written. It neither restores this version nor overwrites any later changes,
+                # so older cards can be closed even when their snapshots have since expired.
+                row["status"] = decision
+                self.save(row)
+                return row
             ledger, entries, before, after = self.versions(row)
             all_entries = ledger.entries()
             last = max(i for i, entry in enumerate(all_entries) if entry["id"] in row["entries"])

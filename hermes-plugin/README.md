@@ -526,9 +526,9 @@ CI：`.github/workflows/hermes-plugin.yml`，只在 `hermes-plugin/**` 或这个
 - `post_llm_call` 留下最近至多 50 条用户／助手文字消息的来源上下文；工具输出、系统提示不带入审核。
 - `post_tool_call` 读取技能变更账本中 `actor=curator` 的成功创建／修改，记录卡片身份、来源、条目 id、决定和审核会话 id。技能文件已经生效，插件不加前置审批门。
 - 技能正文和版本不另建备份库；详情读取 Hermes 的 `skills/.curator_ledger.jsonl` 与 `.curator_backups/blobs`。仅支持文件发生变化的条目；账本关闭时不会伪造可回退记录。
-- 批准只记录决定。拒绝新建技能调用 `hermes -p PROFILE curator archive SKILL`；拒绝修改按倒序调用 `curator rollback ENTRY --yes`。使用 Hermes 的同一 per-skill 锁包住校验和操作，校验条目列表、备份哈希、当前文件与后续变更；有冲突就拒绝覆盖。撤销中途失败会显示单独状态，不继续把它当作待审核。
+- 批准只记录决定；即使已有后续修改或旧备份已过期，仍可批准旧卡，不恢复旧版本、不改写当前文件。拒绝新建技能调用 `hermes -p PROFILE curator archive SKILL`；拒绝修改按倒序调用 `curator rollback ENTRY --yes`。撤销使用 Hermes 的同一 per-skill 锁包住校验和操作，校验条目列表、备份哈希、当前文件与后续变更；有冲突就拒绝覆盖。撤销中途失败会显示单独状态，不继续把它当作待审核。
 - 卡片和决定不会随账本清理消失；详情／撤销需要的版本已清理时返回 `version_unavailable`。插件不延长 Hermes 的保留期。打开审核后的版本固定，新写入另起卡片。
-- 审核是独立 canonical session，`toolsets: []`、`ignore_rules: true`、`follow_profile_config: false`；只做对话审查，没有修改技能／记忆的工具，因此本会话不触发自动沉淀，不改变全局配置。再次点审核恢复绑定的会话。
+- 审核是独立 canonical session，以卡片唯一的 `request_id` 创建，不用技能名称作为创建时的标题（Hermes 会先按标题复用会话）；界面仍显示技能名称。`toolsets: []`、`ignore_rules: true`、`follow_profile_config: false`；只做对话审查，没有修改技能／记忆的工具，因此本会话不触发自动沉淀，不改变全局配置。再次点审核恢复绑定的会话。
 - 成功且已经写入的 `memory` 工具调用记录记忆卡片，已暂存待审批或失败的调用不冒充成功。记忆卡片没有技能的批准／拒绝按钮。助手间消息按 `Message from 🤖 …` 的 Hermes 标记记录／显示卡片。
 - `review.summary` 仍显示为摘要卡片。Mac 先暂存收到的事件，再通过幂等 `notices.record` 保存；重放用 epoch/seq 去重，重连补读。原始摘要若在客户端离线期间从未送达、又已离开 Hermes 的重放窗口，无法补造其原文；技能账本和记忆工具钩子保存的实际变更卡片仍可补读。卡片不通过 `inject_message` 塞回模型上下文。
 

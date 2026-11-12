@@ -174,11 +174,78 @@ final class ChatControlTests: XCTestCase {
         XCTAssertTrue(waitForText("审核结论：技能描述清楚（CI）", in: app, timeout: 15))
         keep(app.windows.firstMatch.screenshot(), "chatctl-review-session")
         element("review-close", in: app).click()
-        element("review-approve-ci-review", in: app).click()
-        XCTAssertTrue(waitForText("已批准 · 保留生效", in: app, timeout: 10))
-        element("review-open-ci-review", in: app).click()
-        XCTAssertTrue(waitForText("审核结论：技能描述清楚（CI）", in: app, timeout: 10), "the review conversation did not resume")
+        // Same skill, another card: Hermes's title-first create must not reuse the first chat.
+        composer.click()
+        composer.typeText("RUN151-learning-again")
+        element("send", in: app).click()
+        let nextReview = element("review-open-ci-review-next", in: app)
+        XCTAssertTrue(nextReview.waitForExistence(timeout: 15))
+        nextReview.click()
+        XCTAssertTrue(waitForText("审核结论：第二次技能变更（CI）", in: app, timeout: 15))
+        XCTAssertFalse(waitForText("审核结论：技能描述清楚（CI）", in: app, timeout: 1),
+                       "different review cards share a model conversation")
+        guard let secondSheet = question(in: app, timeout: 5) else { return XCTFail("no second review sheet") }
+        element("review-approve-ci-review-next", in: secondSheet).click()
+        XCTAssertTrue(waitForText("已批准 · 已记录决定", in: app, timeout: 10))
+        keep(app.windows.firstMatch.screenshot(), "chatctl-review-second-version")
         element("review-close", in: app).click()
+        let firstReview = element("review-open-ci-review", in: app)
+        for _ in 0..<8 {
+            if firstReview.exists && firstReview.isHittable { break }
+            element("transcript", in: app).scroll(byDeltaX: 0, deltaY: 220)
+            Thread.sleep(forTimeInterval: 0.2)
+        }
+        firstReview.click()
+        XCTAssertTrue(waitForText("审核结论：技能描述清楚（CI）", in: app, timeout: 10), "the review conversation did not resume")
+        XCTAssertFalse(waitForText("审核结论：第二次技能变更（CI）", in: app, timeout: 1),
+                       "reopening the first card shows the later review's discussion")
+        guard let firstSheet = question(in: app, timeout: 5) else { return XCTFail("no first review sheet") }
+        element("review-approve-ci-review", in: firstSheet).click()
+        XCTAssertTrue(waitUntil(timeout: 10) { !self.element("review-approve-ci-review", in: firstSheet).exists },
+                      "the older review cannot be closed after approving the newer one")
+        element("review-close", in: app).click()
+
+        // Outgoing assistant-message cards are tools within this turn. Both a failure and a
+        // stopped reply remain retryable, and warn about message_agent, live and after reloading.
+        for (prompt, stopTurn) in [("助手消息后出错（CI）", false), ("助手消息后停止（CI）", true)] {
+            composer.click()
+            composer.typeText(prompt)
+            element("send", in: app).click()
+            XCTAssertTrue(waitForText("发给 little：", in: app, timeout: 10), "no outgoing peer card")
+            if stopTurn {
+                XCTAssertTrue(element("stop", in: app).waitForExistence(timeout: 10))
+                app.typeKey(".", modifierFlags: .command)
+                XCTAssertTrue(element("stopped", in: app).waitForExistence(timeout: 10))
+            } else {
+                XCTAssertTrue(element("turn-failed", in: app).waitForExistence(timeout: 10))
+            }
+            for reloaded in [false, true] {
+                if reloaded {
+                    // Navigation keeps loadedChats cached. Disconnect and connect to rebuild
+                    // the transcript from server history, including the tool card's provenance.
+                    app.typeKey(",", modifierFlags: .command)
+                    let prefs = settingsWindow(app)
+                    XCTAssertTrue(prefs.waitForExistence(timeout: 5))
+                    tab("服务器", in: prefs).click()
+                    prefs.buttons["断开"].click()
+                    let state = element("connection-state", in: prefs)
+                    XCTAssertEqual(XCTWaiter().wait(for: [phase("未连接，现在是上次的数据", of: state)], timeout: 10), .completed)
+                    prefs.buttons["连接"].click()
+                    XCTAssertEqual(XCTWaiter().wait(for: [phase("已连接 ·", of: state)], timeout: 40), .completed)
+                    app.typeKey("w", modifierFlags: .command)
+                    chief.click()
+                }
+                let retryPeer = element("retry", in: app)
+                XCTAssertTrue(retryPeer.waitForExistence(timeout: 10), "peer tool hid retry (reloaded: \(reloaded))")
+                retryPeer.click()
+                guard let ask = question(in: app, timeout: 5) else { return XCTFail("retry did not warn about the sent message") }
+                XCTAssertTrue(waitForText("message_agent", in: app, timeout: 3), "the side-effect warning lost the peer tool")
+                button(reloaded ? "retry-confirm" : "retry-cancel", reloaded ? "重试" : "取消", in: ask).click()
+            }
+            let reply = stopTurn ? "（重试）故事讲完了" : "（重试）这次没出错。"
+            XCTAssertTrue(waitForText(reply, in: app, timeout: 20), "retry did not use the original user prompt")
+        }
+        keep(app.windows.firstMatch.screenshot(), "chatctl-peer-retry")
 
         // ⌘F over the rows loaded: 第 120 to 129 条 are on the newest page
         app.typeKey("f", modifierFlags: .command)

@@ -1,5 +1,11 @@
 import Foundation
 
+/// A steer has no submission receipt to reconcile after a lost response. It may already have
+/// reached the running agent, so it must never become a prompt that is offered for safe resend.
+nonisolated enum SendReceiptError: Error {
+    case steerUnconfirmed
+}
+
 extension AppStore {
     func draftKey(_ botId: String) -> String { serverKey + "|" + botId }
     func quoted(_ text: String, to botId: String) -> String {
@@ -18,14 +24,39 @@ extension AppStore {
                 guard params["attachments"] == nil else {
                     throw ControlError.refused("引导不支持图片，请选择排队或打断后发送", detail: nil)
                 }
-                let receipt = try await gateway.call("session.steer", ["profile": .string(botId), "session_id": .string(session),
-                    "execution_generation": .number(Double(generation)), "text": params["text"] ?? ""])
+                let receipt: JSONValue
+                do {
+                    receipt = try await gateway.call("session.steer", ["profile": .string(botId), "session_id": .string(session),
+                        "execution_generation": .number(Double(generation)), "text": params["text"] ?? ""])
+                } catch let error as GatewayError {
+                    if case .rpc = error { throw error }
+                    throw SendReceiptError.steerUnconfirmed
+                } catch {
+                    throw SendReceiptError.steerUnconfirmed
+                }
                 if receipt["status"]?.string == "queued" { return }
                 guard receipt["delivered"]?.bool == false else {
-                    throw ControlError.refused("引导未被接受，请检查当前回复后重试", detail: nil)
+                    // Hermes can report "rejected" after delivery. Only delivered:false allows
+                    // admission as a new prompt; otherwise ask the user to check the reply.
+                    throw SendReceiptError.steerUnconfirmed
                 }
             }
         }
         _ = try await gateway.call("prompt.submit", .object(params))
+    }
+
+    /// Shared by text and attachment submissions. This follows the RPC actually attempted, not
+    /// the selected mode: an idle/rejected steer can fall back to an idempotent prompt.submit.
+    func noteSubmissionFailure(_ error: Error, id: String) {
+        switch error {
+        case SendReceiptError.steerUnconfirmed:
+            deliveries.set(id, .unconfirmedSteer)
+        case GatewayError.rpc(_, let message, let reason):
+            deliveries.set(id, .unsent(DeliveryCheck.refusal(reason) ?? reason ?? message))
+        case let error as ControlError:
+            deliveries.set(id, .unsent(error.localizedDescription))
+        default:
+            deliveries.set(id, .unsure)
+        }
     }
 }

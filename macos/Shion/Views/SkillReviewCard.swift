@@ -14,6 +14,7 @@ struct SkillReviewCard: View {
                     Button("审核") { store.openReview(review) }.accessibilityIdentifier("review-open-" + review.id)
                     if review.status == "pending" {
                         Button("批准") { Task { await store.decideReview(review, decision: "approved") } }
+                            .help("记录批准这次变更，不会恢复旧版本或覆盖后续修改")
                             .accessibilityIdentifier("review-approve-" + review.id)
                         Button("拒绝", role: .destructive) { rejecting = true }
                     }

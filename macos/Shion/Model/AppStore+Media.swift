@@ -330,13 +330,8 @@ extension AppStore {
                 chats[botId]?[index].id = renewed
             }
             await submit(words, fresh, botId: botId, sessionId: sessionId, submission: renewed, again: true)
-        } catch GatewayError.rpc(_, let message, let reason) {
-            deliveries.set(submission, .unsent(DeliveryCheck.refusal(reason) ?? reason ?? message))
-        } catch let error as ControlError {
-            deliveries.set(submission, .unsent(error.localizedDescription))
         } catch {
-            // no answer before the connection went: unsure until the server can say
-            deliveries.set(submission, .unsure)
+            noteSubmissionFailure(error, id: submission)
         }
     }
 

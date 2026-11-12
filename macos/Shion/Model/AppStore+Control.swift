@@ -227,7 +227,7 @@ extension AppStore {
 
     /// What starts a turn: a message you typed, or the board's notice Hermes sends in your name.
     private static func startsTurn(_ item: ChatItem) -> Bool {
-        item.role == .user || (item.role == .card && !item.text.isEmpty)
+        item.role == .user || (item.role == .card && item.sourceTool == nil && !item.text.isEmpty)
     }
 
     /// What ends one: a reply, or the line a stop before any words, or an error, leaves.
@@ -251,8 +251,8 @@ extension AppStore {
         var tools: [String] = []
         for item in items[(prompt + 1)...] {
             // as the folded line names the calls (ChatLines.swift), and the cards the chat made
-            let name = item.role == .tool ? item.toolName
-                : item.role == .card && item.text.isEmpty ? item.cardTitle.map { "建卡片「\($0)」" } : nil
+            let name = item.sourceTool ?? (item.role == .tool ? item.toolName
+                : item.role == .card && item.text.isEmpty ? item.cardTitle.map { "建卡片「\($0)」" } : nil)
             if let name, !tools.contains(name) {
                 tools.append(name)
             }

@@ -119,6 +119,46 @@ def test_conflicts_in_current_file_and_later_ledger(system):
     assert not ledger.calls
 
 
+def test_older_review_can_be_approved_after_a_newer_review(system):
+    reviews, ledger = system
+    ledger.add("000000000001", before="original", after="first")
+    older, = reviews.list()
+    ledger.add("000000000002", before="first", after="second")
+    newer = next(row for row in reviews.list() if row["id"] != older["id"])
+    reviews.decide(newer["id"], "approved", newer["entries"])
+    # Rejecting the old version must still leave the newer version intact.
+    with pytest.raises(ShionError, match="conflict"):
+        reviews.decide(older["id"], "rejected", older["entries"])
+    assert reviews.decide(older["id"], "approved", older["entries"])["status"] == "approved"
+    assert all(row["status"] == "approved" for row in reviews.list())
+    assert ledger.file("test-skill/SKILL.md").read_text() == "second"
+    assert not ledger.calls
+
+
+def test_approval_only_records_a_decision_after_manual_changes_or_expired_backups(system):
+    reviews, ledger = system
+    entry = ledger.add("000000000001", before="original", after="first")
+    row, = reviews.list()
+    ledger.file("test-skill/SKILL.md").write_text("manual change")
+    for version in entry["before"] + entry["after"]:
+        (ledger.home / ".curator_backups/blobs" / version["sha256"]).unlink()
+    assert reviews.decide(row["id"], "approved", row["entries"])["status"] == "approved"
+    assert ledger.file("test-skill/SKILL.md").read_text() == "manual change"
+    assert not ledger.calls
+
+
+def test_approval_still_requires_the_card_entries_that_were_reviewed(system):
+    reviews, ledger = system
+    reviews.context("chat", [], turn="same-turn")
+    ledger.add("000000000001", before="original", after="first")
+    row, = reviews.list()
+    ledger.add("000000000002", before="first", after="second")
+    with pytest.raises(ShionError, match="conflict"):
+        reviews.decide(row["id"], "approved", row["entries"])
+    assert reviews.get(row["id"])["status"] == "pending"
+    assert not ledger.calls
+
+
 def test_historical_entries_do_not_take_current_context_or_cross_profiles(system, store):
     reviews, ledger = system
     reviews.context("chat", [{"role": "user", "content": "today"}], turn="today")
