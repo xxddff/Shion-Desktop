@@ -81,15 +81,15 @@ jobs:
           # another Xcode or macOS starts another compile cache
           echo "id=$( (sw_vers -buildVersion; xcodebuild -version; uname -m) | shasum -a 256 | cut -c1-12)" >> "$GITHUB_OUTPUT"
 
-      # which suites go to which runner: about twelve minutes each (run 189's times), so the shards
+      # which suites go to which runner: about twelve minutes each (the times of runs 189 and 191), so the shards
       # end before the screenshots do; one suite when the run asks for one
       - name: Plan the end-to-end shards
         id: plan
         run: |
           if [ "$SHION_RUN" = all ] || [ "$SHION_RUN" = build ]; then
-            shards='[{"id":"1","suites":"ExtrasTests SignInTests MediaTests"},
-                     {"id":"2","suites":"BotPageTests BoardTests QuickAskTests LocalDataTests"},
-                     {"id":"3","suites":"ReconnectTests BotsTests ChatControlTests ComposeTests WorkTests SecretsTests"}]'
+            shards='[{"id":"1","suites":"ExtrasTests SignInTests LocalDataTests SecretsTests"},
+                     {"id":"2","suites":"BotPageTests BoardTests QuickAskTests MediaTests"},
+                     {"id":"3","suites":"ReconnectTests BotsTests ChatControlTests ComposeTests WorkTests"}]'
           else
             shards="[{\"id\":\"$SHION_RUN\",\"suites\":\"$SHION_RUN\"}]"
           fi
