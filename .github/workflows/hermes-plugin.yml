@@ -44,32 +44,15 @@ jobs:
     name: skill reviews against Hermes itself
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    env:
-      # NousResearch/hermes-agent as the plugin was last read against (shion/reviews.py, HermesLedger).
-      # Move it on when the server's Hermes moves on: a ledger the plugin no longer reads right fails here.
-      HERMES_REF: 611bf53e5b31a4ea084594a643fbeae8cb1827de
     defaults:
       run:
         working-directory: hermes-plugin
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
-        with:
-          # Hermes's own Python: its dependencies are declared for 3.14 only (its pyproject.toml)
-          python-version: '3.14'
-      - name: Install Hermes
-        # from a checkout, editable: Hermes refuses to be built into a wheel (its setup.py)
-        run: |
-          git clone --quiet https://github.com/NousResearch/hermes-agent "$RUNNER_TEMP/hermes-agent"
-          git -C "$RUNNER_TEMP/hermes-agent" checkout --quiet "$HERMES_REF"
-          pip install pytest -e "$RUNNER_TEMP/hermes-agent"
-      - name: Hermes's skill tool, ledger and archive are there to import
-        # the tests skip themselves where Hermes is missing: here that would be a pass that tested nothing
-        run: |
-          export HERMES_HOME="$RUNNER_TEMP/hermes-home"
-          mkdir -p "$HERMES_HOME"
-          python -c "import tools.skill_ledger, tools.skill_manager_tool, tools.skill_usage, agent.skill_utils"
-      - name: Skill reviews over the real ledger
-        run: |
-          export HERMES_HOME="$RUNNER_TEMP/hermes-home"
-          python -m pytest -q -rs tests/test_reviews_hermes.py
+      - name: Skill reviews over the real ledger, in a container
+        # What you run locally: builds an image with Hermes at the commit the script pins (HERMES_REF)
+        # and its dependencies from its own uv.lock, then runs tests/test_reviews_hermes.py in it.
+        # A Hermes that cannot be imported there fails the tests (SHION_REQUIRE_HERMES), not skips them.
+        run: ./test-with-hermes.sh
+      - name: The plugin's other tests beside Hermes, on its Python
+        run: ./test-with-hermes.sh python -m pytest -p no:cacheprovider -q -rs

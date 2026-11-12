@@ -566,13 +566,19 @@ python -m pytest -q
 
 测试不装 Hermes：`tests/conftest.py` 的 `FakeCtx` 照 `PluginContext` 的接口记下 `register_rpc`、`register_tool`、`register_hook`、`on_unload`、`inject_message`，`FakeHermes` 代替 `broadcast_plugin_event` 和 `get_session_env`，`tests/test_reviews.py` 的 `FakeLedger` 照 Hermes 技能账本的行为（只记改动的文件、按 digest 取内容、回退和归档各自记账）；RPC 按 Hermes 的调用方式调（params 里留着 `profile`、`session_id`，`session_id` 另外作为关键字参数传）。存储用真的 SQLite。
 
-技能审核另外对着真的 Hermes 跑一遍（`tests/test_reviews_hermes.py`）：用 Hermes 自己的 `skill_manage` 以后台复盘的身份写技能和改技能，插件从它真的账本里读出卡片和变更前后的内容，拒绝时调它真的回滚和归档，再用它的 `restore_skill` 找回来。没装 Hermes 时这几个测试自己跳过；CI 的第二个任务装上 Hermes 再跑（`.github/workflows/hermes-plugin.yml`，`HERMES_REF` 是插件上次对照的那个提交，服务器上的 Hermes 升级后把它往前挪）。本地要跑：
+技能审核另外对着真的 Hermes 跑一遍（`tests/test_reviews_hermes.py`）：用 Hermes 自己的 `skill_manage` 以后台复盘的身份写技能和改技能，插件从它真的账本里读出卡片和变更前后的内容，拒绝时调它真的回滚和归档，再用它的 `restore_skill` 找回来。没装 Hermes 时这几个测试自己跳过。要跑，在容器里跑，本机只要 Docker 和 git：
 
 ```sh
-# 要 Python 3.14：Hermes 的依赖只为 3.14 声明；它不让打成 wheel，只能从检出的目录装
-git clone https://github.com/NousResearch/hermes-agent /tmp/hermes-agent
-pip install pytest -e /tmp/hermes-agent
-HERMES_HOME="$(mktemp -d)" python -m pytest -q tests/test_reviews_hermes.py
+cd hermes-plugin
+./test-with-hermes.sh                                          # 那六个测试
+./test-with-hermes.sh python -m pytest -p no:cacheprovider -q   # 全部测试，Hermes 在旁边
+HERMES_REF=<commit> ./test-with-hermes.sh                      # 换一个 Hermes 提交试
 ```
 
-CI：`.github/workflows/hermes-plugin.yml`，只在 `hermes-plugin/**` 或这个工作流改了时跑，ubuntu runner，Python 3.11 和 3.13。
+脚本用 git 取 `NousResearch/hermes-agent` 的一个提交（`HERMES_REF`，写在脚本里，是插件上次对照的那个；服务器上的 Hermes 升级后把它往前挪），按 `tests/hermes/Dockerfile` 造镜像：`python:3.14-slim`，用 Hermes 自己钉的 uv 版本执行 `uv sync --frozen`，依赖就是它 `uv.lock` 里的那一套，Hermes 本身可编辑安装，再加 pytest。然后把这个目录只读挂进去、断网跑测试；容器里设了 `SHION_REQUIRE_HERMES=1`，Hermes 导入不了算失败，不算跳过。第一次造镜像约一分钟。
+
+不用 pip 装 Hermes，因为装不上：它的 `setup.py` 不让打 wheel 和 sdist；可编辑安装在 Python 3.13 上一个依赖都不装（依赖全带着 `python_version >= '3.14'`）；在 3.14 上 pip 解不开 `Pillow==13.0.0` 和 `browser-harness` 要的 `pillow==12.3.0`，这个冲突只有 uv 认的 `[tool.uv] override-dependencies` 能解。
+
+在改写 TLS 的代理后面造镜像：`HERMES_TEST_CA=<代理的 CA.pem>` 让构建信任它，`HERMES_TEST_NETWORK=host` 让构建用宿主机的网络（代理听在宿主机回环地址上时），`HTTPS_PROXY`、`NO_PROXY` 照环境变量传进去。
+
+CI：`.github/workflows/hermes-plugin.yml`，只在 `hermes-plugin/**` 或这个工作流改了时跑，ubuntu runner。两个任务：不装 Hermes 的测试在 Python 3.11 和 3.13 上跑；`./test-with-hermes.sh` 在容器里对着真的 Hermes 跑，和本地是同一个脚本。

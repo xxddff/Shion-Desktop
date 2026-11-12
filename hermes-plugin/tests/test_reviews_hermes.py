@@ -3,19 +3,27 @@ review does; its ledger is what the cards are read from; and a rejection calls i
 archive. What test_reviews.py gives a stand-in for is the real module here, so a Hermes whose ledger
 the plugin no longer reads right fails here, not on your server.
 
-Skipped where Hermes is not installed (the other tests need only pytest); the workflow's second job
-installs it (.github/workflows/hermes-plugin.yml). The home and the skills directory are set up as
-Hermes's own ledger tests set theirs up (its tests/tools/test_skill_ledger.py)."""
+Skipped where Hermes is not installed (the other tests need only pytest). ../test-with-hermes.sh
+runs them in a container that holds Hermes at the commit the plugin was read against, and so does the
+workflow's second job (.github/workflows/hermes-plugin.yml); there SHION_REQUIRE_HERMES is set, and a
+Hermes that cannot be imported is a failure, not a skip. The home and the skills directory are set up
+as Hermes's own ledger tests set theirs up (its tests/tools/test_skill_ledger.py)."""
 
 import json
+import os
 
 import pytest
 
-pytest.importorskip("hermes_constants", reason="Hermes is not installed")
-skill_ledger = pytest.importorskip("tools.skill_ledger")
-skill_manager_tool = pytest.importorskip("tools.skill_manager_tool")
-skill_usage = pytest.importorskip("tools.skill_usage")
-skill_utils = pytest.importorskip("agent.skill_utils")
+if os.environ.get("SHION_REQUIRE_HERMES"):
+    import hermes_constants  # noqa: F401
+    from agent import skill_utils
+    from tools import skill_ledger, skill_manager_tool, skill_usage
+else:
+    pytest.importorskip("hermes_constants", reason="Hermes is not installed")
+    skill_ledger = pytest.importorskip("tools.skill_ledger")
+    skill_manager_tool = pytest.importorskip("tools.skill_manager_tool")
+    skill_usage = pytest.importorskip("tools.skill_usage")
+    skill_utils = pytest.importorskip("agent.skill_utils")
 
 from tools.skill_manager_guards import mark_background_review_skill_read  # noqa: E402
 from tools.skill_provenance import (  # noqa: E402
