@@ -170,18 +170,16 @@ final class ChatControlTests: XCTestCase {
         XCTAssertTrue(waitForText("已整理技能与记忆（CI）", in: app, timeout: 10))
         XCTAssertFalse(app.staticTexts["[SILENT]"].exists)
         XCTAssertFalse(app.textViews.matching(NSPredicate(format: "value == %@", "[SILENT]")).firstMatch.exists)
-        element("review-open-ci-review", in: app).click()
-        XCTAssertTrue(waitForText("审核结论：技能描述清楚（CI）", in: app, timeout: 15))
+        guard openReviewCard("ci-review", in: app) else { return }
+        XCTAssertTrue(waitForText("审核结论：技能描述清楚（CI）", in: app, timeout: 15), "the first review received no conclusion")
         keep(app.windows.firstMatch.screenshot(), "chatctl-review-session")
         element("review-close", in: app).click()
         // Same skill, another card: Hermes's title-first create must not reuse the first chat.
         composer.click()
         composer.typeText("RUN151-learning-again")
         element("send", in: app).click()
-        let nextReview = element("review-open-ci-review-next", in: app)
-        XCTAssertTrue(nextReview.waitForExistence(timeout: 15))
-        nextReview.click()
-        XCTAssertTrue(waitForText("审核结论：第二次技能变更（CI）", in: app, timeout: 15))
+        guard openReviewCard("ci-review-next", in: app) else { return }
+        XCTAssertTrue(waitForText("审核结论：第二次技能变更（CI）", in: app, timeout: 15), "the second review received no conclusion")
         XCTAssertFalse(waitForText("审核结论：技能描述清楚（CI）", in: app, timeout: 1),
                        "different review cards share a model conversation")
         guard let secondSheet = question(in: app, timeout: 5) else { return XCTFail("no second review sheet") }
@@ -189,13 +187,7 @@ final class ChatControlTests: XCTestCase {
         XCTAssertTrue(waitForText("已批准 · 已记录决定", in: app, timeout: 10))
         keep(app.windows.firstMatch.screenshot(), "chatctl-review-second-version")
         element("review-close", in: app).click()
-        let firstReview = element("review-open-ci-review", in: app)
-        for _ in 0..<8 {
-            if firstReview.exists && firstReview.isHittable { break }
-            element("transcript", in: app).scroll(byDeltaX: 0, deltaY: 220)
-            Thread.sleep(forTimeInterval: 0.2)
-        }
-        firstReview.click()
+        guard openReviewCard("ci-review", older: true, in: app) else { return }
         XCTAssertTrue(waitForText("审核结论：技能描述清楚（CI）", in: app, timeout: 10), "the review conversation did not resume")
         XCTAssertFalse(waitForText("审核结论：第二次技能变更（CI）", in: app, timeout: 1),
                        "reopening the first card shows the later review's discussion")
@@ -341,6 +333,36 @@ final class ChatControlTests: XCTestCase {
     }
 
     // MARK: helpers
+
+    /// The glass composer overlays the transcript. XCTest can consider a button underneath it
+    /// hittable, then click the composer instead. Scroll the entire button above the input area
+    /// before clicking, and verify that the sheet actually opened.
+    @MainActor
+    private func openReviewCard(_ id: String, older: Bool = false, in app: XCUIApplication) -> Bool {
+        let review = element("review-open-" + id, in: app)
+        let transcript = element("transcript", in: app)
+        _ = review.waitForExistence(timeout: 15)
+        for _ in 0..<12 {
+            let top = transcript.frame.minY + 8
+            let bottom = element("send-mode", in: app).frame.minY - 12
+            var delta: CGFloat = older ? 180 : -180
+            if review.exists {
+                let frame = review.frame
+                if frame.height > 0, frame.minY >= top, frame.maxY <= bottom, review.isHittable {
+                    review.click()
+                    if element("review-close", in: app).waitForExistence(timeout: 5) { return true }
+                    break
+                }
+                if frame.height > 0 { delta = frame.maxY > bottom ? -180 : 180 }
+            }
+            transcript.scroll(byDeltaX: 0, deltaY: delta)
+            Thread.sleep(forTimeInterval: 0.2)
+        }
+        keep(app.windows.firstMatch.screenshot(), "chatctl-review-open-failed-" + id)
+        note(app.debugDescription, "chatctl-review-open-failed-" + id)
+        XCTFail("review \(id) could not be opened above the composer; button frame: \(review.exists ? String(describing: review.frame) : "missing")")
+        return false
+    }
 
     /// A mark in the stand-in's log (fake_hermes-ChatControlTests.log, kept even when the run is
     /// cut short): where the test got to, if the app stops answering (run 146).

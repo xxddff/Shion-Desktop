@@ -129,6 +129,19 @@ jobs:
               # -quiet leaves out what failed; the result bundle says
               xcrun xcresulttool get test-results summary --path "build/$test.xcresult" 2>/dev/null \
                 | grep -E '"(failureText|testName)"' | head -20 || true
+              # The summary drops source locations. Keep the assertion's file and line visible
+              # immediately, instead of waiting for the screenshots artifact to diagnose it.
+              xcrun xcresulttool get object --legacy --format json --path "build/$test.xcresult" 2>/dev/null \
+                | python3 -c '
+          import json, sys
+          result = json.load(sys.stdin)
+          failures = result.get("issues", {}).get("testFailureSummaries", {}).get("_values", [])
+          for failure in failures:
+              location = failure.get("documentLocationInCreatingWorkspace", {}).get("url", {}).get("_value", "")
+              name = failure.get("testCaseName", {}).get("_value", "")
+              message = failure.get("message", {}).get("_value", "")
+              print(f"{location}: {name}: {message}")
+          ' | tee "build/$test-failures.txt" || true
             fi
             kill "$watchdog" 2>/dev/null || true
             kill "$standin" 2>/dev/null || true
@@ -208,6 +221,7 @@ jobs:
             fi
           done
           cp build/fake_hermes-*.log build/shots/ 2>/dev/null || true
+          cp build/*-failures.txt build/shots/ 2>/dev/null || true
           python3 - <<'PY'
           import json, os, re, shutil
           out = 'build/shots'
