@@ -64,3 +64,5 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         IntentHook.start()
     }
 }
+
+#warning("compile cache probe: this line was added after the cache was saved")
