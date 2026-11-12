@@ -197,48 +197,6 @@ final class ChatControlTests: XCTestCase {
                       "the older review cannot be closed after approving the newer one")
         element("review-close", in: app).click()
 
-        // Outgoing assistant-message cards are tools within this turn. Both a failure and a
-        // stopped reply remain retryable, and warn about message_agent, live and after reloading.
-        for (prompt, stopTurn) in [("助手消息后出错（CI）", false), ("助手消息后停止（CI）", true)] {
-            composer.click()
-            composer.typeText(prompt)
-            element("send", in: app).click()
-            XCTAssertTrue(waitForText("发给 little：", in: app, timeout: 10), "no outgoing peer card")
-            if stopTurn {
-                XCTAssertTrue(element("stop", in: app).waitForExistence(timeout: 10))
-                app.typeKey(".", modifierFlags: .command)
-                XCTAssertTrue(element("stopped", in: app).waitForExistence(timeout: 10))
-            } else {
-                XCTAssertTrue(element("turn-failed", in: app).waitForExistence(timeout: 10))
-            }
-            for reloaded in [false, true] {
-                if reloaded {
-                    // Navigation keeps loadedChats cached. Disconnect and connect to rebuild
-                    // the transcript from server history, including the tool card's provenance.
-                    app.typeKey(",", modifierFlags: .command)
-                    let prefs = settingsWindow(app)
-                    XCTAssertTrue(prefs.waitForExistence(timeout: 5))
-                    tab("服务器", in: prefs).click()
-                    prefs.buttons["断开"].click()
-                    let state = element("connection-state", in: prefs)
-                    XCTAssertEqual(XCTWaiter().wait(for: [phase("未连接，现在是上次的数据", of: state)], timeout: 10), .completed)
-                    prefs.buttons["连接"].click()
-                    XCTAssertEqual(XCTWaiter().wait(for: [phase("已连接 ·", of: state)], timeout: 40), .completed)
-                    app.typeKey("w", modifierFlags: .command)
-                    chief.click()
-                }
-                let retryPeer = element("retry", in: app)
-                XCTAssertTrue(retryPeer.waitForExistence(timeout: 10), "peer tool hid retry (reloaded: \(reloaded))")
-                retryPeer.click()
-                guard let ask = question(in: app, timeout: 5) else { return XCTFail("retry did not warn about the sent message") }
-                XCTAssertTrue(waitForText("message_agent", in: app, timeout: 3), "the side-effect warning lost the peer tool")
-                button(reloaded ? "retry-confirm" : "retry-cancel", reloaded ? "重试" : "取消", in: ask).click()
-            }
-            let reply = stopTurn ? "（重试）故事讲完了" : "（重试）这次没出错。"
-            XCTAssertTrue(waitForText(reply, in: app, timeout: 20), "retry did not use the original user prompt")
-        }
-        keep(app.windows.firstMatch.screenshot(), "chatctl-peer-retry")
-
         // ⌘F over the rows loaded: 第 120 to 129 条 are on the newest page
         app.typeKey("f", modifierFlags: .command)
         let field = element("find-field", in: app)
@@ -293,6 +251,50 @@ final class ChatControlTests: XCTestCase {
                       "the chat did not go to the hit. \(places.last ?? "")")
         note(places.joined(separator: "\n"), "chatctl-positions")
         app.typeKey(.escape, modifierFlags: [])
+
+        // Keep reconnects after the paging assertions: reconnect can preload an older page,
+        // changing which fetch contains the search hit.
+        // Outgoing assistant-message cards are tools within this turn. Both a failure and a
+        // stopped reply remain retryable, and warn about message_agent, live and after reloading.
+        for (prompt, stopTurn) in [("助手消息后出错（CI）", false), ("助手消息后停止（CI）", true)] {
+            composer.click()
+            composer.typeText(prompt)
+            element("send", in: app).click()
+            XCTAssertTrue(waitForText("发给 little：", in: app, timeout: 10), "no outgoing peer card")
+            if stopTurn {
+                XCTAssertTrue(element("stop", in: app).waitForExistence(timeout: 10))
+                app.typeKey(".", modifierFlags: .command)
+                XCTAssertTrue(element("stopped", in: app).waitForExistence(timeout: 10))
+            } else {
+                XCTAssertTrue(element("turn-failed", in: app).waitForExistence(timeout: 10))
+            }
+            for reloaded in [false, true] {
+                if reloaded {
+                    // Navigation keeps loadedChats cached. Disconnect and connect to rebuild
+                    // the transcript from server history, including the tool card's provenance.
+                    app.typeKey(",", modifierFlags: .command)
+                    let prefs = settingsWindow(app)
+                    XCTAssertTrue(prefs.waitForExistence(timeout: 5))
+                    tab("服务器", in: prefs).click()
+                    prefs.buttons["断开"].click()
+                    let state = element("connection-state", in: prefs)
+                    XCTAssertEqual(XCTWaiter().wait(for: [phase("未连接，现在是上次的数据", of: state)], timeout: 10), .completed)
+                    prefs.buttons["连接"].click()
+                    XCTAssertEqual(XCTWaiter().wait(for: [phase("已连接 ·", of: state)], timeout: 40), .completed)
+                    app.typeKey("w", modifierFlags: .command)
+                    chief.click()
+                }
+                let retryPeer = element("retry", in: app)
+                XCTAssertTrue(retryPeer.waitForExistence(timeout: 10), "peer tool hid retry (reloaded: \(reloaded))")
+                retryPeer.click()
+                guard let ask = question(in: app, timeout: 5) else { return XCTFail("retry did not warn about the sent message") }
+                XCTAssertTrue(waitForText("message_agent", in: app, timeout: 3), "the side-effect warning lost the peer tool")
+                button(reloaded ? "retry-confirm" : "retry-cancel", reloaded ? "重试" : "取消", in: ask).click()
+            }
+            let reply = stopTurn ? "（重试）故事讲完了" : "（重试）这次没出错。"
+            XCTAssertTrue(waitForText(reply, in: app, timeout: 20), "retry did not use the original user prompt")
+        }
+        keep(app.windows.firstMatch.screenshot(), "chatctl-peer-retry")
 
         // 断开: the window keeps the server's data, read-only, and says from when
         app.typeKey(",", modifierFlags: .command)
