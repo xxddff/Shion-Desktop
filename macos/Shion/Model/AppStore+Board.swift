@@ -25,7 +25,7 @@ extension AppStore {
     }
 
     /// What 等你确认 holds: approvals and questions, and the cards that wait on your answer.
-    var confirmCount: Int { asks.count + cardAsks.count }
+    var confirmCount: Int { asks.count + cardAsks.count + todos.filter { $0.proposed && !$0.done }.count + skillReviews.filter { $0.status == "pending" }.count }
 
     /// Whether an assistant waits on you for something.
     func waitsOnYou(_ botId: String) -> Bool {

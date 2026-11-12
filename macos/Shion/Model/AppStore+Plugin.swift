@@ -1,10 +1,9 @@
 import Foundation
 
 /// Today, todos and reports from the server's `shion` plugin: `plugin.shion.*` over the gateway
-/// socket, as hermes-plugin/README.md describes. Without the plugin these pages keep their demo
-/// data. The assistants read and write the same store through the plugin's tools.
+/// socket, as hermes-plugin/README.md describes. The assistants use the same store.
 extension AppStore {
-    private static let allTopics = ["todos", "today", "reports", "usage"]
+    private static let allTopics = ["todos", "today", "reports", "usage", "reviews"]
 
     /// Asks the plugin for its state; when it answers, today, todos and reports come from it.
     /// `sync.state` also starts the plugin's pushes (`plugin.shion.changed`).
@@ -80,6 +79,7 @@ extension AppStore {
         if topics.contains("todos") { await reloadTodos() }
         if topics.contains("today") { await reloadToday() }
         if topics.contains("reports") { await reloadReports() }
+        if topics.contains("reviews") { await refreshAllReviews() }
         // the days of screen time on screen are read again (ScreenTime.swift)
         if topics.contains("usage") { ScreenTime.shared.changed() }
     }
@@ -154,15 +154,14 @@ extension AppStore {
     /// Shion names the todo itself, so sending it again after a dropped connection is safe.
     func pluginAdd(_ title: String) {
         let id = "mac_" + UUID().uuidString.lowercased()
-        let at = Date()
-        todos.append(Todo(id: id, title: title, area: .life, source: "你自己加的", doAt: at))
+        todos.append(Todo(id: id, title: title, area: .life, source: "你自己加的"))
         pluginWrite("todos.add", [
-            "id": .string(id), "title": .string(title), "area": "life", "do_at": .string(Self.isoTime(at)),
+            "id": .string(id), "title": .string(title), "area": "life",
         ])
     }
 
     /// On a refusal the server's list replaces what was shown.
-    private func pluginWrite(_ method: String, _ params: [String: JSONValue]) {
+    func pluginWrite(_ method: String, _ params: [String: JSONValue]) {
         Task {
             do {
                 _ = try await pluginCall(method, params)
@@ -194,6 +193,8 @@ extension AppStore {
             source: !detail.isEmpty ? detail : (bot(source).map { "\($0.name) 加的" } ?? source),
             doAt: Self.parseTime(row["do_at"]),
             dueAt: Self.parseTime(row["due_at"]),
+            doDay: row["do_at"]?.string.flatMap { $0.count == 10 ? $0 : nil },
+            dueDay: row["due_at"]?.string.flatMap { $0.count == 10 ? $0 : nil },
             done: row["done"]?.bool ?? false,
             nudges: row["nudges"]?.int ?? 0,
             proposed: row["proposed"]?.bool ?? false

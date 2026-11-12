@@ -38,7 +38,7 @@ struct ShortcutSettings: View {
             }
 
             Section {
-                LabeledContent("⌘1 到 ⌘7", value: "今天、等你确认、待办、日程、日报、看板、云桌面")
+                LabeledContent("⌘1 到 ⌘7", value: "今天、待你处理、待办、日程、日报、看板、云桌面")
                 LabeledContent("⌘K", value: "快速跳转")
             } header: {
                 Text("在主窗口里")

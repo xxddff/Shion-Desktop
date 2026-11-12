@@ -26,7 +26,8 @@ struct DesktopView: View {
                             Label("接管", systemImage: "hand.raised")
                         }
                     }
-                    ScreenMock(screen: current)
+                    if LaunchOptions.current.snapshot { ScreenMock(screen: current) }
+                    else { ContentUnavailableView("桌面画面尚未接入", systemImage: "display") }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -47,6 +48,11 @@ struct DesktopView: View {
         }
         .padding(24)
         .frame(maxHeight: .infinity, alignment: .top)
+        .overlay {
+            if store.screens.isEmpty {
+                ContentUnavailableView("暂无可用云桌面", systemImage: "display", description: Text("桌面画面尚未接入。"))
+            }
+        }
         .navigationTitle("云桌面")
         .navigationSubtitle("\(running.count) 块在运行")
     }

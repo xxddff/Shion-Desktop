@@ -24,14 +24,18 @@ struct AssistantView: View {
 
     var body: some View {
         let entries = tab == .work ? store.workLog(for: botId) : []
-        ChatView(botId: botId)
-            .disabled(tab == .work)
-            .accessibilityHidden(tab == .work)
-            .overlay {
-                if tab == .work {
-                    workLog(entries)
-                }
+        ZStack {
+            // Keep both pages at the same level so hiding/disabling the chat cannot also hide
+            // the log's hit targets from macOS accessibility, including on cold launch.
+            ChatView(botId: botId)
+                .disabled(tab == .work)
+                .allowsHitTesting(tab == .chat)
+                .opacity(tab == .chat ? 1 : 0)
+                .accessibilityHidden(tab == .work)
+            if tab == .work {
+                workLog(entries)
             }
+        }
             // over the top of the page, which runs under them as it runs under the toolbar: the
             // chat keeps the geometry its paging was made for (a VStack cut it off below the tabs,
             // and older pages stopped coming after the second)
@@ -134,8 +138,11 @@ struct WorkLogView: View {
                 // a day's cards are few: laid out at once
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(entries) { entry in
-                        WorkLogRow(entry: entry, selected: entry.id == selection, showsBoard: showsBoard)
-                            .onTapGesture { open(entry) }
+                        Button { open(entry) } label: {
+                            WorkLogRow(entry: entry, selected: entry.id == selection, showsBoard: showsBoard)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("work-\(entry.cardId)")
                         if entry.id != entries.last?.id {
                             Divider()
                         }
@@ -194,8 +201,7 @@ struct WorkLogRow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(selected ? Palette.accent.opacity(0.08) : Color.clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .contentShape(Rectangle())
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("work-\(entry.cardId)")
+        .accessibilityElement(children: .combine)
     }
 }
 

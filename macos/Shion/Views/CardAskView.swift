@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// A board card on 「等你确认」: stopped on something only you can give it — an answer, a code, an
+/// A board card on 「待你处理」: stopped on something only you can give it — an answer, a code, an
 /// account. What you write goes on the card as a comment under your name; 「让它继续」 sends it
 /// back to the queue, and its worker reads the comments first when it runs again.
 struct CardAskView: View {
@@ -42,6 +42,7 @@ struct CardAskView: View {
                         }
                     }
                 }
+                if ask.ask.kind != "review" {
                 HStack(spacing: 8) {
                     TextField("补充它需要的信息", text: $draft)
                         .textFieldStyle(.roundedBorder)
@@ -58,6 +59,7 @@ struct CardAskView: View {
                 // the last data, or the connection down: an answer waits for the server
                 .disabled(store.readOnly)
                 .padding(.top, 2)
+                }
                 HStack(spacing: 8) {
                     Button("打开卡片") { store.openCard(ask.cardId, board: ask.board) }
                         .buttonStyle(.link)
@@ -103,7 +105,7 @@ struct CardAskView: View {
     }
 }
 
-/// A card waiting on your answer in 今天's 「需要你」: one line, and the way to 等你确认, where the
+/// A card waiting on your answer in 今天's 「需要你」: one line, and the way to 待你处理, where the
 /// answer is written.
 struct CardAskRow: View {
     @Environment(AppStore.self) private var store

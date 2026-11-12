@@ -49,7 +49,7 @@ struct BoardView: View {
                 selection = nil
                 showInspector = false
             }
-            // a card asked for from elsewhere (a notification, 等你确认): open it once its board is up
+            // a card asked for from elsewhere (a notification, 待你处理): open it once its board is up
             .task(id: "\(store.board.revealing?.id ?? "")|\(store.board.slug ?? "")|\(items.count)") {
                 guard let wanted = store.board.revealing,
                       !store.board.active || wanted.board == nil || wanted.board == store.board.slug,
@@ -115,7 +115,7 @@ struct BoardView: View {
     private func subtitle(_ items: [BoardItem]) -> String {
         let running = items.filter { $0.group == .running }.count
         let waiting = items.filter { $0.group == .waiting }.count
-        return waiting > 0 ? "\(running) 件在做 · \(waiting) 件等你" : "\(running) 件在做"
+        return waiting > 0 ? "\(running) 件在做 · \(waiting) 件受阻／待验收" : "\(running) 件在做"
     }
 }
 

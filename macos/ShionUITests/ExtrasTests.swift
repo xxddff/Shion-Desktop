@@ -11,13 +11,13 @@ import XCTest
 ///   page open it.
 /// - Notifications are written down in a file instead of posted (`-ShionNotificationLog`) and
 ///   clicked with a distributed notification, as WorkTests answers them: a long reply opens its
-///   chat at its top, a question and an approval are selected in 等你确认, a daily report opens.
+///   chat at its top, a question and an approval are selected in 待你处理, a daily report opens.
 /// - Shion started by a click (`-ShionLaunchNotification`) takes it once its window is up (it
 ///   writes that down) and lands there once signed in: the reply by the row Hermes stored it as,
 ///   the question still waiting, an older report read for it, a card on the other board. One
 ///   test each, after test2, whose turns they come back to.
 /// - The board's answers greyed out while the connection is down: a card's comment box on the
-///   board and its reply box in 等你确认, with the stand-in's socket dropped (fake_reconnect.py).
+///   board and its reply box in 待你处理, with the stand-in's socket dropped (fake_reconnect.py).
 /// A picture at each step (`extras-*.png`).
 final class ExtrasTests: XCTestCase {
     private let server = "http://127.0.0.1:8765"
@@ -44,8 +44,8 @@ final class ExtrasTests: XCTestCase {
             XCTAssertTrue((result?["error"] as? String)?.contains("还没登录") == true, "\(intent) did not say why: \(String(describing: result))")
         }
         // a page opens without one
-        XCTAssertEqual(run("open-confirm", id: "c0")?["ok"] as? Bool, true, "打开等你确认 failed without a server")
-        XCTAssertTrue(waitForTitle(window, "等你确认"), "打开等你确认 did not open it: \(window.title)")
+        XCTAssertEqual(run("open-confirm", id: "c0")?["ok"] as? Bool, true, "打开待你处理 failed without a server")
+        XCTAssertTrue(waitForTitle(window, "待你处理"), "打开待你处理 did not open it: \(window.title)")
         keep(XCUIScreen.main.screenshot(), "extras-0-not-signed-in")
 
         guard signIn(app, "extras-1") else { return }
@@ -70,12 +70,12 @@ final class ExtrasTests: XCTestCase {
         XCTAssertTrue((todos?["said"] as? String)?.contains("CI：交实验报告") == true, "today's todos: \(String(describing: todos?["said"]))")
         XCTAssertTrue((todos?["value"] as? [String])?.contains("CI：交实验报告") == true, "the todos it returned: \(String(describing: todos?["value"]))")
 
-        // 打开助手 finds 通勤 by name; 打开等你确认
+        // 打开助手 finds 通勤 by name; 打开待你处理
         XCTAssertEqual(run("open-assistant", id: "a1", ["query": "通勤"])?["ok"] as? Bool, true, "打开助手 failed")
         XCTAssertTrue(waitForTitle(window, "通勤"), "打开助手 did not open 通勤: \(window.title)")
         keep(window.screenshot(), "extras-2-opened-assistant")
-        XCTAssertEqual(run("open-confirm", id: "c1")?["ok"] as? Bool, true, "打开等你确认 failed")
-        XCTAssertTrue(waitForTitle(window, "等你确认"), "打开等你确认 did not open it: \(window.title)")
+        XCTAssertEqual(run("open-confirm", id: "c1")?["ok"] as? Bool, true, "打开待你处理 failed")
+        XCTAssertTrue(waitForTitle(window, "待你处理"), "打开待你处理 did not open it: \(window.title)")
 
         // 詩音's chat, from the server: the sentence said before signing in never reached it
         element("bot-shion", in: app).click()
@@ -125,7 +125,7 @@ final class ExtrasTests: XCTestCase {
         XCTAssertTrue(waitUntil(timeout: 10) { self.note("cl-ci-dinner") != nil && self.note("ap-ci-print") != nil },
                       "no notifications for the question and the approval: \(noteList().map(\.id))")
         click("cl-ci-dinner")
-        XCTAssertTrue(waitForTitle(window, "等你确认"), "the click did not open 等你确认: \(window.title)")
+        XCTAssertTrue(waitForTitle(window, "待你处理"), "the click did not open 待你处理: \(window.title)")
         XCTAssertTrue(waitUntil(timeout: 10) { self.selected("ask-cl-ci-dinner", in: app) }, "the question is not selected")
         XCTAssertFalse(selected("ask-ap-ci-print", in: app), "the approval is selected too")
         Thread.sleep(forTimeInterval: 0.5)
@@ -137,7 +137,7 @@ final class ExtrasTests: XCTestCase {
         keep(window.screenshot(), "extras-7-approval")
 
         // 詩音 wants a sudo password and a key at once (fake_secrets.py's 装 ffmpeg（CI））: the
-        // password's notification, which has no buttons, opens 等你确认 with its card selected; then
+        // password's notification, which has no buttons, opens 待你处理 with its card selected; then
         // both are declined there, nothing typed
         element("nav-today", in: app).click()
         let sudo = "srq-00000000c101", key = "srq-00000000c102"
@@ -145,7 +145,7 @@ final class ExtrasTests: XCTestCase {
         XCTAssertTrue(waitUntil(timeout: 20) { self.note(sudo) != nil && self.note(key) != nil },
                       "no notifications for the password and the key: \(noteList().map(\.id))")
         click(sudo)
-        XCTAssertTrue(waitForTitle(window, "等你确认"), "the click did not open 等你确认: \(window.title)")
+        XCTAssertTrue(waitForTitle(window, "待你处理"), "the click did not open 待你处理: \(window.title)")
         // a secret's card goes by its own name there (secret-card-…), selected or not
         XCTAssertTrue(waitUntil(timeout: 10) { self.selected("secret-card-\(sudo)", in: app) }, "the password's card is not selected")
         XCTAssertFalse(selected("secret-card-\(key)", in: app), "the key's card is selected too")
@@ -157,7 +157,7 @@ final class ExtrasTests: XCTestCase {
                 deny.click()
             }
             XCTAssertTrue(waitUntil(timeout: 10) { !app.secureTextFields["secret-field-\(id)"].exists },
-                          "\(id) still waits in 等你确认 after 拒绝")
+                          "\(id) still waits in 待你处理 after 拒绝")
         }
 
         // 课程 writes today's life report: its notification opens it
@@ -196,8 +196,8 @@ final class ExtrasTests: XCTestCase {
         continueAfterFailure = true
         let app = launch(clicked: ["bot": "shion", "ask": "cl-ci-dinner"])
         let window = app.windows.firstMatch
-        if tookClick(app, window, "等你确认", "extras-11"), signIn(app, "extras-11") {
-            XCTAssertTrue(waitForTitle(window, "等你确认"), "the click did not open 等你确认: \(window.title)")
+        if tookClick(app, window, "待你处理", "extras-11"), signIn(app, "extras-11") {
+            XCTAssertTrue(waitForTitle(window, "待你处理"), "the click did not open 待你处理: \(window.title)")
             XCTAssertTrue(waitUntil(timeout: 20) { self.selected("ask-cl-ci-dinner", in: app) }, "the question is not selected")
             Thread.sleep(forTimeInterval: 0.5)
             keep(window.screenshot(), "extras-12-cold-question")
@@ -266,10 +266,10 @@ final class ExtrasTests: XCTestCase {
 
     // MARK: 7. the connection down
 
-    /// 课程's card that waits on a code, opened on the board from 等你确认; then 詩音's reply cut
+    /// 课程's card that waits on a code, opened on the board from 待你处理; then 詩音's reply cut
     /// half way by a dropped socket (fake_reconnect.py's 断线：讲到一半, the tunnel down 8 s), sent
     /// through the Shortcuts hook so the board stays in front. While 重新连接中…: the card's
-    /// comment box and 让它继续 are greyed out, and in 等你确认 its reply box, 回复 and 让它继续;
+    /// comment box and 让它继续 are greyed out, and in 待你处理 its reply box, 回复 and 让它继续;
     /// then the connection comes back.
     @MainActor
     func test7AnswersWhileDown() throws {
@@ -281,7 +281,7 @@ final class ExtrasTests: XCTestCase {
         let open = element("card-ask-open-t_grades", in: app)
         guard open.waitForExistence(timeout: 20) else {
             keep(window.screenshot(), "extras-17-no-card")
-            return XCTFail("no card waiting on a code in 等你确认")
+            return XCTFail("no card waiting on a code in 待你处理")
         }
         open.click()
         let comment = element("card-comment", in: app)
@@ -299,11 +299,11 @@ final class ExtrasTests: XCTestCase {
         element("nav-confirm", in: app).click()
         let reply = element("card-ask-reply-t_grades", in: app)
         if reply.waitForExistence(timeout: 3) {
-            XCTAssertFalse(reply.isEnabled, "the reply box in 等你确认 takes words while the connection is down")
-            XCTAssertFalse(element("card-ask-resume-t_grades", in: app).isEnabled, "让它继续 in 等你确认 is not greyed out")
+            XCTAssertFalse(reply.isEnabled, "the reply box in 待你处理 takes words while the connection is down")
+            XCTAssertFalse(element("card-ask-resume-t_grades", in: app).isEnabled, "让它继续 in 待你处理 is not greyed out")
             keep(window.screenshot(), "extras-19-confirm-down")
         } else {
-            XCTFail("the card left 等你确认 while the connection was down")
+            XCTFail("the card left 待你处理 while the connection was down")
         }
         // seen while away: the stand-in's tunnel comes back now (it waits for the word, StandIn.swift)
         StandIn.tunnelUp("test7: the card's answers greyed out while down")
@@ -472,7 +472,7 @@ final class ExtrasTests: XCTestCase {
         let text = files.compactMap { try? String(contentsOf: metadata.appendingPathComponent($0), encoding: .utf8) }.joined()
         // the four actions, their titles, and phrases only the App Shortcuts have
         for name in ["TellChiefIntent", "TodayTodosIntent", "OpenAssistantIntent", "OpenConfirmIntent",
-                     "跟总秘书说", "今天的待办", "打开助手", "打开等你确认", "转告总秘书", "今天还有什么要做", "有什么等我确认"] {
+                     "跟总秘书说", "今天的待办", "打开助手", "打开待你处理", "转告总秘书", "今天还有什么要做", "有什么等我确认"] {
             XCTAssertTrue(text.contains(name), "\(name) is not in the App Intents metadata")
         }
     }

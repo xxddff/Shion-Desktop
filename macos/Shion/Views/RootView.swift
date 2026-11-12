@@ -11,7 +11,15 @@ struct RootView: View {
                 .focused($sidebarFocused)
                 .navigationSplitViewColumnWidth(min: 200, ideal: 216, max: 280)
         } detail: {
-            DetailView(route: store.route ?? .today)
+            if !store.live && !store.lastData.shown && !LaunchOptions.current.snapshot {
+                ContentUnavailableView {
+                    Label("连接你的 Hermes 服务器", systemImage: "network")
+                } description: {
+                    Text("连接后即可开始聊天、管理待办和查看看板。")
+                } actions: { SettingsLink { Text("连接服务器…") } }
+            } else {
+                DetailView(route: store.route ?? .today)
+            }
         }
         // keyboard focus starts in the sidebar, not in the first text field of the page; AppKit
         // still hands the new window to that field, so take focus back once it is up
@@ -25,6 +33,9 @@ struct RootView: View {
             JumpOverlay()
         }
         .frame(minWidth: 960, minHeight: 620)
+        .sheet(item: $store.reviewConversation) { conversation in
+            ReviewConversationView(conversation: conversation)
+        }
     }
 }
 
@@ -81,7 +92,7 @@ struct Sidebar: View {
         List(selection: $selection) {
             Section {
                 Label("今天", systemImage: "sun.max").accessibilityIdentifier("nav-today").tag(Route.today)
-                Label("等你确认", systemImage: "hand.raised")
+                Label("待你处理", systemImage: "hand.raised")
                     .accessibilityIdentifier("nav-confirm")
                     .badge(confirmBadge)
                     .tag(Route.confirm)

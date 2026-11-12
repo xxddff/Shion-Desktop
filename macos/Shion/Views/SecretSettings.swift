@@ -5,7 +5,7 @@ import SwiftUI
 struct SecretSettings: View {
     var body: some View {
         Section {
-            Text("终端要 sudo 密码、技能要密钥（比如 NOTION_API_KEY）时，那个助手的对话里和「等你确认」里会出现一张卡片：谁要、拿去做什么、要的是哪个变量。你填的只经这条连接发给这个服务器，只发一次，发完输入框就清空。sudo 密码交给那条命令，Hermes 在这次对话里记在内存中，下次 sudo 不再问；密钥存进那个助手 profile 的 .env，助手和对话记录都看不到它。拒绝就是不给，那一步会失败。Hermes 等 2 分钟，没回答就过期，这一轮结束了也算过期。")
+            Text("终端要 sudo 密码、技能要密钥（比如 NOTION_API_KEY）时，那个助手的对话里和「待你处理」里会出现一张卡片：谁要、拿去做什么、要的是哪个变量。你填的只经这条连接发给这个服务器，只发一次，发完输入框就清空。sudo 密码交给那条命令，Hermes 在这次对话里记在内存中，下次 sudo 不再问；密钥存进那个助手 profile 的 .env，助手和对话记录都看不到它。拒绝就是不给，那一步会失败。Hermes 等 2 分钟，没回答就过期，这一轮结束了也算过期。")
                 .font(.t12)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

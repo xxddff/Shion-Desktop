@@ -4,8 +4,8 @@ import XCTest
 /// Passwords and keys an assistant asks for, end to end against ci/fake_hermes.py (the requests
 /// are in ci/fake_secrets.py, shaped like Hermes's `sudo` and `secret` server requests): sign in,
 /// open 通勤's chat and have it install ffmpeg, which asks for the sudo password and, at the same
-/// time, NOTION_API_KEY for the notion skill. Both cards show in the chat and in 等你确认; the
-/// password is typed and sent from 等你确认 (the stand-in checks it without writing it down, and the
+/// time, NOTION_API_KEY for the notion skill. Both cards show in the chat and in 待你处理; the
+/// password is typed and sent from 待你处理 (the stand-in checks it without writing it down, and the
 /// command goes through), the key is declined in the chat, and each answer leaves the other card
 /// alone. Then one nobody answers expires, and one asked just before the connection drops is
 /// answered after the reconnect. A picture at each step (`secrets-*.png`).
@@ -55,7 +55,7 @@ final class SecretsTests: XCTestCase {
         // from here a check that fails is kept and the rest still runs; only a missing card stops it
         continueAfterFailure = true
 
-        // 0. 课程's approval (raised once Shion attaches its chat): answered in 等你确认, it leaves
+        // 0. 课程's approval (raised once Shion attaches its chat): answered in 待你处理, it leaves
         // there and stays in 课程's chat as a line saying what was chosen
         let commute = element("bot-commute", in: app)
         guard commute.waitForExistence(timeout: 10) else { return XCTFail("no assistants from the server") }
@@ -64,14 +64,14 @@ final class SecretsTests: XCTestCase {
         if allow.waitForExistence(timeout: 15) {
             allow.click()
             let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: allow)
-            XCTAssertEqual(XCTWaiter().wait(for: [gone], timeout: 10), .completed, "the approval stayed in 等你确认")
+            XCTAssertEqual(XCTWaiter().wait(for: [gone], timeout: 10), .completed, "the approval stayed in 待你处理")
             element("bot-study", in: app).click()
             XCTAssertTrue(waitForLabel(element("ask-outcome-ap-moodle", in: app), "已允许这一次", timeout: 15),
                           "课程's chat has no line for the approval")
             Thread.sleep(forTimeInterval: 0.5)
             keep(window.screenshot(), "secrets-0-approved")
         } else {
-            XCTFail("课程's approval did not reach 等你确认")
+            XCTFail("课程's approval did not reach 待你处理")
         }
 
         // 1. 通勤's chat (created on the stand-in), and a turn that asks for both at once
@@ -93,13 +93,13 @@ final class SecretsTests: XCTestCase {
         XCTAssertTrue(element("secret-left-\(sudoId)", in: app).exists, "no countdown on the sudo card")
         XCTAssertTrue(element("secret-left-\(keyId)", in: app).exists, "no countdown on the key's card")
 
-        // 2. both wait in 等你确认 too; the password is typed and sent there
+        // 2. both wait in 待你处理 too; the password is typed and sent there
         element("nav-confirm", in: app).click()
         let field = app.secureTextFields["secret-field-\(sudoId)"]
         let listed = field.waitForExistence(timeout: 10)
         keep(window.screenshot(), "secrets-2-confirm")
-        guard listed else { return XCTFail("the sudo password is not in 等你确认") }
-        XCTAssertTrue(app.secureTextFields["secret-field-\(keyId)"].exists, "NOTION_API_KEY is not in 等你确认")
+        guard listed else { return XCTFail("the sudo password is not in 待你处理") }
+        XCTAssertTrue(app.secureTextFields["secret-field-\(keyId)"].exists, "NOTION_API_KEY is not in 待你处理")
         field.click()
         field.typeText(password)
         // dots on screen, and to accessibility
@@ -107,7 +107,7 @@ final class SecretsTests: XCTestCase {
         keep(window.screenshot(), "secrets-3-typed")
         element("secret-submit-\(sudoId)", in: app).click()
         let sent = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: field)
-        XCTAssertEqual(XCTWaiter().wait(for: [sent], timeout: 10), .completed, "the sudo password stayed in 等你确认 after 提交")
+        XCTAssertEqual(XCTWaiter().wait(for: [sent], timeout: 10), .completed, "the sudo password stayed in 待你处理 after 提交")
         XCTAssertTrue(app.secureTextFields["secret-field-\(keyId)"].exists, "answering the password took the key's card with it")
 
         // 3. back in the chat: the password went, the key still waits; it is declined there
@@ -169,12 +169,12 @@ final class SecretsTests: XCTestCase {
                       "the approval's line went with the reconnect")
         commute.click()
 
-        // 等你确认 holds none of them now
+        // 待你处理 holds none of them now
         element("nav-confirm", in: app).click()
         Thread.sleep(forTimeInterval: 0.8)
         keep(window.screenshot(), "secrets-9-confirm-after")
         for id in [sudoId, keyId, lateId, dropId] {
-            XCTAssertFalse(element("secret-card-\(id)", in: app).exists, "\(id) is still in 等你确认")
+            XCTAssertFalse(element("secret-card-\(id)", in: app).exists, "\(id) is still in 待你处理")
         }
         XCTAssertFalse(shows(password, in: app), "the password shows somewhere in the window")
         app.terminate()

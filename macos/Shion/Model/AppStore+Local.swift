@@ -14,7 +14,7 @@ extension AppStore: LocalHost {
     /// server is connected or not; the demo's week until then.
     func applyCalendar() {
         guard local.access == .granted else {
-            events = DemoData(now: demoClock).events
+            events = LaunchOptions.current.snapshot ? DemoData(now: demoClock).events : []
             return
         }
         let calendars = Dictionary(local.calendars.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })

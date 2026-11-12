@@ -59,13 +59,18 @@ struct TodoRow: View {
             Spacer(minLength: 8)
 
             VStack(alignment: .trailing, spacing: 3) {
-                if let doAt = todo.doAt {
+                if let day = todo.doDay, let date = Fmt.day(day) {
+                    Text(Fmt.dayLabel(date, now: store.now)).font(.t12).foregroundStyle(.secondary)
+                } else if let doAt = todo.doAt {
                     Text(showDay ? Fmt.when(doAt, now: store.now) : Fmt.hm(doAt))
                         .font(.t12)
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
                 }
-                if let dueAt = todo.dueAt, !todo.done {
+                if todo.dueDay != nil, !todo.done {
+                    Text(todo.deadlineLabel(now: store.now)).font(.t12)
+                        .foregroundStyle(todo.overdue(at: store.now) ? Palette.alert : Color.secondary)
+                } else if let dueAt = todo.dueAt, !todo.done {
                     let due = DueLabel(date: dueAt, now: store.now)
                     Text(due.text)
                         .font(.t12.weight(.semibold))
@@ -124,7 +129,7 @@ struct AskRow: View {
     }
 }
 
-/// An ask on the 「等你确认」 page, with what would be sent.
+/// An ask on the 「待你处理」 page, with what would be sent.
 struct AskCard: View {
     @Environment(AppStore.self) private var store
     let ask: Ask

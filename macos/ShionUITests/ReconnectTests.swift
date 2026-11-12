@@ -16,7 +16,7 @@ import XCTest
 /// 3. after a sentence was admitted, before its receipt: 等连上后确认 while down, then an ordinary
 ///    message with its answer, once;
 /// 4. before a sentence was admitted: once back, 没发出去 with 重发, which sends it, once;
-/// 5. while an approval waits: once back it is still in 等你确认, and answering it there lets the
+/// 5. while an approval waits: once back it is still in 待你处理, and answering it there lets the
 ///    turn finish in the same bubble;
 /// 6. before a reply longer than the session keeps: the replay cannot reach back, the newest page
 ///    stands in, and the reply is there whole, once, with nothing still replying;
@@ -25,6 +25,9 @@ import XCTest
 /// 8. a picture and a file, before Hermes had them: once back, 没发出去 with 重发. The server
 ///    cleared the picture meanwhile, so the same submission is refused, and the picture goes up
 ///    again from the Mac under a new one; answered once, with both.
+/// 9. a file steer delivered before its receipt is lost: its unknown status survives reconnect,
+///    without a resend button (steer has no submission admission to look up).
+/// 10. steer selected while idle: the actual prompt.submit still reconciles its lost receipt.
 /// A picture at each step (reconnect-*.png).
 final class ReconnectTests: XCTestCase {
     private let server = "http://127.0.0.1:8765"
@@ -46,7 +49,7 @@ final class ReconnectTests: XCTestCase {
         guard signIn(app) else { return }
 
         // 课程's approval comes once its Bot Chat is attached: answered first, so that the one asked
-        // later is the only one in 等你确认
+        // later is the only one in 待你处理
         element("nav-confirm", in: app).click()
         if waitForText("要在课程的云桌面上登录 Moodle 吗？", in: app, timeout: 15) {
             app.buttons["拒绝"].firstMatch.click()
@@ -218,6 +221,44 @@ final class ReconnectTests: XCTestCase {
         } else {
             XCTFail("no 重发 to press")
         }
+
+        // 9. A file can travel through session.steer as @file: text. There is no submission
+        // receipt to reconcile, so a missing admission must never offer to execute it again.
+        say("断线：等待引导", in: app)
+        XCTAssertTrue(waitForText("等待引导（CI）", in: app, timeout: 10))
+        putFiles(["ci-报告（CI）.pdf"])
+        composer.click()
+        composer.typeKey("v", modifierFlags: .command)
+        XCTAssertTrue(element("draft-file", in: app).waitForExistence(timeout: 10))
+        XCTAssertTrue(waitUntil(timeout: 30) { send.isEnabled }, "the steer file did not upload")
+        let steer = app.radioButtons["引导"]
+        XCTAssertTrue(steer.waitForExistence(timeout: 5), "no steer mode")
+        steer.click()
+        say("引导：文件回执丢失", in: app)
+        XCTAssertTrue(element("steer-unconfirmed", in: app).waitForExistence(timeout: 10))
+        XCTAssertFalse(element("unsent", in: app).exists)
+        XCTAssertFalse(element("resend", in: app).exists)
+        keep(app.windows.firstMatch.screenshot(), "reconnect-14-steer-unconfirmed")
+        StandIn.tunnelUp("9. file steer delivered, receipt lost")
+        XCTAssertTrue(waitUntil(timeout: 40) { !self.hasText("重新连接中…", in: app) })
+        XCTAssertTrue(waitForText("已处理引导文件（CI）", in: app, timeout: 15))
+        XCTAssertTrue(element("steer-unconfirmed", in: app).exists,
+                      "reconnect treated a missing steer admission as proof it was not sent")
+        XCTAssertFalse(element("unsent", in: app).exists)
+        XCTAssertFalse(element("resend", in: app).exists, "an already delivered steer can be sent twice")
+        keep(app.windows.firstMatch.screenshot(), "reconnect-15-steer-after-reconnect")
+
+        // 10. The selected mode alone cannot determine delivery: an idle steer is a prompt,
+        // with a real admission that can settle the unknown receipt on reconnect.
+        XCTAssertTrue(waitUntil(timeout: 10) { !self.element("stop", in: app).exists })
+        say("断线：还没回执", in: app)
+        XCTAssertTrue(element("unsure", in: app).waitForExistence(timeout: 10), "idle steer did not track its prompt receipt")
+        StandIn.tunnelUp("10. idle steer uses prompt.submit")
+        XCTAssertTrue(waitUntil(timeout: 40) { !self.hasText("重新连接中…", in: app) })
+        XCTAssertTrue(waitUntil(timeout: 15) { !self.element("unsure", in: app).exists })
+        XCTAssertFalse(element("unsent", in: app).exists)
+        XCTAssertFalse(element("resend", in: app).exists)
+        app.radioButtons["排队"].click()
         app.terminate()
     }
 

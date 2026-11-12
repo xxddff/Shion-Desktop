@@ -7,6 +7,9 @@ plugin without Hermes installed.
 from __future__ import annotations
 
 import logging
+import json
+import hashlib
+from datetime import datetime, timezone
 import os
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -15,6 +18,7 @@ from . import rpc, tools
 from .errors import ShionError
 from .store import Store
 from .watcher import ChangeWatcher
+from .reviews import Reviews, Ledger
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +39,11 @@ class HermesAdapter:
         # the kanban board is shared (hermes_cli/kanban_db.py: kanban_home).
         from hermes_constants import get_default_hermes_root
         return get_default_hermes_root() / "plugin-data" / "shion"
+
+    @staticmethod
+    def profile_home() -> Path:
+        from hermes_constants import get_hermes_home
+        return get_hermes_home()
 
     @staticmethod
     def broadcast(plugin_id: str, event: str, payload: dict) -> None:
@@ -61,6 +70,7 @@ class ShionPlugin:
         self.store = store or Store(hermes.data_dir() / DB_FILENAME)
         self.watcher = ChangeWatcher(self.store, self._emit_change, interval=watch_interval)
         self._seen_keys: dict[str, str] = {}
+        self.reviews = Reviews(self.store, self.profile(), lambda: Ledger(self.hermes.profile_home(), self.profile()))
 
     # -- identity ----------------------------------------------------------------------------
 
@@ -80,6 +90,8 @@ class ShionPlugin:
         for name, schema in tools.SCHEMAS.items():
             self.ctx.register_tool(name=name, toolset=tools.TOOLSET, schema=schema, handler=handlers[name])
         self.ctx.register_hook("pre_llm_call", self.on_pre_llm_call)
+        self.ctx.register_hook("post_llm_call", self.on_post_llm_call)
+        self.ctx.register_hook("post_tool_call", self.on_post_tool_call)
         self.ctx.on_unload(self.watcher.stop)
 
     # -- push events -------------------------------------------------------------------------
@@ -97,6 +109,11 @@ class ShionPlugin:
         """Remember each session's routing key: ``inject_message`` needs it, and the RPC that asks to wake
         the chief only knows the session id. Never changes the turn."""
         try:
+            text = kwargs.get("user_message")
+            turn = kwargs.get("turn_id")
+            if isinstance(text, str) and text.startswith("Message from 🤖 ") and session_id and turn:
+                self.reviews.notice("peer-" + str(turn), session_id, text,
+                                    datetime.now(timezone.utc).isoformat(), "peer")
             key = self.hermes.session_env("HERMES_SESSION_KEY")
             if not key or not session_id or self._seen_keys.get(session_id) == key:
                 return None
@@ -107,6 +124,36 @@ class ShionPlugin:
         except Exception:
             logger.debug("shion: could not record the session key", exc_info=True)
         return None
+
+    def on_post_llm_call(self, session_id="", conversation_history=None, user_message="", assistant_response="", turn_id="", **kwargs):
+        try:
+            self.reviews.sync()  # preserve the preceding turn's context before replacing it
+            self.reviews.context(session_id, conversation_history, user_message, assistant_response, turn_id)
+        except Exception:
+            logger.warning("shion: could not save learning context", exc_info=True)
+
+    def on_post_tool_call(self, tool_name="", status="", session_id="", tool_call_id="", args=None, result=None, **kwargs):
+        try:
+            if tool_name == "skill_manage" and status == "ok":
+                self.reviews.sync()
+            if tool_name == "memory" and status == "ok" and session_id and tool_call_id:
+                value = json.loads(result) if isinstance(result, str) else result
+                if not isinstance(value, dict) or value.get("success") is not True or (value.get("staged") or value.get("pending_id")):
+                    return
+                args = args or {}
+                operations = args.get("operations") or [args]
+                lines = []
+                for op in operations:
+                    action = op.get("action", "update")
+                    if action in ("add", "patch", "replace", "remove"):
+                        label = {"add": "新增", "patch": "更新", "replace": "更新", "remove": "删除"}[action]
+                        lines.append(label + "：" + str(op.get("content") or op.get("old_text") or ""))
+                if lines:
+                    ident = "memory-" + hashlib.sha256((session_id + "|" + tool_call_id).encode()).hexdigest()
+                    self.reviews.notice(ident, session_id, ("用户记忆" if args.get("target") == "user" else "助手记忆")
+                                        + "已更新\n" + "\n".join(lines), datetime.now(timezone.utc).isoformat(), "memory")
+        except Exception:
+            logger.warning("shion: could not record learning event", exc_info=True)
 
     # -- focus check -------------------------------------------------------------------------
 

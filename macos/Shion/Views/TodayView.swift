@@ -2,7 +2,10 @@ import SwiftUI
 
 struct TodayView: View {
     @Environment(AppStore.self) private var store
-    @State private var draft = ""
+    private var draft: Binding<String> {
+        Binding(get: { store.composerDrafts[store.draftKey(store.chiefId)] ?? "" },
+                set: { store.composerDrafts[store.draftKey(store.chiefId)] = $0 })
+    }
 
     var body: some View {
         ScrollView {
@@ -35,13 +38,13 @@ struct TodayView: View {
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 10) {
                 Mark(size: 22)
-                TextField("跟\(store.chiefName)说：「把实验报告挪到明天」", text: $draft)
+                TextField("跟\(store.chiefName)说：「把实验报告挪到明天」", text: draft)
                     .textFieldStyle(.plain)
                     .disabled(store.readOnly)
                     .font(.system(size: 14))
                     .onSubmit {
-                        store.send(draft, to: store.chiefId)
-                        draft = ""
+                        store.send(draft.wrappedValue, to: store.chiefId)
+                        draft.wrappedValue = ""
                         store.route = .chat(store.chiefId)
                     }
             }
@@ -84,6 +87,8 @@ struct TodayView: View {
     private var needsYou: some View {
         let asks = Array(store.asks.prefix(3))
         let cards = Array(store.cardAsks.prefix(3 - asks.count))
+        let todos = Array(store.todos.filter { $0.proposed && !$0.done }.prefix(max(0, 3 - asks.count - cards.count)))
+        let reviews = Array(store.skillReviews.filter { $0.status == "pending" }.prefix(max(0, 3 - asks.count - cards.count - todos.count)))
         return VStack(alignment: .leading, spacing: 10) {
             HStack {
                 SectionTitle(title: "需要你", count: store.confirmCount)
@@ -99,6 +104,8 @@ struct TodayView: View {
                             Divider()
                         }
                     }
+                    ForEach(todos) { todo in TodoRow(todo: todo) }
+                    ForEach(reviews) { review in SkillReviewCard(review: review) }
                     ForEach(cards) { card in
                         CardAskRow(ask: card)
                         if card.id != cards.last?.id {

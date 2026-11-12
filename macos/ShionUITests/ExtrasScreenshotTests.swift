@@ -3,7 +3,7 @@ import XCTest
 
 /// 日报's screen time on the demo's day (its usage by kind and the apps used most), light and dark.
 /// The board's answers while a dropped connection is being got back (`-ShionReadOnlyDemo YES` on
-/// the demo's data, the sidebar saying 重新连接中…): in 等你确认 the card's reply box, 回复 and
+/// the demo's data, the sidebar saying 重新连接中…): in 待你处理 the card's reply box, 回复 and
 /// 让它继续 greyed out. (A card's own comment box is there only while the board is live: ExtrasTests
 /// takes it greyed out with the stand-in's connection dropped.)
 /// Settings → 这台 Mac, after this Mac's own data: 开机启动 and 关窗后只留在菜单栏, light and dark,
@@ -99,7 +99,7 @@ final class ExtrasScreenshotTests: XCTestCase {
                 keep(window.screenshot(), "readonly-confirm-\(appearance)")
             } else {
                 keep(window.screenshot(), "readonly-confirm-\(appearance)-missing")
-                XCTFail("no card waiting on you in 等你确认 (\(appearance))")
+                XCTFail("no card waiting on you in 待你处理 (\(appearance))")
             }
             app.terminate()
         }

@@ -3,7 +3,7 @@ import SwiftUI
 
 // MARK: - stop and retry
 
-/// While a turn runs, the composer's send button turns into this one (⌘.).
+/// Stops the running turn (⌘.), beside the send button.
 struct StopButton: View {
     let stopping: Bool
     let action: () -> Void
@@ -28,16 +28,28 @@ struct StopButton: View {
 /// tools may run again asks first (AppStore.retryRisk).
 struct ReplyFooter: View {
     @Environment(AppStore.self) private var store
+    @Environment(\.chatBotId) private var composerBot
     let item: ChatItem
     let botId: String
     @State private var risk: RetryRisk?
 
     var body: some View {
-        let retry = !item.streaming && store.retryTarget(botId) == item.id
+        let retry = !item.streaming && (item.stopped || item.failure != nil) && store.retryTarget(botId) == item.id
         // a line (a stop before any words) says 已停止 itself
         let marked = item.stopped && item.role == .assistant
-        if marked || retry {
+        if marked || retry || (item.role == .assistant && !item.streaming) {
             HStack(spacing: 12) {
+                if item.role == .assistant && !item.streaming {
+                    Button("复制", systemImage: "doc.on.doc") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(item.text, forType: .string)
+                    }.buttonStyle(.plain).accessibilityIdentifier("copy-" + item.id)
+                    if composerBot == botId {
+                        Button("回复", systemImage: "arrowshape.turn.up.left") {
+                            store.replyQuotes[store.draftKey(botId)] = item
+                        }.buttonStyle(.plain).accessibilityIdentifier("quote-" + item.id)
+                    }
+                }
                 if marked {
                     Text("已停止")
                         .accessibilityIdentifier("stopped")

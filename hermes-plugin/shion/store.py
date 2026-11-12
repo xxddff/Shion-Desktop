@@ -23,7 +23,7 @@ from typing import Any, Callable, Iterable, Optional
 
 from .errors import ShionError
 from .timeutil import (
-    day_bounds, from_storage, local_date, parse_bound, parse_date, parse_instant, to_storage, to_wire, zone,
+    day_bounds, from_storage, local_date, parse_bound, parse_date, parse_instant, todo_time, to_storage, to_wire, zone,
 )
 
 SCHEMA_VERSION = 1
@@ -33,7 +33,7 @@ REPORT_KINDS = ("study", "work", "life", "news")
 ACTIVITIES = ("study", "work", "life", "fun", "social", "other")
 CATEGORIES = ACTIVITIES
 UNCATEGORIZED = "uncategorized"
-TOPICS = ("todos", "today", "reports", "usage", "focus", "settings")
+TOPICS = ("todos", "today", "reports", "usage", "focus", "settings", "reviews")
 
 #: ``source`` of a todo added from the Shion app rather than by an assistant.
 USER_SOURCE = "你自己加的"
@@ -88,6 +88,10 @@ BUILTIN_CATEGORIES = {
 }
 
 _SCHEMA = """
+CREATE TABLE IF NOT EXISTS review_context (profile TEXT, session TEXT, body TEXT, PRIMARY KEY(profile, session));
+CREATE TABLE IF NOT EXISTS skill_reviews (profile TEXT, id TEXT, body TEXT, PRIMARY KEY(profile, id));
+CREATE TABLE IF NOT EXISTS review_entries (profile TEXT, entry_id TEXT, review_id TEXT, PRIMARY KEY(profile, entry_id));
+CREATE TABLE IF NOT EXISTS review_notices (profile TEXT, id TEXT, session TEXT, text TEXT, at TEXT, kind TEXT, PRIMARY KEY(profile, id));
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS changes (
     revision INTEGER NOT NULL, topic TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY (revision, topic));
@@ -345,11 +349,14 @@ class Store:
             for col in cols:
                 cond, cargs = [f"{col} IS NOT NULL"], []
                 if lo is not None:
-                    cond.append(f"{col} >= ?")
-                    cargs.append(to_storage(lo))
+                    cond.append(f"((length({col}) = 10 AND {col} >= ?) OR (length({col}) > 10 AND {col} >= ?))")
+                    cargs.extend([local_date(lo, tz), to_storage(lo)])
                 if hi is not None:
-                    cond.append(f"{col} < ?")
-                    cargs.append(to_storage(hi))
+                    day = local_date(hi, tz)
+                    if hi != day_bounds(day, tz)[0]:
+                        day = local_date(day_bounds(day, tz)[1], tz)
+                    cond.append(f"((length({col}) = 10 AND {col} < ?) OR (length({col}) > 10 AND {col} < ?))")
+                    cargs.extend([day, to_storage(hi)])
                 parts.append("(" + " AND ".join(cond) + ")")
                 args += cargs
             if include_undated:
@@ -371,8 +378,8 @@ class Store:
         source = _text(source, "source", max_len=100)
         detail = _text(source_detail, "source_detail", max_len=200, required=False)
         proposed = _bool(proposed, "proposed")
-        do = to_storage(parse_instant(do_at, tz, "do_at")) if do_at is not None else None
-        due = to_storage(parse_instant(due_at, tz, "due_at")) if due_at is not None else None
+        do = todo_time(do_at, tz, "do_at")
+        due = todo_time(due_at, tz, "due_at")
         if todo_id is None:
             todo_id = "td_" + secrets.token_hex(6)
         elif not isinstance(todo_id, str) or not _ID_RE.match(todo_id):
@@ -407,7 +414,7 @@ class Store:
             elif key == "area":
                 sets["area"] = _choice(value, key, AREAS)
             elif key in ("do_at", "due_at"):
-                sets[key] = None if value is None else to_storage(parse_instant(value, tz, key))
+                sets[key] = todo_time(value, tz, key)
             elif key == "done":
                 sets["done"] = int(_bool(value, key))
             elif key == "proposed":

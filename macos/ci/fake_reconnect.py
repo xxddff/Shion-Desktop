@@ -434,6 +434,8 @@ def answer(handler, method, params, rid):
         return events_since(handler, params, rid)
     if method == "prompt.submit":
         return submit(handler, params, rid)
+    if method == "session.steer":
+        return steer(handler, params, rid)
     if method == "approval.respond" and params.get("prompt_id") == APPROVAL["prompt_id"]:
         return respond(handler, params, rid)
     return False
@@ -574,6 +576,37 @@ def unacked(turn):
     turn["meanwhile"].set()  # answered while Shion was away: its replay has all of it
 
 
+def wait_for_steer(turn):
+    begin(turn)
+    say(turn, "等待引导（CI）。")
+    if turn["answered"].wait(90):
+        say(turn, "已处理引导文件（CI）。")
+    else:
+        say(turn, "没有等到引导（CI）。")
+    end(turn)
+    turn["meanwhile"].set()
+
+
+def steer(handler, params, rid):
+    """A file-reference steer delivered without an admission, then its receipt is lost."""
+    session_id = params.get("session_id")
+    with bus:
+        turn = running.get(session_id)
+    if turn is None or turn["what"] != "等待引导":
+        return False
+    if set(params) != {"session_id", "profile", "text", "execution_generation"}:
+        return refuse(handler, rid, "invalid_params")
+    if params["execution_generation"] != turn["generation"]:
+        return refuse(handler, rid, "stale_generation")
+    text = params["text"]
+    if "@file:" not in text or said(text) != "引导：文件回执丢失":
+        return refuse(handler, rid, "invalid_params", detail="expected a file-reference steer")
+    log(f"    delivered steer without an admission: {text!r}")
+    drop(handler, "after delivering a file steer, before its receipt", turn["meanwhile"])
+    turn["answered"].set()
+    return True
+
+
 def approval(turn):
     begin(turn)
     time.sleep(0.3)
@@ -663,7 +696,7 @@ def expire(attachments):
 
 
 SCRIPTS = {"讲到一半": halfway, "讲完了": finished, "还没回执": unacked, "没收到": None, "等你批准": approval,
-           "说很多": flood, "跟不上": lagging}
+           "说很多": flood, "跟不上": lagging, "等待引导": wait_for_steer}
 
 
 def respond(handler, params, rid):
