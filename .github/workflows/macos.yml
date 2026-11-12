@@ -14,12 +14,12 @@ name: macOS app
 #   build        compiles for testing once and hands the products on (test-products, a tar: a
 #                plain artifact zip drops symlinks, permissions and with them the signatures)
 #   screenshots  every page, from those products
-#   e2e          the suites against the stand-in, in three shards of about ten minutes
+#   e2e          the suites against the stand-in, in three shards of about twelve minutes
 #   package      the Release build and Shion.dmg; waits for nothing and for no test
 #   shots        puts every job's screenshots and stand-in logs in one artifact (Linux)
-# Compiling uses Xcode's compilation cache (results stored by what went into each compile: the
-# sources, the flags, the SDK), kept between runs with actions/cache. A changed file is another
-# entry, so an old result is never served for it.
+# The test build uses Xcode's compilation cache (results stored by what went into each compile:
+# the sources, the flags, the SDK), kept between runs with actions/cache. A changed file is another
+# entry, so an old result is never served for it. The Release build does not use it.
 on:
   push:
     # the app's branch, and branches that work on part of it in parallel (claude/macos-board, …)
@@ -56,7 +56,7 @@ concurrency:
 
 env:
   SHION_RUN: ${{ inputs.run || 'all' }}
-  # Xcode's compilation cache, in build/cas (what actions/cache keeps between runs)
+  # Xcode's compilation cache for the test build, in build/cas (what actions/cache keeps between runs)
   SHION_COMPILE_CACHE: COMPILATION_CACHE_ENABLE_CACHING=YES
 
 jobs:
@@ -81,15 +81,15 @@ jobs:
           # another Xcode or macOS starts another compile cache
           echo "id=$( (sw_vers -buildVersion; xcodebuild -version; uname -m) | shasum -a 256 | cut -c1-12)" >> "$GITHUB_OUTPUT"
 
-      # which suites go to which runner: about ten minutes each (run 185's times), so the shards
-      # end with the screenshots; one suite when the run asks for one
+      # which suites go to which runner: about twelve minutes each (run 189's times), so the shards
+      # end before the screenshots do; one suite when the run asks for one
       - name: Plan the end-to-end shards
         id: plan
         run: |
           if [ "$SHION_RUN" = all ] || [ "$SHION_RUN" = build ]; then
-            shards='[{"id":"1","suites":"SignInTests BoardTests BotsTests"},
-                     {"id":"2","suites":"ExtrasTests ReconnectTests MediaTests BotPageTests"},
-                     {"id":"3","suites":"QuickAskTests ChatControlTests ComposeTests LocalDataTests WorkTests SecretsTests"}]'
+            shards='[{"id":"1","suites":"ExtrasTests SignInTests MediaTests"},
+                     {"id":"2","suites":"BotPageTests BoardTests QuickAskTests LocalDataTests"},
+                     {"id":"3","suites":"ReconnectTests BotsTests ChatControlTests ComposeTests WorkTests SecretsTests"}]'
           else
             shards="[{\"id\":\"$SHION_RUN\",\"suites\":\"$SHION_RUN\"}]"
           fi
@@ -401,7 +401,7 @@ jobs:
           if-no-files-found: ignore
 
   # The Release build: compiled on its own runner while the tests run, so a failed suite does not
-  # cost the installer. A compile-only run builds the release app as it is packaged, without
+  # cost the installer. Compiled clean every time: no compile cache here, in either mode. A compile-only run builds the release app as it is packaged, without
   # signing or packaging anything (it compiles without the screenshots' made-up day, #if DEBUG).
   package:
     name: ${{ inputs.run == 'build' && 'Build the release app' || 'Package a Release build' }}
@@ -415,11 +415,9 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Toolchain
-        id: toolchain
         run: |
           sw_vers
           xcodebuild -version
-          echo "id=$( (sw_vers -buildVersion; xcodebuild -version; uname -m) | shasum -a 256 | cut -c1-12)" >> "$GITHUB_OUTPUT"
 
       - name: Generate the Xcode project
         env:
@@ -432,18 +430,10 @@ jobs:
           xcodegen --version
           xcodegen generate
 
-      - name: Compile cache
-        uses: actions/cache@v5
-        with:
-          path: macos/build/cas
-          key: shion-cas-${{ env.SHION_RUN == 'build' && 'release-check' || 'package' }}-${{ steps.toolchain.outputs.id }}-${{ hashFiles('macos/Shion/**', 'macos/project.yml') }}
-          restore-keys: shion-cas-${{ env.SHION_RUN == 'build' && 'release-check' || 'package' }}-${{ steps.toolchain.outputs.id }}-
-
       - name: Build the release app
         if: env.SHION_RUN == 'build'
         run: |
           mkdir -p build
-          ci/compile_cache.sh before
           set -o pipefail
           start=$(date +%s)
           xcodebuild build \
@@ -452,16 +442,13 @@ jobs:
             -configuration Release \
             -destination 'platform=macOS' \
             -derivedDataPath build/ReleaseCheck \
-            $SHION_COMPILE_CACHE COMPILATION_CACHE_CAS_PATH="$PWD/build/cas" \
             -quiet 2>&1 | tee build/package.log
           echo "release build: $(( $(date +%s) - start )) s"
-          ci/compile_cache.sh after
 
       - name: Package a Release build
         if: env.SHION_RUN != 'build'
         run: |
           mkdir -p build
-          ci/compile_cache.sh before
           set -o pipefail
           start=$(date +%s)
           xcodebuild build \
@@ -471,10 +458,8 @@ jobs:
             -destination 'generic/platform=macOS' \
             -derivedDataPath build/Release \
             CURRENT_PROJECT_VERSION=${{ github.run_number }} \
-            $SHION_COMPILE_CACHE COMPILATION_CACHE_CAS_PATH="$PWD/build/cas" \
             -quiet 2>&1 | tee build/package.log
           echo "release build: $(( $(date +%s) - start )) s"
-          ci/compile_cache.sh after
           mkdir -p build/dmg/Shion
           cp -R build/Release/Build/Products/Release/Shion.app build/dmg/Shion/
           ln -s /Applications build/dmg/Shion/Applications
