@@ -66,7 +66,7 @@ final class SignInTests: XCTestCase {
         }
         XCTAssertTrue(element("bot-study", in: app).exists)
 
-        // 课程's Bot Chat was never opened, yet its approval reaches 等你确认: every Bot Chat is
+        // 课程's Bot Chat was never opened, yet its approval reaches 待你处理: every Bot Chat is
         // attached in the background once Shion connects
         element("nav-confirm", in: app).click()
         let approval = waitForText("要在课程的云桌面上登录 Moodle 吗", in: app, timeout: 15)

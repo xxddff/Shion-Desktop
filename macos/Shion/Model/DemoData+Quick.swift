@@ -1,5 +1,7 @@
 import Foundation
 
+#if DEBUG
+
 extension DemoData {
     /// The ⌥Space window's screenshot: a sentence to 詩音 and her answer, after two tool calls
     /// (they fold into one line, as in the chat). Tomorrow's first class is 线性代数 at 10:40, and
@@ -17,3 +19,4 @@ extension DemoData {
         ]
     }
 }
+#endif

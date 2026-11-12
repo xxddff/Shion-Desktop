@@ -181,7 +181,7 @@ enum ShionShortcuts {
 
     private static func todoEntity(_ todo: Todo) -> TodoEntity {
         let now = store?.now ?? Date()
-        let when = todo.dueAt.map { DueLabel(date: $0, now: now).text } ?? todo.doAt.map { Fmt.when($0, now: now) } ?? ""
+        let when = todo.dueWords(now: now) ?? todo.doLabel(now: now, showDay: true) ?? ""
         return TodoEntity(id: todo.id, title: todo.title, subtitle: when)
     }
 
@@ -189,7 +189,7 @@ enum ShionShortcuts {
         AssistantEntity(id: bot.id, name: bot.name, title: bot.title)
     }
 
-    /// 打开等你确认: opens whatever Shion shows there, connected or not.
+    /// 打开待你处理: opens whatever Shion shows there, connected or not.
     static func openConfirm() {
         store?.route = .confirm
         MainWindow.show()

@@ -1,5 +1,7 @@
 import Foundation
 
+#if DEBUG
+
 extension DemoData {
     /// Whose chat the screenshots' requests are in (`-ShionSecretsDemo YES`).
     var secretChatBot: String { "study" }
@@ -58,3 +60,4 @@ extension DemoData {
         return [expired, again, key]
     }
 }
+#endif

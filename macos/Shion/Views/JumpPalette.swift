@@ -173,9 +173,8 @@ struct JumpPalette: View {
                 keywords: [bot.id, bot.title])
         }
         for todo in store.todos where !todo.done {
-            let when = todo.doAt ?? todo.dueAt
             add(JumpHit(id: "jump-todo-\(todo.id)", group: .todo, title: todo.title,
-                        trailing: when.map { Fmt.when($0, now: store.now) } ?? "",
+                        trailing: todo.doLabel(now: store.now, showDay: true) ?? todo.dueWords(now: store.now) ?? "",
                         icon: .area(todo.area), target: .todo(todo.id)),
                 keywords: [])
         }

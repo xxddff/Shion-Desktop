@@ -1,6 +1,6 @@
 import AppKit
 
-/// What the board means for you, on the pages that are not the board: 等你确认's cards, each
+/// What the board means for you, on the pages that are not the board: 待你处理's cards, each
 /// assistant's 工作记录, and the card notifications. The server's board while connected, the demo
 /// day otherwise.
 extension AppStore {
@@ -9,10 +9,9 @@ extension AppStore {
     var cardAsks: [BoardAsk] {
         guard board.active else {
             // the last data keeps no questions: they can only be answered live
-            guard showsDemo else { return [] }
-            let blocks = DemoData(now: demoClock).blocks
+            guard showsDemo, let blocks = demo?.blocks else { return [] }
             return cards.compactMap { card in
-                guard card.status == .waiting, let ask = blocks[card.id] else { return nil }
+                guard card.status == .stuck, let ask = blocks[card.id] else { return nil }
                 return BoardAsk(board: nil, cardId: card.id, title: card.title, assignee: card.assignee, ask: ask)
             }
         }
@@ -24,8 +23,20 @@ extension AppStore {
         assignee.map { roster.isHidden($0) } ?? false
     }
 
-    /// What 等你确认 holds: approvals and questions, and the cards that wait on your answer.
-    var confirmCount: Int { asks.count + cardAsks.count }
+    /// Everything that waits on you, by what it asks of you: 待你处理 lists it under these four
+    /// headings, and the sidebar, the Dock and the menu bar count it.
+    var waiting: Waiting {
+        let cards = cardAsks
+        return Waiting(
+            grants: asks.filter { $0.kind != .clarify },
+            grantCards: cards.filter { $0.ask.kind == "capability" },
+            questions: asks.filter { $0.kind == .clarify },
+            questionCards: cards.filter { $0.ask.kind != "capability" },
+            todos: todos.filter { $0.proposed && !$0.done },
+            skills: pendingSkillReviews)
+    }
+
+    var confirmCount: Int { waiting.count }
 
     /// Whether an assistant waits on you for something.
     func waitsOnYou(_ botId: String) -> Bool {
@@ -36,8 +47,7 @@ extension AppStore {
     func workLog(for botId: String) -> [WorkLogEntry] {
         guard board.active else {
             // the last data keeps the board's cards, not their runs
-            guard showsDemo else { return [] }
-            let runs = DemoData(now: demoClock).runs
+            guard showsDemo, let runs = demo?.runs else { return [] }
             let start = BoardWork.today(now)
             return cards.compactMap { card -> WorkLogEntry? in
                 let today = (runs[card.id] ?? []).filter { $0.profile == botId && ($0.endedAt ?? .distantFuture) >= start }
@@ -70,10 +80,10 @@ extension AppStore {
 
     /// A demo card's runs, for its detail while not connected.
     func demoRuns(_ cardId: String) -> [KanbanRun] {
-        DemoData(now: demoClock).runs[cardId] ?? []
+        demo?.runs[cardId] ?? []
     }
 
-    /// Opens a card on the board page: from its notification, 等你确认, or a link in a card's detail.
+    /// Opens a card on the board page: from its notification, 待你处理, or a link in a card's detail.
     func openCard(_ id: String, board slug: String?) {
         board.reveal(id, on: slug)
         route = .board
@@ -95,7 +105,7 @@ extension AppStore {
         return await board.answer(ask.cardId, on: ask.board, text: text, resume: resume)
     }
 
-    /// Your reply from a card's notification: as 回复 and 让它继续 in 等你确认, a comment signed
+    /// Your reply from a card's notification: as 回复 and 让它继续 in 待你处理, a comment signed
     /// with your login name and then the card goes on; only the comment when it has gone on
     /// meanwhile. Returns why it did not go through.
     func replyToCard(_ id: String, board slug: String?, text: String) async -> String? {
@@ -108,7 +118,7 @@ extension AppStore {
     }
 
     /// Whether a card's moment becomes a notification: not while its board is on the screen, nor
-    /// a card waiting on you while 等你确认 is; a done card only when Settings say so; never one of
+    /// a card waiting on you while 待你处理 is; a done card only when Settings say so; never one of
     /// an assistant hidden in Settings.
     func shouldNotify(_ moment: CardMoment) -> Bool {
         if followsNot(moment.assignee) { return false }
@@ -117,5 +127,24 @@ extension AppStore {
         if route == .board && (moment.board == nil || moment.board == board.slug) { return false }
         if route == .confirm && moment.kind == .ask { return false }
         return true
+    }
+}
+
+/// What waits on you, sorted by what it takes from you.
+struct Waiting {
+    /// 授权操作: a command to allow, a password or a key to give, a desktop to take over; and the
+    /// board cards stopped for an account or a permission the assistant does not have.
+    var grants: [Ask]
+    var grantCards: [BoardAsk]
+    /// 回答问题: what an assistant asked you; and the cards stopped on something only you know.
+    var questions: [Ask]
+    var questionCards: [BoardAsk]
+    /// 确认时间: todos whose dates an assistant suggested.
+    var todos: [Todo]
+    /// 审核技能: skills an assistant wrote by itself, in effect and not looked at yet.
+    var skills: [SkillReview]
+
+    var count: Int {
+        grants.count + grantCards.count + questions.count + questionCards.count + todos.count + skills.count
     }
 }

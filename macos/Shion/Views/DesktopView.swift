@@ -47,6 +47,12 @@ struct DesktopView: View {
         }
         .padding(24)
         .frame(maxHeight: .infinity, alignment: .top)
+        .overlay {
+            if store.screens.isEmpty {
+                ContentUnavailableView("云桌面还没有接上", systemImage: "display",
+                                       description: Text("助手在服务器上各有一块桌面；在这里看它、接管它的功能还在做。"))
+            }
+        }
         .navigationTitle("云桌面")
         .navigationSubtitle("\(running.count) 块在运行")
     }

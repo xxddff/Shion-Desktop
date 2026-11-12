@@ -1,6 +1,6 @@
 import Foundation
 
-/// What became of what assistants asked: once answered, an approval or a question leaves 等你确认
+/// What became of what assistants asked: once answered, an approval or a question leaves 待你处理
 /// and leaves a line where it was asked, in the chat and in the ⌥Space window (已允许这一次, 你回答：
 /// 中村老师); a password or a key keeps its card while it waits, then a line too (已提交, never what
 /// was typed). Hermes's transcript records none of these (checked against hermes-agent b3746e35:

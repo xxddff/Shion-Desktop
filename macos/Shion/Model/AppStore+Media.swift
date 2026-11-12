@@ -262,6 +262,7 @@ extension AppStore {
         // the submission id names the item, as send's does: the turn's end says which row it was
         // stored as, which 重试 needs (AppStore+Control.swift)
         let id = UUID().uuidString
+        let mode = busyMode
         chats[botId, default: []].append(ChatItem(id: id, role: .user, at: Date(), text: words,
                                                   media: drafts.map(\.media)))
         Task {
@@ -269,7 +270,7 @@ extension AppStore {
             for hash in drafts.filter({ $0.kind == .image }).compactMap(\.sha256) {
                 await media.disk.keep(hash)
             }
-            await submit(words, drafts, botId: botId, sessionId: sessionId, submission: id, again: false)
+            await submit(words, drafts, botId: botId, sessionId: sessionId, submission: id, again: false, mode: mode)
         }
         return true
     }
@@ -290,7 +291,7 @@ extension AppStore {
     /// 没发出去 under it, with 重发 (the same id and references; a picture cleared meanwhile goes
     /// up again, as below).
     func submit(_ words: String, _ drafts: [Draft], botId: String, sessionId: String, submission: String,
-                again: Bool) async {
+                again: Bool, mode: BusyMode = .queue) async {
         let refs = drafts.compactMap(\.ref).joined(separator: "\n")
         var body = [refs, words].filter { !$0.isEmpty }.joined(separator: "\n\n")
         let pictures = drafts.filter { $0.kind == .image }
@@ -314,7 +315,7 @@ extension AppStore {
             return deliveries.set(submission, .unsent(nil))
         }
         do {
-            try await gateway.call("prompt.submit", .object(params))
+            try await deliver(params, id: submission, to: botId, sessionId: sessionId, mode: mode)
             deliveries.arrived(submission)
         } catch GatewayError.rpc(_, let message, let reason) where !again && !pictures.isEmpty && (reason ?? message) == "invalid_params" {
             // a picture staged too long ago was cleared: up again from the Mac's copy, once
@@ -329,11 +330,8 @@ extension AppStore {
                 chats[botId]?[index].id = renewed
             }
             await submit(words, fresh, botId: botId, sessionId: sessionId, submission: renewed, again: true)
-        } catch GatewayError.rpc(_, let message, let reason) {
-            deliveries.set(submission, .unsent(DeliveryCheck.refusal(reason) ?? reason ?? message))
         } catch {
-            // no answer before the connection went: unsure until the server can say
-            deliveries.set(submission, .unsure)
+            noteUndelivered(submission, error)
         }
     }
 

@@ -45,11 +45,16 @@ extension AppStore {
 
     /// `plugin.shion.changed`: the store moved on; fetch only what changed.
     func pluginChanged(_ payload: JSONValue) {
+        let reset = payload["reset"]?.bool == true
+        let named = (payload["topics"]?.array ?? []).compactMap { $0.string }
+        // the skills to look at are each assistant's own, whether or not 总秘书 has the plugin
+        // (AppStore+SkillReviews.swift)
+        if reset || named.contains("reviews") {
+            Task { await loadAllSkillReviews() }
+        }
         guard pluginData, let revision = payload["revision"]?.int, revision > pluginRevision else { return }
         pluginRevision = revision
-        let topics = payload["reset"]?.bool == true
-            ? Self.allTopics
-            : (payload["topics"]?.array ?? []).compactMap { $0.string }
+        let topics = reset ? Self.allTopics : named
         Task { await reloadPlugin(topics) }
     }
 
@@ -154,10 +159,11 @@ extension AppStore {
     /// Shion names the todo itself, so sending it again after a dropped connection is safe.
     func pluginAdd(_ title: String) {
         let id = "mac_" + UUID().uuidString.lowercased()
-        let at = Date()
-        todos.append(Todo(id: id, title: title, area: .life, source: "你自己加的", doAt: at))
+        // for today, as a day: typing it in gave it no time of day
+        let today = Fmt.calendar.startOfDay(for: Date())
+        todos.append(Todo(id: id, title: title, area: .life, source: "你自己加的", doAt: today, doAllDay: true))
         pluginWrite("todos.add", [
-            "id": .string(id), "title": .string(title), "area": "life", "do_at": .string(Self.isoTime(at)),
+            "id": .string(id), "title": .string(title), "area": "life", "do_at": .string(Fmt.isoDay(today)),
         ])
     }
 
@@ -192,8 +198,10 @@ extension AppStore {
             area: Area(rawValue: row["area"]?.string ?? "") ?? .life,
             // where it came from when the plugin knows, else who added it
             source: !detail.isEmpty ? detail : (bot(source).map { "\($0.name) 加的" } ?? source),
-            doAt: Self.parseTime(row["do_at"]),
-            dueAt: Self.parseTime(row["due_at"]),
+            doAt: Self.parseWhen(row["do_at"]).date,
+            dueAt: Self.parseWhen(row["due_at"]).date,
+            doAllDay: Self.parseWhen(row["do_at"]).allDay,
+            dueAllDay: Self.parseWhen(row["due_at"]).allDay,
             done: row["done"]?.bool ?? false,
             nudges: row["nudges"]?.int ?? 0,
             proposed: row["proposed"]?.bool ?? false
@@ -221,6 +229,14 @@ extension AppStore {
     private static func parseTime(_ value: JSONValue?) -> Date? {
         guard let text = value?.string, !text.isEmpty else { return nil }
         return isoFormatter.date(from: text)
+    }
+
+    /// A todo's `do_at` / `due_at`: a moment, or a whole day (`2026-11-10`), which has no time.
+    private static func parseWhen(_ value: JSONValue?) -> (date: Date?, allDay: Bool) {
+        if let text = value?.string, let day = Fmt.day(text) {
+            return (day, true)
+        }
+        return (parseTime(value), false)
     }
 
     private static func isoTime(_ date: Date) -> String {

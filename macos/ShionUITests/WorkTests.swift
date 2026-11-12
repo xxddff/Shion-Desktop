@@ -2,7 +2,7 @@ import AppKit
 import XCTest
 
 /// What the board asks of you and tells you, against ci/fake_hermes.py (its cards are in
-/// ci/fake_kanban.py): the cards that stopped on your answer come to 等你确认, where you answer and
+/// ci/fake_kanban.py): the cards that stopped on your answer come to 待你处理, where you answer and
 /// let them go on; each assistant's 工作记录 lists the cards it ran today on every board; and the
 /// card notifications, which a test run writes down in a file instead of posting
 /// (`-ShionNotificationLog`) and answers with a distributed notification, as typing into the
@@ -28,7 +28,7 @@ final class WorkTests: XCTestCase {
         let window = app.windows.firstMatch
         let demo = waitForText("下载上学期成绩单", in: app, timeout: 5)
         keep(window.screenshot(), "work-0-demo-confirm")
-        XCTAssertTrue(demo, "the demo card waiting on you is not in 等你确认")
+        XCTAssertTrue(demo, "the demo card waiting on you is not in 待你处理")
 
         // sign in as BoardTests does
         app.typeKey(",", modifierFlags: .command)
@@ -48,16 +48,16 @@ final class WorkTests: XCTestCase {
         }
         app.typeKey("w", modifierFlags: .command)
 
-        // 等你确认: the cards stopped on you, on both boards: a code only you get (needs_input), an
+        // 待你处理: the cards stopped on you, on both boards: a code only you get (needs_input), an
         // account it does not have (capability); not the one stopped on a flaky site (transient)
         let grades = element("card-ask-t_grades", in: app)
-        XCTAssertTrue(grades.waitForExistence(timeout: 20), "the card waiting on a code did not come to 等你确认")
+        XCTAssertTrue(grades.waitForExistence(timeout: 20), "the card waiting on a code did not come to 待你处理")
         XCTAssertTrue(element("card-ask-t_moodle", in: app).waitForExistence(timeout: 5), "no card waiting on an account")
         XCTAssertTrue(element("card-ask-t_bank", in: app).waitForExistence(timeout: 15), "no card from the other board")
         XCTAssertTrue(waitForText("门户要两步验证码，等你把验证码发过来", in: app, timeout: 5), "no reason on the card")
         XCTAssertTrue(waitForText("缺少能力：Moodle 要学校的统一认证登录", in: app, timeout: 5), "no capability reason")
         XCTAssertTrue(waitForText("门户要两步验证码，发到你的手机了。", in: app, timeout: 5), "the assistant's note is not shown")
-        XCTAssertFalse(element("card-ask-t_weather", in: app).exists, "a block a retry clears came to 等你确认")
+        XCTAssertFalse(element("card-ask-t_weather", in: app).exists, "a block a retry clears came to 待你处理")
         XCTAssertFalse(waitForText("下载上学期成绩单", in: app, timeout: 0.5), "the demo card is still there")
         Thread.sleep(forTimeInterval: 1)
         keep(window.screenshot(), "work-1-confirm")
@@ -65,14 +65,14 @@ final class WorkTests: XCTestCase {
         XCTAssertTrue(cardNotes().isEmpty, "notified about cards that were waiting already: \(cardNotes())")
 
         // the code, and 让它继续: the card leaves; its worker runs, stops on the same thing again
-        // (the code expired), and Hermes's loop breaker sends it to triage: it comes back. 等你确认
+        // (the code expired), and Hermes's loop breaker sends it to triage: it comes back. 待你处理
         // is in front, so that is no notification.
         answer("验证码是 135790（CI）", card: "t_grades", in: app)
         XCTAssertTrue(waitUntil(timeout: 5) { !self.element("card-ask-t_grades", in: app).exists }, "the card stayed after 让它继续")
         let again = waitForText("又卡在同一处：验证码过期了，再发一个新的（CI）", in: app, timeout: 20)
         keep(window.screenshot(), "work-2-asks-again")
         XCTAssertTrue(again, "the card that stopped on the same thing again did not come back")
-        XCTAssertFalse(cardNotes().contains { $0.card == "t_grades" }, "notified while 等你确认 was in front")
+        XCTAssertFalse(cardNotes().contains { $0.card == "t_grades" }, "notified while 待你处理 was in front")
 
         // again: this time it hands the card in for review in a few seconds, while 整理第8回录音 is
         // done and 詩音's 把这周的日程排进日历 stops on a question for you
@@ -104,7 +104,7 @@ final class WorkTests: XCTestCase {
         // the review, the done card and the question come as notifications: 课程's page is in front
         let told = waitUntil(timeout: 30) {
             let notes = self.cardNotes()
-            return notes.contains { $0.card == "t_grades" && $0.title.contains("等你检查") }
+            return notes.contains { $0.card == "t_grades" && $0.title.contains("交去验收") }
                 && notes.contains { $0.card == "t_rec8" && $0.title.hasSuffix("做完了") }
                 && notes.contains { $0.card == "t_week" && $0.title.contains("卡住了") }
         }
@@ -123,7 +123,7 @@ final class WorkTests: XCTestCase {
             replyInNotification("排作业4（CI，从通知回复）", to: week.id)
             XCTAssertTrue(waitUntil(timeout: 10) { self.answered(week.id) }, "the app did not take the answer to the notification")
         }
-        let handedIn = waitForText("交给你检查", in: app, timeout: 10)
+        let handedIn = waitForText("交去验收", in: app, timeout: 10)
         keep(window.screenshot(), "work-4-log-updated")
         XCTAssertTrue(handedIn, "the log does not show the card handed in")
 
@@ -190,7 +190,7 @@ final class WorkTests: XCTestCase {
         XCTAssertTrue(doneAway, "the second card was not done")
         XCTAssertFalse(cardNotes().contains { $0.body.contains("离开看板后做完的卡") }, "notified about a done card with that turned off")
 
-        // 打开卡片 in 等你确认 opens it on its board: the other board's card switches the board
+        // 打开卡片 in 待你处理 opens it on its board: the other board's card switches the board
         element("nav-confirm", in: app).click()
         let open = element("card-ask-open-t_bank", in: app)
         XCTAssertTrue(open.waitForExistence(timeout: 10), "no 打开卡片 on the other board's card")
@@ -258,7 +258,7 @@ final class WorkTests: XCTestCase {
         element.exists && (element.label == text || (element.value as? String) == text)
     }
 
-    /// Writes `text` on a card in 等你确认 and lets it go on.
+    /// Writes `text` on a card in 待你处理 and lets it go on.
     @MainActor
     private func answer(_ text: String, card: String, in app: XCUIApplication) {
         let field = element("card-ask-reply-\(card)", in: app)

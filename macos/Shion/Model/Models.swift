@@ -49,6 +49,10 @@ struct Todo: Identifiable, Hashable {
     var source: String
     var doAt: Date?
     var dueAt: Date?
+    /// The date is a whole day, with no time of day: `doAt` / `dueAt` is then where that day
+    /// starts on this Mac (Format.swift has what follows from it: labels, when it is overdue).
+    var doAllDay = false
+    var dueAllDay = false
     var done = false
     var nudges = 0
     /// Dates suggested by an assistant, not yet confirmed by you.
@@ -72,15 +76,18 @@ struct CalEvent: Identifiable, Hashable {
     var allDay = false
 }
 
-/// Kanban columns: queued (todo/ready), running, waiting on you (blocked/review), done.
+/// Shion's five columns over Hermes's eight: queued (triage, todo, scheduled, ready), running,
+/// stuck (blocked: on you, on something it lacks, or on an error), handed in for review (a
+/// reviewing assistant picks it up; it does not wait on you), and done.
 enum CardStatus: CaseIterable {
-    case queued, running, waiting, done
+    case queued, running, stuck, review, done
 
     var label: String {
         switch self {
         case .queued: return "排队"
         case .running: return "在做"
-        case .waiting: return "等你"
+        case .stuck: return "卡住"
+        case .review: return "待验收"
         case .done: return "完成"
         }
     }
@@ -134,11 +141,39 @@ enum ChatRole {
     case user, assistant, system, card, tool
 }
 
+/// What a card in a chat says happened, when it stands for an event rather than for a card made
+/// on the board or for an ask (EventCards.swift). The event's words are the item's `text`.
+nonisolated enum ChatEvent: Hashable, Codable, Sendable {
+    /// The board's word on a card this chat made: done, stopped, given up, timed out.
+    case board
+    /// Another assistant wrote to this one; `from` is its name as Hermes signs the message.
+    case received(from: String)
+    /// This assistant wrote to another (the message_agent tool).
+    case sent(to: String)
+    /// Something that ran in the background ended, and Hermes told the assistant.
+    case background
+    /// What the assistant's own review after a turn kept, in its words (`review.summary`).
+    case learned
+    /// A skill it wrote or changed by itself, for you to look at: the review's id (SkillReviews.swift).
+    case skill(String)
+
+    /// Whether Hermes gave it to the assistant as a turn, in your name: such a card starts the
+    /// turn that follows it, as a message of yours would.
+    var startsTurn: Bool {
+        switch self {
+        case .board, .received, .background: return true
+        case .sent, .learned, .skill: return false
+        }
+    }
+}
+
 struct ChatItem: Identifiable, Hashable {
     var id: String
     let role: ChatRole
     let at: Date
     var text = ""
+    /// The event a card stands for, when it is one.
+    var event: ChatEvent?
     var cardId: String?
     /// What was asked in this chat that its card or line stands for: a password or a key
     /// (SecretRequest.swift), or an answered approval or question (AskTrail.swift).
@@ -156,6 +191,9 @@ struct ChatItem: Identifiable, Hashable {
     var stopped = false
     /// A turn Hermes ended with an error: this line says why (TurnFailure.swift).
     var failure: TurnFailure?
+    /// A message of yours that went into a turn already running (引导, 打断: Compose.swift): it
+    /// started no turn of its own.
+    var midTurn = false
 }
 
 enum ReportKind: String, CaseIterable, Identifiable {

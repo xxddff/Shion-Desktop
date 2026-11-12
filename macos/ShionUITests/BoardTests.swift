@@ -59,7 +59,11 @@ final class BoardTests: XCTestCase {
         Thread.sleep(forTimeInterval: 0.5)
         keep(window.screenshot(), "board-3-detail")
         XCTAssertTrue(detail, "the card's comments did not show")
-        XCTAssertTrue(waitForText("停下来等你", in: app, timeout: 3), "no runs")
+        // its runs are folded under 经过, which says how the last one ended; a click lists them
+        let runs = element("card-runs", in: app)
+        XCTAssertTrue(runs.waitForExistence(timeout: 3), "no runs")
+        runs.click()
+        XCTAssertTrue(waitForText("停下了", in: app, timeout: 3), "the runs did not open")
 
         // you answer it: the comment goes out under the name you signed in with (the stand-in
         // keeps the author it is sent) and shows as yours; 让它继续 puts the card back in the queue

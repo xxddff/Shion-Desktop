@@ -2,15 +2,16 @@ import AppKit
 import Observation
 import SwiftUI
 
-/// Everything the window shows. Starts on demo data; once connected to a Hermes server, the
-/// assistants and their Bot Chats come from it (the other pages stay on demo data until the
-/// `shion` plugin exists).
+/// Everything the window shows: the assistants and their Bot Chats from the Hermes server, today,
+/// todos and reports from its `shion` plugin, the calendar from this Mac. Before it has connected
+/// there is nothing to show but the way to connect (RootView), or the last data it had
+/// (AppStore+LastData.swift). Screenshot and test runs start on a made-up day instead (Fixture.swift).
 @Observable
 final class AppStore {
-    /// The demo's pinned moment; with the server's own data, the last of it, or this Mac's
-    /// calendars, `now` is the real time, ticking every 30 seconds.
+    /// `now` is the real time, ticking every 30 seconds. A screenshot run's made-up day is pinned
+    /// at `demoClock` until the server's own data, the last of it, or this Mac's calendars show.
     let demoClock: Date
-    var now: Date { pluginData || lastData.shown || local.realTime ? local.clock : demoClock }
+    var now: Date { demo == nil || pluginData || lastData.shown || local.realTime ? local.clock : demoClock }
     /// This Mac's calendars, the focus check and the app usage record (AppStore+Local.swift).
     let local = LocalData.forLaunch()
     var route: Route? = LaunchOptions.current.route
@@ -21,6 +22,19 @@ final class AppStore {
     var asks: [Ask]
     var chats: [String: [ChatItem]]
     var reports: [Report]
+    /// What is typed and not sent, and the message it answers, by chat (AppStore+Compose.swift).
+    var drafts: [String: String] = [:]
+    var replies: [String: ReplyTarget] = [:]
+    /// How a message sent during a turn reaches the assistant (Compose.swift).
+    var busyMode = BusyMode.saved {
+        didSet { busyMode.save() }
+    }
+    /// Cards of a chat that are not rows of its transcript: what the assistant's review after a
+    /// turn kept, as it came (AppStore+Events.swift).
+    var notes: [String: [ChatItem]] = [:]
+    /// The skills each assistant wrote by itself, to look at (AppStore+SkillReviews.swift).
+    var skillReviews: [String: [SkillReview]] = [:]
+    var reviewing: SkillReviewTalk?
     var screens: [BotScreen]
 
     // the Hermes server
@@ -90,16 +104,16 @@ final class AppStore {
     @ObservationIgnored var streaming: [String: String] = [:]
 
     init(now: Date) {
-        let demo = DemoData(now: now)
+        let demo = Self.fixture(now: now)
         self.demoClock = now
-        bots = demo.bots
-        todos = demo.todos
-        events = demo.events
-        cards = demo.cards
-        asks = demo.asks
-        chats = demo.chats
-        reports = demo.reports
-        screens = demo.screens
+        bots = demo?.bots ?? []
+        todos = demo?.todos ?? []
+        events = demo?.events ?? []
+        cards = demo?.cards ?? []
+        asks = demo?.asks ?? []
+        chats = demo?.chats ?? [:]
+        reports = demo?.reports ?? []
+        screens = demo?.screens ?? []
         gateway.onEvent = { [weak self] type, sessionId, payload in
             self?.apply(type, sessionId: sessionId, payload: payload)
         }
@@ -182,7 +196,8 @@ final class AppStore {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !readOnly else { return }
         if pluginData { return pluginAdd(trimmed) }
-        todos.append(Todo(id: UUID().uuidString, title: trimmed, area: .life, source: "你自己加的", doAt: now))
+        todos.append(Todo(id: UUID().uuidString, title: trimmed, area: .life, source: "你自己加的",
+                          doAt: Fmt.calendar.startOfDay(for: now), doAllDay: true))
     }
 
     func answer(_ ask: Ask, with option: AskOption) {
@@ -243,6 +258,7 @@ extension AppStore {
         await describeRuntime()
         await loadProfiles()
         await loadPluginData()
+        await loadAllSkillReviews()
         await loadBoardLimits()
         board.start(serverSettings, credential: gateway.credential, author: signedInName)
         settleLastData()
@@ -303,7 +319,7 @@ extension AppStore {
     static let pageSize = 50
 
     /// The transcript is paged where the server has `session.transcript`; older servers send it whole.
-    private var pagesTranscripts: Bool { serverCapabilities.contains("session-transcript-v1") }
+    var pagesTranscripts: Bool { serverCapabilities.contains("session-transcript-v1") }
 
     private func describeRuntime() async {
         guard let reply = try? await gateway.call("runtime.describe", [:]) else { return }
@@ -332,7 +348,7 @@ extension AppStore {
     }
 
     /// An assistant Shion stops following (hidden in Settings, or deleted): its Bot Chat's events,
-    /// approvals and questions no longer come in, and what it had in 等你确认 goes.
+    /// approvals and questions no longer come in, and what it had in 待你处理 goes.
     func forgetChat(_ botId: String) {
         if let sessionId = sessions.removeValue(forKey: botId) {
             sessionBots[sessionId] = nil
@@ -433,6 +449,10 @@ extension AppStore {
         bots = demoBots
         chats = demoChats
         asks = demoAsks
+        // another server's, for all this knows: the last data brings back what is this one's
+        notes = [:]
+        skillReviews = [:]
+        reviewing = nil
         sessions = [:]
         sessionBots = [:]
         streaming = [:]
@@ -544,8 +564,9 @@ extension AppStore {
         let mark = min(attachMarks.removeValue(forKey: botId) ?? 0, held.count)
         // a turn that finished between the attach and this read is in both: keep the page's copy
         let recent = rows.suffix(8)
+        // nor a card put in from the newest rows meanwhile (followNotices), which the page has under the same id
         let streamed = held[mark...].filter { item in
-            item.streaming || !recent.contains { $0.role == item.role && $0.text == item.text }
+            item.streaming || !(recent.contains { $0.role == item.role && $0.text == item.text } || rows.contains { $0.id == item.id })
         }
         chats[botId] = rows + uniqued(streamed, besides: rows)
         olderPages[botId] = page["next_cursor"]?.string
@@ -584,7 +605,7 @@ extension AppStore {
     /// A transcript page's rows, oldest first. A compaction row stands where older messages
     /// were folded into a summary. Hermes gives it the `row_id` of the message it was stored on,
     /// which shows as its own row right after it when it holds real content too: their ids differ.
-    private func transcriptItems(_ page: JSONValue) -> [ChatItem] {
+    func transcriptItems(_ page: JSONValue) -> [ChatItem] {
         uniqued((page["rows"]?.array ?? []).flatMap { row -> [ChatItem] in
             guard row["row_kind"]?.string == "compaction" else { return chatItems(from: row) }
             let at = row["timestamp"]?.number.map { Date(timeIntervalSince1970: $0) } ?? Date()
@@ -618,7 +639,7 @@ extension AppStore {
 
     /// A transcript row as the chat shows it: usually one item, none for a row that is not for you,
     /// one card per line for the board's notices.
-    private func chatItems(from row: JSONValue) -> [ChatItem] {
+    func chatItems(from row: JSONValue) -> [ChatItem] {
         let at = row["timestamp"]?.number.map { Date(timeIntervalSince1970: $0) } ?? Date()
         // Hermes's tool rows have no row_id; their call's id keeps them the same across reads
         let id = row["row_id"]?.int.map { "row-\($0)" } ?? row["row_id"]?.string
@@ -629,14 +650,17 @@ extension AppStore {
             let body = text(of: row)
             // the plugin's focus-check line that woke 詩音: for her, not for the transcript
             guard !body.hasPrefix("［专注检查］") else { return [] }
-            // the board's word on cards this chat made: Hermes sends it as a turn in your name
-            let notices = Self.kanbanNotices(body)
-            guard notices.isEmpty else {
-                return notices.enumerated().map { index, notice in
-                    ChatItem(id: index == 0 ? id : "\(id)-card\(index + 1)", role: .card, at: at, text: notice.line,
-                             cardId: notice.taskId, cardAssignee: notice.assignee)
-                }
+            // what you put into a turn already running (session.steer): your words, in that turn
+            if row["display_kind"]?.string == "steer" {
+                var item = Self.userItem(id: id, at: at, text: body)
+                item.midTurn = true
+                return [item]
             }
+            // what Hermes gave the assistant as a turn in your name: the board's word, another
+            // assistant's message, a background result. A card each, not a message of yours
+            let notices = Notices.read(body, kind: row["display_kind"]?.string,
+                                       display: row["display_metadata"]?["display_text"]?.string)
+            guard notices.isEmpty else { return Self.noticeCards(notices, id: id, at: at) }
             return [Self.userItem(id: id, at: at, text: body)]
         case "assistant":
             let body = text(of: row)
@@ -647,9 +671,14 @@ extension AppStore {
             guard !body.isEmpty else {
                 return stopped ? [ChatItem(id: id, role: .system, at: at, text: "已停止", stopped: true)] : []
             }
-            return [ChatItem(id: id, role: .assistant, at: at, text: body, stopped: stopped)]
+            // nothing to say, said with a marker: no row (Silence.swift)
+            guard !Silence.isMarker(body) else { return [] }
+            return [ChatItem(id: id, role: .assistant, at: at, text: Silence.withoutClosingMarker(body), stopped: stopped)]
         case "tool":
             let name = row["name"]?.string ?? row["tool_name"]?.string ?? "tool"
+            if let message = Self.sentMessage(name, args: row["args"]) {
+                return [ChatItem(id: id, role: .card, at: at, text: message.words, event: .sent(to: message.to))]
+            }
             if let made = Self.madeCard(name, args: row["args"]) {
                 return [ChatItem(id: id, role: .card, at: at, cardTitle: made.title, cardAssignee: made.assignee)]
             }
@@ -657,6 +686,20 @@ extension AppStore {
         default:
             return []
         }
+    }
+
+    /// A notice's cards, the first under the row's id: a row read again is the same cards.
+    static func noticeCards(_ notices: [Notices.Notice], id: String, at: Date) -> [ChatItem] {
+        notices.enumerated().map { index, notice in
+            ChatItem(id: index == 0 ? id : "\(id)-card\(index + 1)", role: .card, at: at, text: notice.text,
+                     event: notice.event, cardId: notice.cardId, cardAssignee: notice.assignee)
+        }
+    }
+
+    /// A message_agent call: what this assistant wrote to another, and to whom (its profile).
+    static func sentMessage(_ name: String, args: JSONValue?) -> (to: String, words: String)? {
+        guard name == "message_agent", let words = args?["message"]?.string, !words.isEmpty else { return nil }
+        return (args?["target"]?.string ?? "", words)
     }
 
     /// A kanban_create call's card: the title it was made with and who it was handed to.
@@ -678,40 +721,7 @@ extension AppStore {
         return nil
     }
 
-    /// The board's notices about cards a chat made (tui_gateway/session_notifications.py, worded
-    /// as on Telegram): "✔ [study] @study Kanban t_ab12 done — …", one per line; a line after a
-    /// notice that is not one (a give-up's error) belongs to it. Empty when the text is not notices.
-    static func kanbanNotices(_ text: String) -> [(line: String, taskId: String, assignee: String?)] {
-        var notices: [(line: String, taskId: String, assignee: String?)] = []
-        for line in text.split(separator: "\n").map(String.init) {
-            guard let notice = kanbanNotice(line) else {
-                if notices.isEmpty { return [] }
-                notices[notices.count - 1].line += "\n" + line
-                continue
-            }
-            notices.append((line, notice.taskId, notice.assignee))
-        }
-        return notices
-    }
-
-    /// One notice line: a mark, the board in brackets, @ the assignee, "Kanban" and the card's id.
-    private static func kanbanNotice(_ line: String) -> (taskId: String, assignee: String?)? {
-        var words = line.split(separator: " ", omittingEmptySubsequences: false)[...]
-        guard let mark = words.first, (1...2).contains(mark.count) else { return nil }
-        words = words.dropFirst()
-        if let board = words.first, board.hasPrefix("["), board.hasSuffix("]") {
-            words = words.dropFirst()
-        }
-        var assignee: String?
-        if let who = words.first, who.hasPrefix("@"), who.count > 1 {
-            assignee = String(who.dropFirst())
-            words = words.dropFirst()
-        }
-        guard words.first == "Kanban", let id = words.dropFirst().first, !id.isEmpty else { return nil }
-        return (String(id), assignee)
-    }
-
-    private func text(of row: JSONValue) -> String {
+    func text(of row: JSONValue) -> String {
         if let text = row["text"]?.string { return text }
         if let content = row["content"]?.string { return content }
         return (row["content"]?.array ?? []).compactMap { $0["text"]?.string }.joined()
@@ -727,6 +737,8 @@ extension AppStore {
         if type == "plugin.shion.changed" {
             return pluginChanged(payload)
         }
+        // a skill being talked over has a session of its own (SkillReviewTalk)
+        if reviewing?.take(type, sessionId: sessionId, payload) == true { return }
         guard let sessionId, let botId = sessionBots[sessionId] else { return }
         secretEvent(type, sessionId: sessionId, payload: payload)
         // a chat not opened yet has no rows to add to: its first page brings them
@@ -743,7 +755,12 @@ extension AppStore {
         }
         switch type {
         case "message.start":
-            if shown { beginReply(botId) }
+            if shown {
+                // a turn Hermes started itself says with what: its card first, then the reply
+                noteTurnStart(payload, in: botId)
+                beginReply(botId)
+                followNotices(botId, atStart: true)
+            }
         case "message.delta":
             if shown, let text = payload["text"]?.string {
                 appendReply(botId, text)
@@ -754,23 +771,34 @@ extension AppStore {
                 endReply(botId)
             }
         case "message.complete":
+            // what streamed, when the end does not repeat it: read before the reply is closed
             var text = payload["text"]?.string ?? ""
+            if text.isEmpty, shown, let id = streaming[botId] {
+                text = chats[botId]?.first(where: { $0.id == id })?.text ?? ""
+            }
             if shown {
                 completeReply(botId, payload)
-                if text.isEmpty {
-                    text = chats[botId]?.last(where: { $0.role == .assistant })?.text ?? ""
+                // a turn of someone else's making: what started it is a row to read (AppStore+Events.swift)
+                let submission = payload["persisted_turn"]?["submission_id"]?.string
+                if submission == nil || chats[botId]?.contains(where: { $0.id == submission }) != true {
+                    followNotices(botId, atStart: false)
                 }
             }
             if payload["status"]?.string == "error" {
                 notifyReply(botId, Self.failureLine(payload, streamed: ""), payload)
-            } else if payload["status"]?.string != "interrupted" {
-                notifyReply(botId, text, payload)
+            } else if payload["status"]?.string != "interrupted", !Silence.isMarker(text) {
+                // a turn that ended with nothing to say (Silence.swift) is no news
+                notifyReply(botId, Silence.withoutClosingMarker(text), payload)
             }
         case "tool.start":
             guard shown else { break }
             endReply(botId)
             let name = payload["name"]?.string ?? payload["tool_name"]?.string ?? "tool"
-            if let made = Self.madeCard(name, args: payload["args"]) {
+            if let message = Self.sentMessage(name, args: payload["args"]) {
+                // under the id the transcript gives the call's row, so a read of it is the same card
+                let id = freshId(payload["tool_id"]?.string.map { "tool-\($0)" }, in: botId)
+                append(ChatItem(id: id, role: .card, at: Date(), text: message.words, event: .sent(to: message.to)), to: botId)
+            } else if let made = Self.madeCard(name, args: payload["args"]) {
                 let id = UUID().uuidString
                 if let call = payload["tool_id"]?.string {
                     madeCards[call] = (botId, id)
@@ -791,11 +819,10 @@ extension AppStore {
             chats[made.botId]?[index].cardId = cardId
         case "status.update":
             // the board's word on a card this chat made, just before the turn it starts
-            guard shown, payload["kind"]?.string == "process", let text = payload["text"]?.string else { break }
-            for notice in Self.kanbanNotices(text) {
-                append(ChatItem(id: UUID().uuidString, role: .card, at: Date(), text: notice.line,
-                                cardId: notice.taskId, cardAssignee: notice.assignee), to: botId)
-            }
+            if shown { noteStatus(payload, in: botId) }
+        case "review.summary":
+            // what the review after a turn kept: skills, memory (AppStore+Events.swift)
+            noteLearned(payload, in: botId)
         case "session.info":
             if let running = payload["running"]?.bool {
                 setRunning(botId, running)
@@ -831,8 +858,12 @@ extension AppStore {
               let index = chats[botId]?.firstIndex(where: { $0.id == id })
         else { return }
         chats[botId]?[index].streaming = false
-        if chats[botId]?[index].text.isEmpty == true {
+        // nothing came, or only the marker for nothing to say: no bubble (Silence.swift)
+        let text = chats[botId]?[index].text ?? ""
+        if text.isEmpty || Silence.isMarker(text) {
             chats[botId]?.remove(at: index)
+        } else {
+            chats[botId]?[index].text = Silence.withoutClosingMarker(text)
         }
     }
 
@@ -850,13 +881,13 @@ extension AppStore {
             if !final.isEmpty {
                 chats[botId]?[index].text = final
             }
-        } else if !final.isEmpty {
-            append(ChatItem(id: UUID().uuidString, role: .assistant, at: Date(), text: final), to: botId)
+        } else if !final.isEmpty, !Silence.isMarker(final) {
+            append(ChatItem(id: UUID().uuidString, role: .assistant, at: Date(), text: Silence.withoutClosingMarker(final)), to: botId)
         }
         endReply(botId)
     }
 
-    private func append(_ item: ChatItem, to botId: String) {
+    func append(_ item: ChatItem, to botId: String) {
         chats[botId, default: []].append(item)
     }
 
@@ -922,7 +953,7 @@ extension AppStore {
         }
     }
 
-    /// Unless 等你确认 or the assistant's chat is in front of you, or the ⌥Space window shows it.
+    /// Unless 待你处理 or the assistant's chat is in front of you, or the ⌥Space window shows it.
     private func notifyAsk(_ ask: Ask) {
         guard !(NSApp.isActive && (route == .confirm || route == .chat(ask.botId))),
               !QuickAsk.shared.showsAnswer(from: ask.botId) else { return }

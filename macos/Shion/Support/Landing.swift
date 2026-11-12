@@ -7,7 +7,7 @@ import SwiftUI
 /// - a reply: the assistant, and the row Hermes stored the reply as (`message.complete`'s
 ///   `persisted_turn.final_assistant_row_id`, which is the transcript's `row_id`), with the row it
 ///   streamed in as and its first words and time for when Hermes did not say;
-/// - an approval or a question: its prompt id, selected in 等你确认;
+/// - an approval or a question: its prompt id, selected in 待你处理;
 /// - a card: its board and id, opened on the board page (AppStore.openCard);
 /// - a daily report: its date and kind.
 /// Every value is a string, as the test runs' notification log has them.
@@ -67,7 +67,7 @@ extension Report {
     }
 }
 
-/// The landing waiting for its page to take it up: the chat still opening, 等你确认 not holding
+/// The landing waiting for its page to take it up: the chat still opening, 待你处理 not holding
 /// the approval yet, the board not read yet, the plugin's reports not there yet. A click that
 /// started Shion waits like this until it has connected. It goes once taken up, once its page
 /// knows the thing is not there, or when you go to another page.

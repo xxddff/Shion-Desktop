@@ -1,8 +1,10 @@
 import SwiftUI
 
+#if DEBUG
+
 /// The prototype's demo day: Monday 10:52, just after the first class. Everything is laid out
 /// relative to `now` so the app opens on the same story every time.
-struct DemoData {
+struct DemoData: Fixture {
     let now: Date
     private let calendar = Calendar.current
 
@@ -22,7 +24,7 @@ struct DemoData {
             Bot(id: "shion", name: "詩音", title: "总秘书", chief: true, hue: Palette.accent, status: .working, statusNote: "在跟进 4 件事"),
             Bot(id: "study", name: "课程", title: "课程助理", chief: false, hue: Palette.hues[0], status: .working, statusNote: "在整理第7回录音"),
             Bot(id: "commute", name: "通勤", title: "通勤", chief: false, hue: Palette.hues[2], status: .idle, statusNote: "回程 18:10 · 中央線快速 正常"),
-            Bot(id: "mail", name: "邮件", title: "邮件", chief: false, hue: Palette.hues[1], status: .waiting, statusNote: "等你确认：发给中村老师的回复"),
+            Bot(id: "mail", name: "邮件", title: "邮件", chief: false, hue: Palette.hues[1], status: .waiting, statusNote: "待你处理：发给中村老师的回复"),
             Bot(id: "news", name: "资讯", title: "资讯与核查", chief: false, hue: Palette.hues[3], status: .working, statusNote: "在核实电费传言"),
             Bot(id: "journal", name: "回顾", title: "回顾", chief: false, hue: Palette.hues[4], status: .idle, statusNote: "今晚 22:30 写日报"),
         ]
@@ -67,8 +69,8 @@ struct DemoData {
         [
             Card(id: "c7a1", title: "整理「数据结构与算法 第7回」录音，列出要做的事", assignee: "study", status: .running, line: "读完录音，正在列待办 · 2 分钟前", updatedAt: at(0, 10, 50)),
             Card(id: "f1e0", title: "核实「东京今冬电费上涨 30%」", assignee: "news", status: .running, line: "找到公告，正在比对数字 · 12 分钟前", updatedAt: at(0, 10, 40)),
-            Card(id: "m2b1", title: "回复中村老师：中期报告的提交格式", assignee: "mail", status: .waiting, line: "回复起草好了，等你确认后发出", updatedAt: at(0, 8, 44)),
-            Card(id: "g5d2", title: "下载上学期成绩单", assignee: "study", status: .waiting, line: "学校门户要两步验证码，发到你手机上了。告诉我验证码，我接着下载。", updatedAt: at(0, 10, 20)),
+            Card(id: "m2b1", title: "回复中村老师：中期报告的提交格式", assignee: "mail", status: .stuck, line: "回复起草好了，待你处理后发出", updatedAt: at(0, 8, 44)),
+            Card(id: "g5d2", title: "下载上学期成绩单", assignee: "study", status: .stuck, line: "学校门户要两步验证码，发到你手机上了。告诉我验证码，我接着下载。", updatedAt: at(0, 10, 20)),
             Card(id: "c7b2", title: "下载第7回课件，存进 Notion", assignee: "study", status: .queued, line: "课程手上还有一件，做完就开始", updatedAt: at(0, 10, 32)),
             Card(id: "c7c3", title: "做第7回复习卡片", assignee: "study", status: .queued, line: "等「下载第7回课件」做完", updatedAt: at(0, 10, 31)),
             Card(id: "d6c3", title: "做第6回复习卡片", assignee: "study", status: .done, line: "12 张，放在 Notion「数据结构与算法」第6回下面", updatedAt: at(-1, 21, 6)),
@@ -198,7 +200,7 @@ struct DemoData {
                 ChatItem(id: "x1", role: .system, at: at(0, 8), text: "收件箱整理 · 08:00"),
                 ChatItem(id: "x2", role: .assistant, at: at(0, 8, 1), text: "新邮件 9 封，需要你处理的有 2 封：中村老师问中期报告的提交格式（昨天就该回了），实习 HR 的面谈时间确认（我已经帮你接受了周四 15:00）。"),
                 ChatItem(id: "x3", role: .user, at: at(0, 8, 43), text: "老师那封你帮我回一下，说用 PDF 按时交"),
-                ChatItem(id: "x4", role: .assistant, at: at(0, 8, 44), text: "起草好了，在「等你确认」里，你点发送我再发。"),
+                ChatItem(id: "x4", role: .assistant, at: at(0, 8, 44), text: "起草好了，在「待你处理」里，你点发送我再发。"),
                 // pictures and files in a chat (ChatMediaViews.swift): one you sent, the inbox the
                 // assistant looked at, a file it hands over, a web picture that waits for a click
                 ChatItem(id: "x5", role: .user, at: at(0, 9, 2), text: "老师发的讲义也拍了，要交的格式是不是这样？",
@@ -268,3 +270,4 @@ struct DemoData {
         ]
     }
 }
+#endif

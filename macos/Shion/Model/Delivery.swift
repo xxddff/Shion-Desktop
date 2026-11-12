@@ -6,6 +6,9 @@ nonisolated enum Delivery: Equatable, Sendable {
     case sending
     /// The connection went before the receipt came: once it is back, the server says (DeliveryCheck).
     case unsure
+    /// Put into a running turn as the connection went (引导, 打断): it may have reached the
+    /// assistant, and a correction has no receipt to ask for. It is not sent again by itself.
+    case unconfirmed
     /// Hermes does not have it: 重发 sends it again, under the same submission id. The reason is
     /// Hermes's refusal in words, when it refused it.
     case unsent(String?)

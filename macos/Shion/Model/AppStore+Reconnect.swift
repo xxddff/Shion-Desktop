@@ -54,10 +54,12 @@ extension AppStore {
     func say(_ text: String, to botId: String, sessionId: String) {
         let id = UUID().uuidString
         let written = Date()
+        // how it reaches an assistant in the middle of a turn, as chosen when it was sent
+        let mode = busyMode
         // as the transcript will show it: words a retry sends again can start with their files' `@file:` lines
         chats[botId, default: []].append(Self.userItem(id: id, at: written, text: text))
         Task {
-            if await !submit(text, id: id, to: botId, sessionId: sessionId) {
+            if await !submit(text, id: id, to: botId, sessionId: sessionId, mode: mode) {
                 requeue(id, text: text, at: written, to: botId)
             }
         }
@@ -67,9 +69,10 @@ extension AppStore {
     /// submission id once, and an exact retry gets the same admission back. The receipt says Hermes
     /// has it; a refusal that it does not (没发出去, with 重发); no answer, the connection having gone,
     /// leaves it unsure until the server can say (`comeBack`). False when it did not go out at all:
-    /// no connection by the time it could.
+    /// no connection by the time it could. While the assistant is in a turn, `mode` may put it into
+    /// that turn instead (AppStore+Compose.swift).
     @discardableResult
-    func submit(_ text: String, id: String, to botId: String, sessionId: String) async -> Bool {
+    func submit(_ text: String, id: String, to botId: String, sessionId: String, mode: BusyMode = .queue) async -> Bool {
         deliveries.track(id, botId: botId, text: text, at: Date())
         await waitForChat(botId)
         guard gateway.phase == .online, sessions[botId] == sessionId else {
@@ -77,17 +80,15 @@ extension AppStore {
             return false
         }
         do {
-            try await gateway.call("prompt.submit", [
+            try await deliver([
                 "profile": .string(botId),
                 "session_id": .string(sessionId),
                 "text": .string(text),
                 "submission_id": .string(id),
-            ])
+            ], id: id, to: botId, sessionId: sessionId, mode: mode)
             deliveries.arrived(id)
-        } catch GatewayError.rpc(_, let message, let reason) {
-            deliveries.set(id, .unsent(DeliveryCheck.refusal(reason) ?? reason ?? message))
         } catch {
-            deliveries.set(id, .unsure)
+            noteUndelivered(id, error)
         }
         return true
     }
@@ -193,6 +194,7 @@ extension AppStore {
         guard gateway.connection == socket, live, gateway.phase == .online else { return }
         // the plugin's pushes are not replayed: catch up on what changed while away
         await syncPluginData()
+        await loadAllSkillReviews()
         // the 总秘书 chosen on this Mac, where the plugin's setting differs (LocalData.swift)
         await local.syncChief()
     }
@@ -269,10 +271,22 @@ extension AppStore {
     /// ordinary message again), or 没发出去 with 重发 (DeliveryCheck).
     private func reconcile(_ botId: String, caughtUp: Bool, snapshot: JSONValue) {
         let doubtful = deliveries.unsure(in: botId)
-        guard !doubtful.isEmpty else { return }
+        let unconfirmed = deliveries.unconfirmed(in: botId)
+        guard !doubtful.isEmpty || !unconfirmed.isEmpty else { return }
         let pending = DeliveryCheck.pending(in: snapshot)
         let rows = (chats[botId] ?? []).filter { $0.role == .user && deliveries.state($0.id) == nil }
             .map { StoredUserRow(text: $0.text, at: $0.at) }
+        // put into a running turn as the connection went: no receipt names it, so only the page
+        // can say it got there (the same words, stored since). Otherwise it stays as it is, in doubt
+        for (id, sent) in unconfirmed {
+            let row = Self.userItem(id: id, at: sent.at, text: sent.text)
+            if rows.contains(where: { $0.text == row.text && $0.at >= sent.at.addingTimeInterval(-60) }) {
+                deliveries.arrived(id)
+                chats[botId]?.removeAll { $0.id == id }
+            } else if chats[botId]?.contains(where: { $0.id == id }) != true {
+                chats[botId, default: []].append(row)
+            }
+        }
         for (id, sent) in doubtful {
             // as a row shows it: a file's `@file:` line is not among its words
             let row = Self.userItem(id: id, at: sent.at, text: sent.text)
@@ -329,8 +343,7 @@ extension AppStore {
         if !LaunchOptions.current.snapshot {
             ConnectionWatch.shared.start(gateway)
         }
-        guard Self.reconnectDemo else { return }
-        let demo = DemoData(now: demoClock)
+        guard Self.reconnectDemo, let demo else { return }
         chats[chiefId, default: []] += demo.reconnectChat
         for item in demo.reconnectChat {
             deliveries.track(item.id, botId: chiefId, text: item.text, at: item.at)

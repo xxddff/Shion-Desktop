@@ -139,7 +139,7 @@ struct KeyTarget: NSViewRepresentable {
 
     /// The editable text field or text view holding `point` (in the window's coordinates),
     /// outermost first; an editing field's own field editor is not one.
-    private static func field(at point: NSPoint, in view: NSView) -> NSView? {
+    static func field(at point: NSPoint, in view: NSView) -> NSView? {
         guard !view.isHidden else { return nil }
         let editable = (view as? NSTextField)?.isEditable == true
             || (view as? NSTextView).map { $0.isEditable && !$0.isFieldEditor } == true
@@ -163,5 +163,51 @@ struct KeyTarget: NSViewRepresentable {
     /// Never what a click lands on: the field in front of it is.
     final class Behind: NSView {
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    }
+}
+
+/// Behind a SwiftUI text field that sends on Return: ⇧Return breaks the line instead, as ⌥Return
+/// does. The field's editor takes ⇧Return for Return, so the key is caught on its way in (a local
+/// monitor, as the chat's ⌘V is: AttachmentViews.swift) and, when the field under this view has
+/// the keys, made into the editor's own line break: at the caret, over the selection, in its
+/// undo. While an input method is composing, the key is the input method's.
+struct LineBreakKey: NSViewRepresentable {
+    func makeNSView(context: Context) -> Watcher {
+        Watcher()
+    }
+
+    func updateNSView(_ view: Watcher, context: Context) {}
+
+    final class Watcher: NSView {
+        private var monitor: Any?
+
+        /// Never what a click lands on: the field in front of it is.
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if let monitor {
+                NSEvent.removeMonitor(monitor)
+            }
+            monitor = nil
+            guard window != nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                self?.breaksLine(event) == true ? nil : event
+            }
+        }
+
+        /// ⇧Return (or ⇧Enter), in this window, with the field under this view being typed in.
+        private func breaksLine(_ event: NSEvent) -> Bool {
+            let held = event.modifierFlags.intersection([.shift, .control, .option, .command])
+            guard event.keyCode == 36 || event.keyCode == 76, held == .shift,
+                  let window, event.window === window, let content = window.contentView,
+                  let field = KeyTarget.field(at: convert(NSPoint(x: bounds.midX, y: bounds.midY), to: nil), in: content),
+                  let editor = window.firstResponder as? NSTextView,
+                  editor === field || editor.delegate === field,
+                  !editor.hasMarkedText()
+            else { return false }
+            editor.insertNewlineIgnoringFieldEditor(nil)
+            return true
+        }
     }
 }

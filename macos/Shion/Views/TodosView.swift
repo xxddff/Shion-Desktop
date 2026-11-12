@@ -69,7 +69,7 @@ struct TodosView: View {
     }
 
     private var subtitle: String {
-        let overdue = store.todos.filter { !$0.done && ($0.dueAt ?? .distantFuture) < store.now }.count
+        let overdue = store.todos.filter { !$0.done && $0.overdue(at: store.now) }.count
         return overdue > 0 ? "今天 \(store.todayTodos.count) 件 · 逾期 \(overdue) 件" : "今天 \(store.todayTodos.count) 件"
     }
 
@@ -77,7 +77,7 @@ struct TodosView: View {
         let now = store.now
         let open = store.todos.filter { !$0.done }
         func key(_ todo: Todo) -> Date { todo.doAt ?? todo.dueAt ?? .distantFuture }
-        let overdue = open.filter { ($0.dueAt ?? .distantFuture) < now }
+        let overdue = open.filter { $0.overdue(at: now) }
         let rest = open.filter { !overdue.contains($0) }.sorted { key($0) < key($1) }
         return [
             TodoGroup(title: "逾期", items: overdue, showDay: true),
@@ -103,8 +103,9 @@ struct TodoInspector: View {
                 }
             }
             Section {
-                LabeledContent("执行", value: todo.doAt.map { Fmt.when($0, now: store.now) } ?? "—")
-                LabeledContent("截止", value: todo.dueAt.map { Fmt.when($0, now: store.now) } ?? "—")
+                LabeledContent("执行", value: todo.doLabel(now: store.now, showDay: true) ?? "—")
+                LabeledContent("截止", value: todo.dueAllDay ? todo.dueAt.map { Fmt.dayLabel($0, now: store.now) } ?? "—"
+                    : todo.dueAt.map { Fmt.when($0, now: store.now) } ?? "—")
                 LabeledContent("领域", value: todo.area.label)
                 LabeledContent("来自", value: todo.source)
                 if todo.nudges > 0 {

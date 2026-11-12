@@ -1,5 +1,7 @@
 import Foundation
 
+#if DEBUG
+
 /// This Mac's calendars, windows and app use as screenshot and test runs make them up. Screenshots
 /// tell the demo's story around its pinned moment (Monday 10:52, 7 minutes after the quiz was due
 /// to start, a cat video in front); the end-to-end test's follow the real clock: a focus block
@@ -140,3 +142,4 @@ enum LocalFixtures {
         Date(timeIntervalSince1970: (now.timeIntervalSince1970 / 60).rounded(.down) * 60)
     }
 }
+#endif

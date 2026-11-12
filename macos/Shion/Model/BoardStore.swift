@@ -9,7 +9,7 @@ import Observation
 /// their counts move (checked every 15 seconds) and once a minute.
 ///
 /// Across every board it also keeps what concerns you: the cards waiting on your answer (for
-/// 等你确认), each assistant's runs today (its 工作记录), and the changes worth a notification
+/// 待你处理), each assistant's runs today (its 工作记录), and the changes worth a notification
 /// (`onMoment`), worked out in BoardWork.swift.
 ///
 /// Shion never calls `POST /dispatch`: it would start cards past `kanban.max_in_progress` and
@@ -51,7 +51,7 @@ final class BoardStore {
             UserDefaults.standard.set(notifyDone, forKey: Self.notifyDoneKey)
         }
     }
-    /// A card to open on the board page (from a notification, or 等你确认), until the page has.
+    /// A card to open on the board page (from a notification, or 待你处理), until the page has.
     var revealing: CardRef?
     /// Told of a card whose moment changed to one worth a notification (Notifier listens).
     @ObservationIgnored var onMoment: ((CardMoment) -> Void)?
@@ -873,7 +873,7 @@ final class BoardStore {
             default: return reason ?? "卡住了，等你"
             }
         case "review":
-            return task.latestSummary.map { "做完了，等你看：\($0)" } ?? "做完了，等你看"
+            return task.latestSummary.map { "做完了，等验收：\($0)" } ?? "做完了，等验收"
         case "done":
             return task.latestSummary ?? task.result ?? "做完了"
         case KanbanWorkflow.archived:
@@ -925,9 +925,24 @@ final class BoardStore {
                     status: task.status,
                     line: line(task, limits: limits, name: name),
                     progress: task.progress.map { "\($0.done)/\($0.total)" },
-                    comments: task.comments
+                    comments: task.comments,
+                    stuck: stuck(task)
                 )
             }
+    }
+
+    /// Why a blocked card is stuck, in two or three characters, for its tag on the board: what
+    /// stopped it last says (the card's own kind may be left from an earlier block).
+    func stuck(_ task: KanbanTask) -> BoardItem.Stuck? {
+        guard task.status == "blocked" else { return nil }
+        let stop = (details[task.id] ?? elsewhereDetails[task.id])?.stop
+        if stop?.event == "gave_up" { return .failing }
+        switch stop?.blockKind ?? task.blockKind {
+        case "needs_input": return .question
+        case "capability": return .lacking
+        case "transient": return .failing
+        default: return .unnamed
+        }
     }
 
     /// The column names in Shion's words; a column Hermes adds later keeps the server's label.
@@ -939,7 +954,7 @@ final class BoardStore {
         case "ready": return "就绪"
         case "running": return "在做"
         case "blocked": return "卡住"
-        case "review": return "待检查"
+        case "review": return "待验收"
         case "done": return "完成"
         case KanbanWorkflow.archived: return "归档"
         default: return server ?? key
@@ -964,11 +979,37 @@ struct BoardItem: Identifiable, Hashable {
     /// The board it is on, when that is not the one the board page shows (an assistant's
     /// 工作记录 opens cards from every board).
     var board: String?
+    /// Why it is stuck, for a card in 卡住.
+    var stuck: Stuck?
+
+    /// What a stuck card is stuck on: only the first two are yours to clear (待你处理 has them).
+    enum Stuck: Hashable {
+        /// Something only you know (needs_input).
+        case question
+        /// An account, a permission, a step no assistant can do (capability).
+        case lacking
+        /// An error it could not get past: a flaky site, or giving up after failing repeatedly.
+        case failing
+        /// Blocked without a reason given.
+        case unnamed
+
+        var label: String {
+            switch self {
+            case .question: return "等你回答"
+            case .lacking: return "缺权限"
+            case .failing: return "出错了"
+            case .unnamed: return "停下了"
+            }
+        }
+
+        /// Whether clearing it is up to you.
+        var yours: Bool { self == .question || self == .lacking }
+    }
 
     var group: CardStatus { CardStatus(key: status) }
 
     init(id: String, title: String, assignee: String?, status: String, line: String, progress: String? = nil,
-         comments: Int = 0, board: String? = nil) {
+         comments: Int = 0, board: String? = nil, stuck: Stuck? = nil) {
         self.id = id
         self.title = title
         self.assignee = assignee
@@ -977,20 +1018,23 @@ struct BoardItem: Identifiable, Hashable {
         self.progress = progress
         self.comments = comments
         self.board = board
+        self.stuck = stuck
     }
 
     init(demo card: Card) {
-        self.init(id: card.id, title: card.title, assignee: card.assignee, status: card.status.demoKey, line: card.line)
+        self.init(id: card.id, title: card.title, assignee: card.assignee, status: card.status.demoKey, line: card.line,
+                  stuck: card.status == .stuck ? .question : nil)
     }
 }
 
 extension CardStatus {
-    /// Shion's four columns over Hermes's eight: triage, todo, scheduled and ready queue; blocked
-    /// and review wait on you.
+    /// Shion's five columns over Hermes's eight: triage, todo, scheduled and ready queue; the
+    /// rest are their own.
     init(key: String) {
         switch key {
         case "running": self = .running
-        case "blocked", "review": self = .waiting
+        case "blocked": self = .stuck
+        case "review": self = .review
         case "done": self = .done
         default: self = .queued
         }
@@ -1000,18 +1044,19 @@ extension CardStatus {
         switch self {
         case .queued: return "queued"
         case .running: return "running"
-        case .waiting: return "waiting"
+        case .stuck: return "stuck"
+        case .review: return "review"
         case .done: return "done"
         }
     }
 
     /// Where a card dropped on this column goes, in order of preference; running is the
-    /// dispatcher's, so nothing is dropped there.
+    /// dispatcher's and review takes a reviewer, so nothing is dropped on those.
     var dropKeys: [String] {
         switch self {
         case .queued: return ["ready", "todo", "triage"]
-        case .running: return []
-        case .waiting: return ["blocked"]
+        case .running, .review: return []
+        case .stuck: return ["blocked"]
         case .done: return ["done"]
         }
     }
@@ -1020,7 +1065,8 @@ extension CardStatus {
         switch self {
         case .queued: return "ready"
         case .running: return "running"
-        case .waiting: return "blocked"
+        case .stuck: return "blocked"
+        case .review: return "review"
         case .done: return "done"
         }
     }
@@ -1088,14 +1134,14 @@ extension AppStore {
         return try await board.create(title: title, body: body, assignee: assignee)
     }
 
-    /// 今天's 助手在做: what the assistants are doing and what waits on you, on every board while
-    /// connected (waiting on you first, then the newest); the demo cards otherwise.
+    /// 今天's 助手在做: what the assistants are doing and what got stuck, on every board while
+    /// connected (the stuck first, then the newest); the demo cards otherwise.
     var workingCards: [Card] {
-        guard board.active else { return cards.filter { $0.status == .running || $0.status == .waiting } }
+        guard board.active else { return cards.filter { $0.status == .running || $0.status == .stuck } }
         return serverCards.map(\.card)
-            .filter { $0.status == .running || $0.status == .waiting }
+            .filter { $0.status == .running || $0.status == .stuck }
             .sorted { a, b in
-                if (a.status == .waiting) != (b.status == .waiting) { return a.status == .waiting }
+                if (a.status == .stuck) != (b.status == .stuck) { return a.status == .stuck }
                 return a.updatedAt > b.updatedAt
             }
     }

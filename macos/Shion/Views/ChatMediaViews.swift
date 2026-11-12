@@ -24,14 +24,36 @@ struct UserMessage: View {
                     FileCard(media: file)
                 }
                 if !item.text.isEmpty || item.media.isEmpty {
-                    // ⌘F marks what it finds in it (ChatControls.swift)
-                    FoundText(item.text)
-                        .font(.t13)
-                        .foregroundStyle(Palette.onAccent)
-                        .textSelection(.enabled)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(Palette.accent, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    // sent as a reply: the message it answers, then the words (ReplyQuote)
+                    let reply = ReplyQuote.split(item.text)
+                    VStack(alignment: .leading, spacing: 6) {
+                        if let quote = reply.quote {
+                            Text(quote)
+                                .font(.t12)
+                                .lineLimit(3)
+                                .opacity(0.8)
+                                .padding(.leading, 8)
+                                .overlay(alignment: .leading) {
+                                    Capsule().frame(width: 2).opacity(0.6)
+                                }
+                                .accessibilityIdentifier("reply-quote")
+                        }
+                        // ⌘F marks what it finds in it (ChatControls.swift)
+                        FoundText(reply.words)
+                            .font(.t13)
+                            .textSelection(.enabled)
+                    }
+                    .foregroundStyle(Palette.onAccent)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Palette.accent, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+                if item.midTurn {
+                    // it went into the turn that was running, and started none (BusyMode)
+                    Label("送进了正在进行的这一轮", systemImage: "arrow.turn.down.right")
+                        .font(.t11)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("mid-turn")
                 }
             }
         }

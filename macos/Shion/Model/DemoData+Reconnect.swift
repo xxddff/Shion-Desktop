@@ -1,5 +1,7 @@
 import Foundation
 
+#if DEBUG
+
 extension DemoData {
     /// The screenshot of a connection being got back (`-ShionReconnectDemo YES`), in 詩音's chat: a
     /// message that did not go out (`reconnectUnsent`), then one sent as the connection went, whose
@@ -19,3 +21,4 @@ extension DemoData {
         [("提醒我明天带伞", at(0, 10, 31)), ("明天几点出门？", at(0, 10, 50))]
     }
 }
+#endif

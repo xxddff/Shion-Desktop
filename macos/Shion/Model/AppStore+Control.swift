@@ -207,15 +207,18 @@ extension AppStore {
 
     // MARK: retry
 
-    /// The line 重试 goes under: how the chat's last turn ended (its reply, the line a stop or an
-    /// error left), when that turn answers a message you typed (not the board's notice), nothing
-    /// runs, and nothing you said came after it. Not after an error Hermes says trying again will
-    /// not mend (`error_surface.retryable` false), nor for a message that took pictures, which
-    /// Hermes cannot replay (AppStore.retryable).
+    /// The line 重试 goes under: how the chat's last turn ended, when it did not end well (you
+    /// stopped it, or Hermes ended it with an error: a turn that answered has nothing to try
+    /// again, and asking again would only run its tools twice), it answers a message you typed
+    /// (not a notice Hermes sent in your name), nothing runs, and nothing you said came after it.
+    /// Not after an error Hermes says trying again will not mend (`error_surface.retryable`
+    /// false), nor for a message that took pictures, which Hermes cannot replay
+    /// (AppStore.retryable).
     func retryTarget(_ botId: String) -> String? {
         guard live, !readOnly, sessions[botId] != nil, !turnRunning(botId), !control.retrying.contains(botId),
               let items = chats[botId],
               let end = items.lastIndex(where: { Self.endsTurn($0) }),
+              items[end].stopped || items[end].failure != nil,
               items[end].failure?.retryable ?? true,
               let prompt = items[..<end].lastIndex(where: { Self.startsTurn($0) }),
               items[prompt].role == .user, Self.retryable(items[prompt]),
@@ -224,9 +227,10 @@ extension AppStore {
         return items[end].id
     }
 
-    /// What starts a turn: a message you typed, or the board's notice Hermes sends in your name.
+    /// What starts a turn: a message you typed (not one put into a turn already running), or a
+    /// notice Hermes sends in your name (the board's word, another assistant's message).
     private static func startsTurn(_ item: ChatItem) -> Bool {
-        item.role == .user || (item.role == .card && !item.text.isEmpty)
+        (item.role == .user && !item.midTurn) || (item.role == .card && item.event?.startsTurn == true)
     }
 
     /// What ends one: a reply, or the line a stop before any words, or an error, leaves.
@@ -245,7 +249,7 @@ extension AppStore {
     func retryRisk(_ botId: String) -> RetryRisk? {
         guard let target = retryTarget(botId), let items = chats[botId],
               let end = items.firstIndex(where: { $0.id == target }),
-              let prompt = items[..<end].lastIndex(where: { $0.role == .user })
+              let prompt = items[..<end].lastIndex(where: { Self.startsTurn($0) })
         else { return nil }
         var tools: [String] = []
         for item in items[(prompt + 1)...] {
@@ -265,7 +269,7 @@ extension AppStore {
     func retryReply(_ botId: String) {
         guard let replyId = retryTarget(botId), let sessionId = sessions[botId],
               let items = chats[botId], let reply = items.firstIndex(where: { $0.id == replyId }),
-              let promptIndex = items[..<reply].lastIndex(where: { $0.role == .user })
+              let promptIndex = items[..<reply].lastIndex(where: { Self.startsTurn($0) })
         else { return }
         let prompt = items[promptIndex]
         control.retrying.insert(botId)

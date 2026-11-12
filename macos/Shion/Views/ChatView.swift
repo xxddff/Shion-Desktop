@@ -4,7 +4,6 @@ import SwiftUI
 struct ChatView: View {
     @Environment(AppStore.self) private var store
     let botId: String
-    @State private var draft = ""
     /// The visible height, which the transcript fills even when it is short.
     @State private var viewport: CGFloat = 0
     /// The transcript is too short to scroll, so its top is always in view.
@@ -30,7 +29,7 @@ struct ChatView: View {
     var body: some View {
         let bot = store.bot(botId)
         // and under them, what was said while not connected, waiting (ChatDelivery.swift)
-        let items = store.withAskCards(store.chats[botId] ?? [], of: botId) + WaitingMessages.items(for: botId)
+        let items = store.shownChat(botId) + WaitingMessages.items(for: botId)
         let lines = ChatLine.lines(items, replying: store.replying.contains(botId))
         let found = find.found(in: lines)
         // before the rows are laid out: older rows coming in above (the row at the top of what
@@ -127,26 +126,26 @@ struct ChatView: View {
             await store.openChat(botId)
         }
         .safeAreaInset(edge: .bottom) {
-            // with what is about to go: pictures and files (AttachmentViews.swift)
-            ComposerBar(botId: botId) {
-                Composer(placeholder: "跟\(bot?.name ?? "")说…", text: $draft, canSend: store.canSend(botId, draft), send: {
-                    // what one sends, and the reply to it, are followed down from wherever one was;
-                    // a send that does not go (a picture still going up) leaves following as it was
-                    let following = follow.on
-                    follow.on = true
-                    if store.sendMessage(draft, to: botId) {
-                        draft = ""
-                    } else {
-                        follow.on = following
-                    }
-                }, stop: store.turnRunning(botId) && !store.readOnly ? { store.stopReply(botId) } : nil,
-                   stopping: store.control.stopping.contains(botId), keys: composerKeys)
+            ChatComposer(botId: botId, keys: composerKeys) { send in
+                // what one sends, and the reply to it, are followed down from wherever one was;
+                // a send that does not go (a picture still going up) leaves following as it was
+                let following = follow.on
+                follow.on = true
+                if !send() {
+                    follow.on = following
+                }
             }
             // not connected, what is said waits under the chat (AppStore+Reconnect.swift)
             .disabled(store.readOnly && !store.waits(botId))
             .frame(maxWidth: 720)
             .padding(.horizontal, 40)
             .padding(.bottom, 16)
+        }
+        // a message marked to answer: the composer takes the keys
+        .onChange(of: store.replyTarget(for: botId)?.id) { _, marked in
+            if marked != nil {
+                composerKeys += 1
+            }
         }
         // dropped and pasted pictures and files go to the composer
         .chatAttachments(botId)
@@ -263,6 +262,8 @@ struct ChatView: View {
             ChatRow(item: item, bot: bot, showHead: showsHead(lines, index))
                 // waiting, unsure or not sent (ChatDelivery.swift)
                 .modifier(DeliveryMark(item: item, botId: botId))
+                // copy it, answer it (ChatComposer.swift)
+                .modifier(MessageActions(item: item, botId: botId))
         case .tools(let id, let tools):
             ToolRun(tools: tools, open: openRuns.contains(id)) {
                 openRuns.formSymmetricDifference([id])
@@ -582,7 +583,10 @@ struct ChatRow: View {
         case .system:
             TurnNote(item: item, botId: bot?.id ?? "")
         case .card:
-            if let askId = item.askId {
+            if let event = item.event {
+                // something that happened: the board's word, another assistant's message… (EventCards.swift)
+                EventCard(item: item, event: event)
+            } else if let askId = item.askId {
                 // a password or a key the assistant asked for, or what became of an ask (SecretCard.swift)
                 AskTrailCard(askId: askId)
             } else if let found = store.chatCard(item) {
@@ -672,7 +676,8 @@ struct AssistantMessage: View {
                     Text(Fmt.hm(item.at)).font(.t12).foregroundStyle(.secondary)
                 }
             }
-            if item.text.isEmpty && item.streaming {
+            if item.streaming && (item.text.isEmpty || Silence.mayBecomeMarker(item.text)) {
+                // nothing yet, or what may still turn out to be the marker for nothing to say
                 BusyDots()
             } else if item.streaming {
                 StreamingReply(id: item.id, text: ReplyMedia.streamingText(item.text))
@@ -707,9 +712,11 @@ struct Composer: View {
     /// Whether it can send now; nil: once there are words.
     var canSend: Bool?
     let send: () -> Void
-    /// While a turn runs: the stop button (⌘.) in place of send.
+    /// While a turn runs: the stop button (⌘.), before send.
     var stop: (() -> Void)?
     var stopping = false
+    /// While a turn runs: how what is sent now reaches the assistant (BusyModeMenu).
+    var busy: Binding<BusyMode>?
     /// Bumped to give it the keys: the chat does as its find bar closes.
     var keys = 0
 
@@ -724,20 +731,25 @@ struct Composer: View {
                 .accessibilityIdentifier("composer")
                 // the keys, when the chat gives them back
                 .background(KeyTarget(request: keys))
+                // Return sends; ⇧Return breaks the line (KeyField.swift)
+                .background(LineBreakKey())
+            if let busy {
+                BusyModeMenu(mode: busy)
+            }
             if let stop {
                 StopButton(stopping: stopping, action: stop)
-            } else {
-                Button(action: send) {
-                    Image(systemName: "arrow.up")
-                        .font(.system(size: 13, weight: .bold))
-                        .frame(width: 18, height: 18)
-                }
-                .buttonStyle(.glassProminent)
-                .buttonBorderShape(.circle)
-                .disabled(!(canSend ?? !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
-                .accessibilityLabel("发送")
-                .accessibilityIdentifier("send")
             }
+            // there during a turn too: what is sent then waits, or goes into the turn (BusyMode)
+            Button(action: send) {
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 13, weight: .bold))
+                    .frame(width: 18, height: 18)
+            }
+            .buttonStyle(.glassProminent)
+            .buttonBorderShape(.circle)
+            .disabled(!(canSend ?? !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
+            .accessibilityLabel("发送")
+            .accessibilityIdentifier("send")
         }
         .padding(.leading, 16)
         .padding(.trailing, 6)

@@ -11,17 +11,17 @@ extension AppStore: LocalHost {
     // MARK: the calendar
 
     /// 今天, 日程 and the menu bar's 下一件: the ticked calendars once Shion may read them, whether a
-    /// server is connected or not; the demo's week until then.
+    /// server is connected or not; nothing until then (a screenshot run has its made-up week).
     func applyCalendar() {
         guard local.access == .granted else {
-            events = DemoData(now: demoClock).events
+            events = demo?.events ?? []
             return
         }
         let calendars = Dictionary(local.calendars.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         var shown = local.items.map { event(from: $0, in: calendars[$0.calendarId]) }
         if local.mode == .snapshot {
             // screenshots keep the demo's rides to school and home: they are 通勤's, not a calendar's
-            shown += DemoData(now: demoClock).events.filter { $0.kind == .commute }
+            shown += (demo?.events ?? []).filter { $0.kind == .commute }
         }
         events = shown
     }
@@ -61,7 +61,8 @@ extension AppStore: LocalHost {
     var planTodos: [PlanTodo] {
         let real = pluginData || (lastData.shown && lastData.file?.todos != nil)
         guard real || local.mode != .real else { return [] }
-        return todos.map { PlanTodo(id: $0.id, title: $0.title, doAt: $0.doAt, done: $0.done, proposed: $0.proposed) }
+        // a todo for a whole day is no plan for a moment of it
+        return todos.map { PlanTodo(id: $0.id, title: $0.title, doAt: $0.doAllDay ? nil : $0.doAt, done: $0.done, proposed: $0.proposed) }
     }
 
     /// Reports and uploads go out only while connected to the plugin and showing the server's own
@@ -146,10 +147,18 @@ extension LocalData {
     /// none` shows calendars Shion may not read yet.
     static func forLaunch() -> LocalData {
         let defaults = UserDefaults.standard
-        guard LaunchOptions.current.snapshot else {
-            return LocalData(mode: .real, calendars: EventKitCalendars(), front: WorkspaceFront(), judge: SystemModelJudge(),
-                             settings: savedSettings(defaults), files: LocalFiles.standard, defaults: defaults)
+        #if DEBUG
+        if LaunchOptions.current.snapshot {
+            return madeUp(defaults)
         }
+        #endif
+        return LocalData(mode: .real, calendars: EventKitCalendars(), front: WorkspaceFront(), judge: SystemModelJudge(),
+                         settings: savedSettings(defaults), files: LocalFiles.standard, defaults: defaults)
+    }
+
+    #if DEBUG
+    /// The made-up sources (LocalFixtures.swift), in debug builds only, as the demo's day is.
+    private static func madeUp(_ defaults: UserDefaults) -> LocalData {
         let access: CalendarAccess = defaults.string(forKey: "ShionCalendarAccess") == "none" ? .notDetermined : .granted
         if defaults.bool(forKey: "ShionLocalScript") {
             let now = Date()
@@ -168,6 +177,7 @@ extension LocalData {
             engine: LocalFixtures.demoTimeline(around: demo), usage: LocalFixtures.demoUsage(around: demo), pinned: demo
         )
     }
+    #endif
 }
 
 extension CalEvent {

@@ -44,7 +44,10 @@ struct LaunchOptions {
     static let current: LaunchOptions = {
         let defaults = UserDefaults.standard
         var options = LaunchOptions()
+        // screenshot and test runs are of a debug build: the app you install never is one
+        #if DEBUG
         options.snapshot = defaults.bool(forKey: "ShionSnapshot")
+        #endif
         options.demoSignIn = options.snapshot && defaults.bool(forKey: "ShionDemoSignIn")
         if options.snapshot {
             switch defaults.string(forKey: "ShionChatInspector") {

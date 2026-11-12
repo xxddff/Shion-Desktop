@@ -33,6 +33,9 @@ struct DeliveryMark: ViewModifier {
             if let waiting {
                 Label("\(QuickAskWaiting.written(waiting, now: clock)) 写的 · 等连上服务器后发出", systemImage: "clock")
                     .accessibilityIdentifier("waiting")
+            } else if state == .unconfirmed {
+                Label("不确定有没有送到，看看\(store.bot(botId)?.name ?? "助手")接下来怎么说", systemImage: "questionmark.circle")
+                    .accessibilityIdentifier("unconfirmed")
             } else if case .unsent(let reason)? = state {
                 HStack(spacing: 10) {
                     Label {

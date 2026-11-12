@@ -1,7 +1,7 @@
 import Foundation
 
 /// The board as it concerns people, worked out from cards and their details: which cards an
-/// assistant ran today (its 工作记录), which wait on your answer (等你确认), and which changes are
+/// assistant ran today (its 工作记录), which wait on your answer (待你处理), and which changes are
 /// worth a notification. Foundation only, so it can be checked away from a Mac.
 enum BoardWork {
     /// Hermes's BLOCK_RECURRENCE_LIMIT: a card that stops for the same kind again after an unblock,
@@ -167,7 +167,7 @@ struct CardMoment: Equatable {
     let text: String?
 }
 
-/// A card on 「等你确认」: what it is, who stopped, why, and what was said since.
+/// A card on 「待你处理」: what it is, who stopped, why, and what was said since.
 struct BoardAsk: Identifiable, Equatable {
     let board: String?
     let cardId: String
@@ -211,13 +211,13 @@ extension KanbanRun {
         switch outcome ?? "" {
         case "": return endedAt == nil ? "进行中" : "结束了"
         case "completed": return "做完了"
-        case "blocked": return "停下来等你"
+        case "blocked": return "停下了"
         case "crashed": return "中途出错"
         case "timed_out": return "超时了"
         case "reclaimed": return "收回了"
         case "gave_up": return "放弃了"
         case "spawn_failed": return "没能开始"
-        case "review_requested", "review": return "交给你检查"
+        case "review_requested", "review": return "交去验收"
         case "changes_requested": return "要它再改"
         case let other: return other
         }

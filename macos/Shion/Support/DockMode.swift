@@ -99,7 +99,7 @@ enum MenuBarCount {
             return MenuBarIcon.image(initial)
         }
         image.isTemplate = true
-        image.accessibilityDescription = "\(count) 件等你确认"
+        image.accessibilityDescription = "\(count) 件待你处理"
         made[key] = image
         return image
     }

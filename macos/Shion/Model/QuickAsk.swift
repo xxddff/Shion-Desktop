@@ -97,7 +97,7 @@ final class QuickAsk {
         listen()
         watchConnection()
         guard LaunchOptions.current.snapshot, UserDefaults.standard.bool(forKey: "ShionQuickDemo"), let store else { return }
-        let demo = DemoData(now: store.demoClock).quickExchange
+        let demo = store.demo?.quickExchange ?? []
         store.chats[store.chiefId, default: []] += demo
         if let first = demo.first {
             asked = Asked(itemId: first.id, text: first.text, at: first.at)

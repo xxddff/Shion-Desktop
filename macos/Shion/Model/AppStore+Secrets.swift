@@ -28,8 +28,7 @@ extension AppStore {
         gateway.onRequest = { [weak self] method, id, params in
             self?.serverRequest(method, id: id, params: params) ?? false
         }
-        guard LaunchOptions.current.snapshot, UserDefaults.standard.bool(forKey: "ShionSecretsDemo") else { return }
-        let demo = DemoData(now: demoClock)
+        guard UserDefaults.standard.bool(forKey: "ShionSecretsDemo"), let demo else { return }
         secrets.requests = demo.secretRequests.map { request in
             var request = request
             request.server = serverKey
@@ -197,14 +196,14 @@ extension AppStore {
         return text
     }
 
-    /// Its entry in 等你确认 (and the counts that go with it): answered on its card.
+    /// Its entry in 待你处理 (and the counts that go with it): answered on its card.
     func secretAsk(_ request: SecretRequest) -> Ask {
         Ask(id: request.id, kind: .secret, botId: request.botId, at: request.at,
             title: request.kind == .password ? "要一个密码" : "要一个密钥", options: [])
     }
 
-    /// A new request: its card in the chat, an entry in 等你确认, and a notification unless the
-    /// chat or 等你确认 is in front of you (or the ⌥Space window shows the assistant). The
+    /// A new request: its card in the chat, an entry in 待你处理, and a notification unless the
+    /// chat or 待你处理 is in front of you (or the ⌥Space window shows the assistant). The
     /// notification says who wants a password or a key, nothing more, and cannot be typed into.
     private func take(_ request: SecretRequest) {
         guard secrets.request(request.id) == nil else { return }
@@ -284,7 +283,7 @@ extension AppStore {
         }
     }
 
-    /// It is over: its card says how, and it leaves 等你确认 and the notifications.
+    /// It is over: its card says how, and it leaves 待你处理 and the notifications.
     private func close(_ id: String, as state: SecretRequest.State) {
         secrets.update(id) { request in
             request.state = state

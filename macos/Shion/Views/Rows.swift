@@ -5,15 +5,11 @@ struct DueLabel {
     let text: String
     let color: Color
 
-    init(date: Date, now: Date) {
-        let sameDay = Fmt.dayDiff(date, now) == 0
-        if date < now {
-            text = sameDay ? "\(Fmt.hm(date)) 已截止" : "\(Fmt.dayLabel(date, now: now))截止"
-            color = Palette.alert
-        } else {
-            text = sameDay ? "\(Fmt.hm(date)) 截止" : "\(Fmt.dayLabel(date, now: now))截止"
-            color = date.timeIntervalSince(now) < 24 * 3600 ? Palette.warm : Color.secondary
-        }
+    /// Nil for a todo with no deadline. A deadline that is a whole day is not over until the day is.
+    init?(_ todo: Todo, now: Date) {
+        guard let text = todo.dueWords(now: now), let deadline = todo.deadline else { return nil }
+        self.text = text
+        color = deadline < now ? Palette.alert : deadline.timeIntervalSince(now) < 24 * 3600 ? Palette.warm : Color.secondary
     }
 }
 
@@ -59,14 +55,13 @@ struct TodoRow: View {
             Spacer(minLength: 8)
 
             VStack(alignment: .trailing, spacing: 3) {
-                if let doAt = todo.doAt {
-                    Text(showDay ? Fmt.when(doAt, now: store.now) : Fmt.hm(doAt))
+                if let when = todo.doLabel(now: store.now, showDay: showDay) {
+                    Text(when)
                         .font(.t12)
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
                 }
-                if let dueAt = todo.dueAt, !todo.done {
-                    let due = DueLabel(date: dueAt, now: store.now)
+                if !todo.done, let due = DueLabel(todo, now: store.now) {
                     Text(due.text)
                         .font(.t12.weight(.semibold))
                         .foregroundStyle(due.color)
@@ -124,7 +119,7 @@ struct AskRow: View {
     }
 }
 
-/// An ask on the 「等你确认」 page, with what would be sent.
+/// An ask on the 「待你处理」 page, with what would be sent.
 struct AskCard: View {
     @Environment(AppStore.self) private var store
     let ask: Ask
@@ -190,8 +185,10 @@ struct CardStateTag: View {
             }
             .font(.t12)
             .foregroundStyle(Palette.accent)
-        case .waiting:
-            Text("等你").font(.t12.weight(.medium)).foregroundStyle(Palette.warm)
+        case .stuck:
+            Text("卡住").font(.t12.weight(.medium)).foregroundStyle(Palette.warm)
+        case .review:
+            Text("待验收").font(.t12).foregroundStyle(.secondary)
         case .done:
             Label("完成", systemImage: "checkmark").font(.t12).foregroundStyle(.secondary)
         case .queued:
@@ -211,7 +208,7 @@ struct CardRow: View {
                 Text(card.title).font(.t13).lineLimit(1)
                 Text(card.line)
                     .font(.t12)
-                    .foregroundStyle(card.status == .waiting ? Palette.warm : Color.secondary)
+                    .foregroundStyle(card.status == .stuck ? Palette.warm : Color.secondary)
                     .lineLimit(1)
             }
             Spacer(minLength: 8)

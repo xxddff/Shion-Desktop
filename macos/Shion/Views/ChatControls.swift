@@ -3,7 +3,7 @@ import SwiftUI
 
 // MARK: - stop and retry
 
-/// While a turn runs, the composer's send button turns into this one (⌘.).
+/// While a turn runs, beside the composer's send button (⌘.).
 struct StopButton: View {
     let stopping: Bool
     let action: () -> Void
@@ -24,8 +24,8 @@ struct StopButton: View {
     }
 }
 
-/// Under a reply: 已停止 when you stopped it, and 重试 under the chat's last reply. A turn whose
-/// tools may run again asks first (AppStore.retryRisk).
+/// Under a reply: 已停止 when you stopped it, and 重试 when the chat's last turn was stopped or
+/// failed (AppStore.retryTarget). A turn whose tools may run again asks first (AppStore.retryRisk).
 struct ReplyFooter: View {
     @Environment(AppStore.self) private var store
     let item: ChatItem

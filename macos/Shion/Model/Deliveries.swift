@@ -54,7 +54,16 @@ final class Deliveries {
 
     /// The messages of a chat whose receipt the connection took with it, oldest first.
     func unsure(in botId: String) -> [(id: String, sent: Sent)] {
-        sent.filter { $0.value.botId == botId && $0.value.state == .unsure }
+        those(in: botId, .unsure)
+    }
+
+    /// The messages of a chat put into a running turn as the connection went, oldest first.
+    func unconfirmed(in botId: String) -> [(id: String, sent: Sent)] {
+        those(in: botId, .unconfirmed)
+    }
+
+    private func those(in botId: String, _ state: Delivery) -> [(id: String, sent: Sent)] {
+        sent.filter { $0.value.botId == botId && $0.value.state == state }
             .map { (id: $0.key, sent: $0.value) }
             .sorted { $0.sent.at < $1.sent.at }
     }

@@ -59,7 +59,7 @@ struct TodayView: View {
         let nextLesson = today.first { $0.kind == .lesson && $0.start > now }
         let nextEvent = today.first { $0.kind == .event && $0.start > now }
         let open = store.todayTodos
-        let due = open.filter { ($0.dueAt ?? .distantPast) > now }.min { ($0.dueAt ?? now) < ($1.dueAt ?? now) }
+        let due = open.filter { ($0.deadline ?? .distantPast) > now }.min { ($0.deadline ?? now) < ($1.deadline ?? now) }
         let classOver = today.contains(where: { $0.kind == .lesson && $0.end < now })
         var parts: [String] = [classOver ? "上午的课结束了。" : "早上好。"]
         var later: [String] = []
@@ -72,18 +72,20 @@ struct TodayView: View {
         if !later.isEmpty {
             parts.append("接下来是\(later.joined(separator: "和"))。")
         }
-        if let due, let dueAt = due.dueAt {
-            parts.append("还有 \(open.count) 件待办，最先要交的是「\(due.title)」，\(Fmt.hm(dueAt)) 截止。")
+        if let due, let words = due.dueWords(now: now) {
+            parts.append("还有 \(open.count) 件待办，最先要交的是「\(due.title)」，\(words)。")
         } else {
             parts.append("还有 \(open.count) 件待办。")
         }
         return parts.joined()
     }
 
-    /// Three at most: approvals and questions, then the board cards waiting on your answer.
+    /// Three at most: approvals and questions, then the board cards waiting on your answer; the
+    /// rest (dates to confirm, skills to look at) is one line that goes to 待你处理.
     private var needsYou: some View {
         let asks = Array(store.asks.prefix(3))
         let cards = Array(store.cardAsks.prefix(3 - asks.count))
+        let more = store.confirmCount - asks.count - cards.count
         return VStack(alignment: .leading, spacing: 10) {
             HStack {
                 SectionTitle(title: "需要你", count: store.confirmCount)
@@ -101,9 +103,26 @@ struct TodayView: View {
                     }
                     ForEach(cards) { card in
                         CardAskRow(ask: card)
-                        if card.id != cards.last?.id {
+                        if card.id != cards.last?.id || more > 0 {
                             Divider()
                         }
+                    }
+                    if more > 0 {
+                        Button {
+                            store.route = .confirm
+                        } label: {
+                            HStack {
+                                Text(asks.isEmpty && cards.isEmpty ? "\(more) 件待你处理" : "还有 \(more) 件")
+                                Spacer()
+                                Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold))
+                            }
+                            .font(.t13)
+                            .foregroundStyle(.secondary)
+                            .padding(.vertical, 8)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("needs-you-more")
                     }
                 }
             }

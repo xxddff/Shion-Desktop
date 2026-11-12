@@ -11,7 +11,12 @@ struct RootView: View {
                 .focused($sidebarFocused)
                 .navigationSplitViewColumnWidth(min: 200, ideal: 216, max: 280)
         } detail: {
-            DetailView(route: store.route ?? .today)
+            if store.unconnected {
+                // nothing to show before the first connection: the way to make it
+                ConnectFirst()
+            } else {
+                DetailView(route: store.route ?? .today)
+            }
         }
         // keyboard focus starts in the sidebar, not in the first text field of the page; AppKit
         // still hands the new window to that field, so take focus back once it is up
@@ -25,6 +30,39 @@ struct RootView: View {
             JumpOverlay()
         }
         .frame(minWidth: 960, minHeight: 620)
+        // a skill being talked over with its assistant (SkillReviewViews.swift)
+        .sheet(item: $store.reviewing) { talk in
+            SkillReviewSheet(talk: talk)
+        }
+    }
+}
+
+/// The window before Shion has ever connected to this server: what it is for, and where to say
+/// which server. Once connected it shows the server's data, and after that the last it had.
+struct ConnectFirst: View {
+    @Environment(AppStore.self) private var store
+
+    var body: some View {
+        ContentUnavailableView {
+            Label("先连上你的 Hermes 服务器", systemImage: "server.rack")
+        } description: {
+            Text(note)
+        } actions: {
+            SettingsLink {
+                Text("连接服务器…")
+            }
+            .buttonStyle(.borderedProminent)
+            .accessibilityIdentifier("connect-first")
+        }
+        .navigationTitle("Shion")
+    }
+
+    private var note: String {
+        switch store.gateway.phase {
+        case .connecting: return "正在连接…"
+        case .failed(let reason): return "没连上：\(reason)\n在设置里检查地址和登录方式，再连一次。"
+        default: return "助手、对话、待办和看板都在服务器上。在设置里填上地址、登录，连上后这里就有内容了。"
+        }
     }
 }
 
@@ -81,7 +119,7 @@ struct Sidebar: View {
         List(selection: $selection) {
             Section {
                 Label("今天", systemImage: "sun.max").accessibilityIdentifier("nav-today").tag(Route.today)
-                Label("等你确认", systemImage: "hand.raised")
+                Label("待你处理", systemImage: "hand.raised")
                     .accessibilityIdentifier("nav-confirm")
                     .badge(confirmBadge)
                     .tag(Route.confirm)

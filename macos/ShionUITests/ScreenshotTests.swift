@@ -353,7 +353,7 @@ final class ScreenshotTests: XCTestCase {
             }
 
             // ⌘1…⌘7 are the pages in sidebar order
-            for (key, title) in [("2", "等你确认"), ("6", "看板"), ("1", "今天")] {
+            for (key, title) in [("2", "待你处理"), ("6", "看板"), ("1", "今天")] {
                 app.typeKey(key, modifierFlags: .command)
                 XCTAssertTrue(waitForTitle(window, title), "⌘\(key) did not open \(title): \(window.title)")
             }

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// A password or a key an assistant asked for, in its chat and in 等你确认: who wants it, what for
+/// A password or a key an assistant asked for, in its chat and in 待你处理: who wants it, what for
 /// (the tool and its command, or the skill and Hermes's prompt), the field, 提交 and 拒绝, and how
 /// long Hermes still waits. Once answered, declined or expired, the field goes and the card says
 /// which. What is typed is this view's state alone: it goes out once (AppStore.submitSecret) and the

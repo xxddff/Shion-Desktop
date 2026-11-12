@@ -71,17 +71,17 @@ struct OpenAssistantIntent: AppIntent {
     }
 }
 
-/// 打开等你确认: the page with everything waiting on you.
+/// 打开待你处理: the page with everything waiting on you.
 struct OpenConfirmIntent: AppIntent {
-    nonisolated static let title: LocalizedStringResource = "打开等你确认"
-    nonisolated static let description: IntentDescription? = IntentDescription("打开 Shion 的「等你确认」：助手要你批准或回答的，和停下来等你的卡片。")
+    nonisolated static let title: LocalizedStringResource = "打开待你处理"
+    nonisolated static let description: IntentDescription? = IntentDescription("打开 Shion 的「待你处理」：助手要你批准或回答的，和停下来等你的卡片。")
     nonisolated static let supportedModes: IntentModes = .foreground
 
     nonisolated init() {}
 
     func perform() async throws -> some IntentResult {
         await ShionShortcuts.openConfirm()
-        await IntentOutcome.note("打开了等你确认")
+        await IntentOutcome.note("打开了待你处理")
         return .result()
     }
 }
@@ -183,10 +183,10 @@ nonisolated struct ShionAppShortcuts: AppShortcutsProvider {
         AppShortcut(
             intent: OpenConfirmIntent(),
             phrases: [
-                "用\(.applicationName)打开等你确认",
+                "用\(.applicationName)打开待你处理",
                 "\(.applicationName)有什么等我确认",
             ],
-            shortTitle: "等你确认",
+            shortTitle: "待你处理",
             systemImageName: "hand.raised"
         )
     }

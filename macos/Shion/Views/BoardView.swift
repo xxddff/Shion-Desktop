@@ -1,8 +1,10 @@
 import SwiftUI
 
-/// Work handed to assistants on the Hermes kanban board: the server's once connected, the demo
-/// cards until then. Four columns over Hermes's eight; drag a card to move it, where the board's
-/// workflow allows; click one for its detail.
+/// Work handed to assistants on the Hermes kanban board. Five columns over Hermes's eight (排队,
+/// 在做, 卡住, 待验收, 完成) share the width; never narrower than a card reads well, so with the
+/// detail open, or in a narrow window, the board scrolls sideways instead of squeezing. A card
+/// says only what tells it from its neighbours, and a click opens the rest beside the board.
+/// Drag a card to move it, where the board's workflow allows.
 struct BoardView: View {
     @Environment(AppStore.self) private var store
     @State private var selection: String?
@@ -49,7 +51,7 @@ struct BoardView: View {
                 selection = nil
                 showInspector = false
             }
-            // a card asked for from elsewhere (a notification, 等你确认): open it once its board is up
+            // a card asked for from elsewhere (a notification, 待你处理): open it once its board is up
             .task(id: "\(store.board.revealing?.id ?? "")|\(store.board.slug ?? "")|\(items.count)") {
                 guard let wanted = store.board.revealing,
                       !store.board.active || wanted.board == nil || wanted.board == store.board.slug,
@@ -83,16 +85,23 @@ struct BoardView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            HStack(alignment: .top, spacing: 12) {
-                ForEach(CardStatus.allCases, id: \.self) { group in
-                    BoardColumn(group: group, items: items.filter { $0.group == group }, selection: selection) { open($0) }
+            GeometryReader { space in
+                // the width shared out, down to the narrowest a card reads well at
+                let columns = CGFloat(CardStatus.allCases.count)
+                let width = max(BoardColumn.narrowest, ((space.size.width - 32 - (columns - 1) * 10) / columns).rounded(.down))
+                ScrollView(.horizontal) {
+                    HStack(alignment: .top, spacing: 10) {
+                        ForEach(CardStatus.allCases, id: \.self) { group in
+                            BoardColumn(group: group, items: items.filter { $0.group == group }, selection: selection,
+                                        width: width) { open($0) }
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 14)
+                    .frame(minHeight: space.size.height, alignment: .topLeading)
                 }
+                .scrollIndicators(.automatic)
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 14)
-            // the columns' ideal width would otherwise be their longest title on one line, and the
-            // split view sizes the window from it
-            .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
     }
 
@@ -114,8 +123,9 @@ struct BoardView: View {
 
     private func subtitle(_ items: [BoardItem]) -> String {
         let running = items.filter { $0.group == .running }.count
-        let waiting = items.filter { $0.group == .waiting }.count
-        return waiting > 0 ? "\(running) 件在做 · \(waiting) 件等你" : "\(running) 件在做"
+        // of the stuck, the ones only you can clear
+        let yours = items.filter { $0.stuck?.yours == true }.count
+        return yours > 0 ? "\(running) 件在做 · \(yours) 件等你" : "\(running) 件在做"
     }
 }
 
@@ -150,6 +160,7 @@ struct BoardColumn: View {
     let group: CardStatus
     let items: [BoardItem]
     let selection: String?
+    let width: CGFloat
     let open: (String) -> Void
     @State private var targeted = false
 
@@ -159,7 +170,7 @@ struct BoardColumn: View {
                 Text(group.label).font(.t13.weight(.semibold))
                 Text("\(items.count)").font(.t12).monospacedDigit().foregroundStyle(.secondary)
             }
-            .padding(.horizontal, 4)
+            .padding(.horizontal, 6)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 8) {
                     ForEach(items) { item in
@@ -177,7 +188,8 @@ struct BoardColumn: View {
             .scrollIndicators(.automatic)
         }
         .padding(6)
-        .frame(minWidth: 110, idealWidth: 150, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .frame(width: width)
+        .frame(maxHeight: .infinity, alignment: .topLeading)
         .background(
             targeted ? Palette.accent.opacity(0.08) : Color.clear,
             in: RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -195,6 +207,9 @@ struct BoardColumn: View {
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("board-column-\(group.key)")
     }
+
+    /// The narrowest a card reads well at: a title in two or three lines.
+    static let narrowest: CGFloat = 184
 
     @ViewBuilder
     private func moveMenu(_ item: BoardItem) -> some View {
@@ -215,14 +230,26 @@ struct BoardCard: View {
 
     var body: some View {
         let bot = item.assignee.flatMap { store.bot($0) }
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 7) {
+            if let stuck = item.stuck {
+                // why it is stuck, before anything else: the ones that are yours stand out
+                Text(stuck.label)
+                    .font(.t11.weight(.medium))
+                    .foregroundStyle(stuck.yours ? Palette.warm : Color.secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background((stuck.yours ? Palette.warm : Color.secondary).opacity(0.12), in: Capsule())
+                    .accessibilityIdentifier("card-stuck-\(item.id)")
+            }
             Text(item.title)
                 .font(.t13.weight(.medium))
+                .lineLimit(3)
                 .fixedSize(horizontal: false, vertical: true)
+            // one thing about it: how long, waiting on what, what came of it. The rest is a click away
             Text(item.line)
                 .font(.t12)
-                .foregroundStyle(item.group == .waiting ? Palette.warm : Color.secondary)
-                .lineLimit(5)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 6) {
                 Avatar(bot: bot, size: 16)
@@ -240,9 +267,9 @@ struct BoardCard: View {
                     .foregroundStyle(.secondary)
                 }
             }
-            .padding(.top, 2)
+            .padding(.top, 1)
         }
-        .padding(12)
+        .padding(11)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Palette.card, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(
@@ -255,14 +282,19 @@ struct BoardCard: View {
     }
 }
 
-/// A card's detail: what it is, what it is waiting on or delivered, its comments, what comes before
-/// and after it, and each run. The id and the board go at the bottom, in small type. The card may
-/// be on another board than the board page's (an assistant's 工作记录 opens cards from all).
+/// A card's detail, beside the board and wide enough to read: where it stands and why (what it
+/// waits on, or what it handed in) first, then what was asked, the comments and a way to answer,
+/// and, folded until asked for, what comes before and after it and each run. The id and the board
+/// go at the bottom, in small type. The card may be on another board than the board page's (an
+/// assistant's 工作记录 opens cards from all).
 struct BoardInspector: View {
     @Environment(AppStore.self) private var store
     let item: BoardItem
     let open: (String) -> Void
     @State private var draft = ""
+    /// A long description shows its start; the whole on a click.
+    @State private var wholeBody = false
+    @State private var showsRuns = false
 
     var body: some View {
         let live = store.board.active
@@ -279,7 +311,9 @@ struct BoardInspector: View {
                             Text("已归档").font(.t12).foregroundStyle(.secondary)
                         } else {
                             CardStateTag(status: item.group)
-                            if store.boardLabel(item.status) != item.group.label {
+                            if let stuck = item.stuck {
+                                Text(stuck.label).font(.t12).foregroundStyle(stuck.yours ? Palette.warm : Color.secondary)
+                            } else if store.boardLabel(item.status) != item.group.label {
                                 Text(store.boardLabel(item.status)).font(.t12).foregroundStyle(.secondary)
                             }
                         }
@@ -294,20 +328,30 @@ struct BoardInspector: View {
                     }
                 }
 
-                if let text = detail?.body ?? task?.body {
-                    Text(text)
-                        .font(.t13)
-                        .lineSpacing(2)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .textSelection(.enabled)
-                }
-
-                if item.group == .waiting || (item.group == .queued && !archived) || !live {
-                    Callout(text: item.line, warm: item.group == .waiting)
+                // where it stands: what it waits on, or what it handed in
+                if item.group == .stuck || (item.group == .queued && !archived) || !live {
+                    Callout(text: item.line, warm: item.stuck?.yours == true)
                 }
                 if live, item.status == "done" || item.status == "review" || archived,
                    let delivered = detail?.summary ?? detail?.result ?? task?.latestSummary ?? task?.result {
                     Callout(text: delivered, warm: false)
+                }
+
+                if let text = detail?.body ?? task?.body {
+                    VStack(alignment: .leading, spacing: 6) {
+                        SectionTitle(title: "交代的事")
+                        Text(text)
+                            .font(.t13)
+                            .lineSpacing(2)
+                            .lineLimit(wholeBody ? nil : 8)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                        if text.count > 320 || text.split(separator: "\n", omittingEmptySubsequences: false).count > 8 {
+                            Button(wholeBody ? "收起" : "展开全部") { wholeBody.toggle() }
+                                .buttonStyle(.link)
+                                .font(.t12)
+                        }
+                    }
                 }
 
                 if live {
@@ -316,20 +360,20 @@ struct BoardInspector: View {
                         links(detail)
                     }
                     if let detail, !detail.runs.isEmpty {
-                        runs(detail.runs)
+                        runsSection(detail.runs)
                     }
                     Text(technical)
                         .font(.t11)
                         .foregroundStyle(.tertiary)
                         .textSelection(.enabled)
                 } else if !store.demoRuns(item.id).isEmpty {
-                    runs(store.demoRuns(item.id))
+                    runsSection(store.demoRuns(item.id))
                 }
             }
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .inspectorColumnWidth(min: 240, ideal: 280, max: 360)
+        .inspectorColumnWidth(min: 320, ideal: 400, max: 560)
         .accessibilityIdentifier("card-inspector")
     }
 
@@ -433,9 +477,36 @@ struct BoardInspector: View {
         .buttonStyle(.plain)
     }
 
+    /// Each time an assistant worked on it: how it ended first, the rest on a click.
+    private func runsSection(_ all: [KanbanRun]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button {
+                showsRuns.toggle()
+            } label: {
+                HStack(spacing: 6) {
+                    Text("经过").font(.t15)
+                    Text("\(all.count) 次").font(.t12).monospacedDigit().foregroundStyle(.secondary)
+                    if !showsRuns, let last = all.last {
+                        Text("· 最近一次\(last.outcomeText)").font(.t12).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    Spacer(minLength: 4)
+                    Image(systemName: showsRuns ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("card-runs")
+            if showsRuns {
+                runs(all)
+            }
+        }
+    }
+
     private func runs(_ runs: [KanbanRun]) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            SectionTitle(title: "经过")
             ForEach(Array(runs.enumerated()), id: \.element.id) { index, run in
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 8) {

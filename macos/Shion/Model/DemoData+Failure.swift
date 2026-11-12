@@ -1,5 +1,7 @@
 import Foundation
 
+#if DEBUG
+
 extension DemoData {
     /// The failed turn's screenshot (`-ShionFailureDemo YES`): a question, a tool call, and the line
     /// a provider's rate limit leaves, read from a frame shaped as the session gateway sends it
@@ -23,3 +25,4 @@ extension DemoData {
         ]
     }
 }
+#endif

@@ -35,7 +35,7 @@ final class LastData {
 }
 
 /// last-data.json. A part is nil when the server did not have it (no shion plugin: no todos,
-/// paragraph or reports); the window shows the demo's for it.
+/// paragraph or reports); the window then has nothing for it.
 nonisolated struct LastDataFile: Codable, Sendable {
     var version = 1
     /// The server it came from (`https://host[/prefix]`).
@@ -47,6 +47,10 @@ nonisolated struct LastDataFile: Codable, Sendable {
     var today: String?
     var reports: [StoredReport]?
     var cards: [StoredCard]?
+    /// What each assistant's review kept (`review.summary`): no row of a transcript, so only here.
+    var notes: [String: [StoredItem]]?
+    /// The skills to look at, as the plugin last listed them.
+    var skillReviews: [String: [SkillReview]]?
 }
 
 nonisolated struct StoredBot: Codable, Sendable {
@@ -68,11 +72,13 @@ nonisolated struct StoredItem: Codable, Sendable {
     var role: String
     var at: Date
     var text: String
+    var event: ChatEvent?
     var cardId: String?
     var cardTitle: String?
     var cardAssignee: String?
     var stopped: Bool?
     var failure: TurnFailure?
+    var midTurn: Bool?
 }
 
 nonisolated struct StoredTodo: Codable, Sendable {
@@ -82,6 +88,8 @@ nonisolated struct StoredTodo: Codable, Sendable {
     var source: String
     var doAt: Date?
     var dueAt: Date?
+    var doAllDay: Bool?
+    var dueAllDay: Bool?
     var done: Bool
     var nudges: Int
     var proposed: Bool
@@ -105,7 +113,7 @@ nonisolated struct StoredCard: Codable, Sendable {
     var id: String
     var title: String
     var assignee: String
-    /// Shion's column: queued, running, waiting or done.
+    /// Shion's column: queued, running, waiting (stuck), review or done.
     var status: String
     /// What it is doing, waiting on, or delivered, as the board said then.
     var line: String
@@ -116,11 +124,15 @@ extension AppStore {
     /// Before connecting and while the connection is down, the window shows the last data, and what
     /// would change it (a todo ticked, a message sent, a card moved) waits for the server.
     var readOnly: Bool {
-        lastData.shown || (live && gateway.phase != .online) || Self.readOnlyDemo
+        lastData.shown || (live && gateway.phase != .online) || unconnected || Self.readOnlyDemo
     }
 
-    /// Never connected to this server: the demo's data.
-    var showsDemo: Bool { !live && !lastData.shown }
+    /// Never connected to this server, and nothing kept from it: there is nothing to show, and
+    /// the window says how to connect (RootView).
+    var unconnected: Bool { !live && !lastData.shown && demo == nil }
+
+    /// A screenshot run before it connects: the made-up day (Fixture.swift).
+    var showsDemo: Bool { !live && !lastData.shown && demo != nil }
 
     /// The sidebar's line under the server: the data is the last the server gave, from then.
     var lastDataNote: String? {
@@ -145,26 +157,27 @@ extension AppStore {
             }
         }
         // the failed turn's screenshot (DemoData+Failure.swift)
-        if LaunchOptions.current.snapshot, UserDefaults.standard.bool(forKey: "ShionFailureDemo") {
-            chats[chiefId, default: []] += DemoData(now: demoClock).failedTurn
+        if let demo, UserDefaults.standard.bool(forKey: "ShionFailureDemo") {
+            chats[chiefId, default: []] += demo.failedTurn
         }
     }
 
-    /// Shows the last data, if it is this server's. What the server did not have shows the demo's.
+    /// Shows the last data, if it is this server's. What the server did not have stays empty.
     func showLastData() {
         guard let file = lastData.file, file.server == serverSettings.trimmed.signInServer,
               let stored = file.bots, !stored.isEmpty
         else { return }
-        let demo = DemoData(now: demoClock)
         bots = stored.map { $0.bot }
         let pages = file.chats ?? [:]
         chats = Dictionary(bots.map { bot in (bot.id, (pages[bot.id] ?? []).compactMap { $0.item }) },
                            uniquingKeysWith: { first, _ in first })
         asks = []
-        todos = file.todos?.map { $0.todo } ?? demo.todos
-        reports = file.reports?.map { $0.report } ?? demo.reports
+        todos = file.todos?.map { $0.todo } ?? demo?.todos ?? []
+        reports = file.reports?.map { $0.report } ?? demo?.reports ?? []
         todaySummary = file.today
-        cards = file.cards?.map { $0.card } ?? demo.cards
+        cards = file.cards?.map { $0.card } ?? demo?.cards ?? []
+        notes = (file.notes ?? [:]).mapValues { $0.compactMap(\.item) }
+        skillReviews = file.skillReviews ?? [:]
         lastData.savedAt = file.savedAt
         lastData.shown = true
         if case .chat(let id)? = lastData.route, bot(id) != nil {
@@ -179,9 +192,8 @@ extension AppStore {
     func settleLastData() {
         guard live else { return }
         if lastData.shown && !pluginData {
-            let demo = DemoData(now: demoClock)
-            todos = demo.todos
-            reports = demo.reports
+            todos = demo?.todos ?? []
+            reports = demo?.reports ?? []
             todaySummary = nil
         }
         lastData.shown = false
@@ -206,14 +218,15 @@ extension AppStore {
             try? FileManager.default.removeItem(at: LastData.url)
         }
         guard lastData.shown else { return }
-        let demo = DemoData(now: demoClock)
-        bots = demo.bots
-        chats = demo.chats
-        asks = demo.asks
-        todos = demo.todos
-        reports = demo.reports
+        bots = demo?.bots ?? []
+        chats = demo?.chats ?? [:]
+        asks = demo?.asks ?? []
+        todos = demo?.todos ?? []
+        reports = demo?.reports ?? []
         todaySummary = nil
-        cards = demo.cards
+        cards = demo?.cards ?? []
+        notes = [:]
+        skillReviews = [:]
         lastData.shown = false
         if case .chat(let id)? = route, bot(id) == nil {
             route = .today
@@ -240,6 +253,8 @@ extension AppStore {
             }
         }
         file.chats = pages.filter { id, _ in bots.contains { $0.id == id } }
+        file.notes = notes.filter { id, _ in bots.contains { $0.id == id } }.mapValues { $0.map { StoredItem($0) } }
+        file.skillReviews = skillReviews.filter { id, _ in bots.contains { $0.id == id } }
         if pluginData {
             file.todos = todos.map { StoredTodo($0) }
             file.today = todaySummary
@@ -264,6 +279,8 @@ extension AppStore {
         withObservationTracking {
             _ = bots
             _ = chats
+            _ = notes
+            _ = skillReviews
             _ = todos
             _ = reports
             _ = todaySummary
@@ -347,9 +364,9 @@ extension StoredItem {
         case .card: "card"
         case .tool: "tool"
         }
-        self.init(id: item.id, role: name, at: item.at, text: item.text, cardId: item.cardId,
+        self.init(id: item.id, role: name, at: item.at, text: item.text, event: item.event, cardId: item.cardId,
                   cardTitle: item.cardTitle, cardAssignee: item.cardAssignee, stopped: item.stopped ? true : nil,
-                  failure: item.failure)
+                  failure: item.failure, midTurn: item.midTurn ? true : nil)
     }
 
     var item: ChatItem? {
@@ -362,20 +379,21 @@ extension StoredItem {
         default: nil
         }
         guard let kind else { return nil }
-        return ChatItem(id: id, role: kind, at: at, text: text, cardId: cardId, cardTitle: cardTitle,
-                        cardAssignee: cardAssignee, stopped: stopped ?? false, failure: failure)
+        return ChatItem(id: id, role: kind, at: at, text: text, event: event, cardId: cardId, cardTitle: cardTitle,
+                        cardAssignee: cardAssignee, stopped: stopped ?? false, failure: failure, midTurn: midTurn ?? false)
     }
 }
 
 extension StoredTodo {
     init(_ todo: Todo) {
         self.init(id: todo.id, title: todo.title, area: todo.area.rawValue, source: todo.source, doAt: todo.doAt,
-                  dueAt: todo.dueAt, done: todo.done, nudges: todo.nudges, proposed: todo.proposed)
+                  dueAt: todo.dueAt, doAllDay: todo.doAllDay ? true : nil, dueAllDay: todo.dueAllDay ? true : nil,
+                  done: todo.done, nudges: todo.nudges, proposed: todo.proposed)
     }
 
     var todo: Todo {
         Todo(id: id, title: title, area: Area(rawValue: area) ?? .life, source: source, doAt: doAt, dueAt: dueAt,
-             done: done, nudges: nudges, proposed: proposed)
+             doAllDay: doAllDay ?? false, dueAllDay: dueAllDay ?? false, done: done, nudges: nudges, proposed: proposed)
     }
 }
 
@@ -397,7 +415,9 @@ extension StoredCard {
         switch status {
         case .queued: "queued"
         case .running: "running"
-        case .waiting: "waiting"
+        // as files written before the columns were five have it
+        case .stuck: "waiting"
+        case .review: "review"
         case .done: "done"
         }
     }
@@ -405,7 +425,8 @@ extension StoredCard {
     var card: Card {
         let column: CardStatus = switch status {
         case "running": .running
-        case "waiting": .waiting
+        case "waiting": .stuck
+        case "review": .review
         case "done": .done
         default: .queued
         }

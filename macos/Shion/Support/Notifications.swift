@@ -6,7 +6,7 @@ import UserNotifications
 /// way, and a board card that stopped on you (replied to the same way too: the reply goes on the
 /// card and lets it go on), was handed to you to check, or is done, and a daily report written
 /// since Shion connected. Clicking one lands on the very thing it was about (Landing.swift): the
-/// reply in its chat, the approval or question selected in 等你确认, the card on its board, the
+/// reply in its chat, the approval or question selected in 待你处理, the card on its board, the
 /// report; a click that started Shion lands there once it has connected. Screenshot and test runs
 /// post nothing and ask for no permission; a test can have them written down instead
 /// (`-ShionNotificationLog <file>`), answer or click them with a distributed notification
@@ -115,7 +115,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     }
 
     /// An approval or a question from `name`. One whose choices do not fit the notification's
-    /// buttons (a question with options, an approval without once/deny) opens 等你确认 instead.
+    /// buttons (a question with options, an approval without once/deny) opens 待你处理 instead.
     func ask(_ ask: Ask, from name: String) {
         let content = UNMutableNotificationContent()
         let values = Set(ask.options.map(\.value))
@@ -174,7 +174,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         let content = UNMutableNotificationContent()
         switch moment.kind {
         case .ask: content.title = "\(name) 卡住了，等你"
-        case .review: content.title = "\(name) 做完了，等你检查"
+        case .review: content.title = "\(name) 做完了，交去验收了"
         case .done: content.title = "\(name) 做完了"
         }
         let text = moment.text.map { $0.count > 300 ? String($0.prefix(300)) + "…" : $0 }
