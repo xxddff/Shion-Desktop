@@ -5,8 +5,8 @@ name: macOS app
 # runs the board, the assistants, this Mac's own data (made-up calendars and windows) and the
 # passwords and keys assistants ask for against it.
 # macOS runner minutes are limited: this only runs when the app or this file changes.
-# A downloadable Release build (Shion.dmg) is made on manual runs, or when the commit message
-# contains [package].
+# A downloadable Release build (Shion.dmg) is made on full manual runs, or when the commit
+# message contains [package]. A focused manual rerun builds and tests only the selected suite.
 on:
   push:
     # the app's branch, and branches that work on part of it in parallel (claude/macos-board, …)
@@ -15,6 +15,25 @@ on:
       - 'macos/**'
       - '.github/workflows/macos.yml'
   workflow_dispatch:
+    inputs:
+      test:
+        description: UI test suite to run (all includes screenshots and packaging)
+        type: choice
+        default: all
+        options:
+          - all
+          - ChatControlTests
+          - MediaTests
+          - SignInTests
+          - BoardTests
+          - BotsTests
+          - BotPageTests
+          - QuickAskTests
+          - LocalDataTests
+          - ReconnectTests
+          - WorkTests
+          - SecretsTests
+          - ExtrasTests
 
 concurrency:
   group: macos-${{ github.ref }}
@@ -22,9 +41,11 @@ concurrency:
 
 jobs:
   screenshots:
-    name: Build and screenshot
+    name: Build and test
     runs-on: xcode-27
     timeout-minutes: 60
+    env:
+      SHION_UI_TEST: ${{ inputs.test || 'all' }}
     defaults:
       run:
         working-directory: macos
@@ -67,6 +88,7 @@ jobs:
       # when the chat underneath has never been shown. The rest of the screenshot suite is below.
       - name: Open work log cards in light and dark
         id: work_log
+        if: env.SHION_UI_TEST == 'all'
         run: |
           set -o pipefail
           if ! xcodebuild test-without-building \
@@ -85,14 +107,16 @@ jobs:
       # Real Cloudflare Access and a real Hermes are not on the runner: the stand-in plays both,
       # checks what Shion sends (Access headers, PKCE, the loopback redirect, the bearer) and logs
       # each request. Failures block the check; diagnostic artifacts are still exported below.
-      - name: Sign-in, board, assistants, media and local data against a stand-in Hermes
+      - name: Run ${{ inputs.test || 'all' }} UI tests against a stand-in Hermes
         run: |
           set -o pipefail
           # each test gets a fresh stand-in: its one-off events (课程's approval, the todo it adds)
           # would otherwise go to whichever test connects first, and BotsTests and BotPageTests change
           # its profiles
           failed=""
-          for test in ChatControlTests MediaTests SignInTests BoardTests BotsTests BotPageTests QuickAskTests LocalDataTests ReconnectTests WorkTests SecretsTests ExtrasTests; do
+          tests="ChatControlTests MediaTests SignInTests BoardTests BotsTests BotPageTests QuickAskTests LocalDataTests ReconnectTests WorkTests SecretsTests ExtrasTests"
+          if [ "$SHION_UI_TEST" != all ]; then tests="$SHION_UI_TEST"; fi
+          for test in $tests; do
             python3 -u ci/fake_hermes.py --port 8765 > "build/fake_hermes-$test.log" 2>&1 &
             standin=$!
             for attempt in 1 2 3 4 5 6 7 8 9 10; do
@@ -153,7 +177,7 @@ jobs:
           fi
 
       - name: Screenshot every page
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.work_log.outcome == 'success' }}
+        if: ${{ !cancelled() && env.SHION_UI_TEST == 'all' && steps.build.outcome == 'success' && steps.work_log.outcome == 'success' }}
         run: |
           set -o pipefail
           if ! xcodebuild test-without-building \
@@ -263,7 +287,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Package a Release build
-        if: success() && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[package]'))
+        if: success() && env.SHION_UI_TEST == 'all' && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[package]'))
         run: |
           set -o pipefail
           xcodebuild build \
@@ -292,7 +316,7 @@ jobs:
           fi
 
       - name: Upload the Release build
-        if: success() && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[package]'))
+        if: success() && env.SHION_UI_TEST == 'all' && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[package]'))
         uses: actions/upload-artifact@v7
         with:
           name: Shion-macOS-${{ github.run_number }}
