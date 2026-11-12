@@ -69,6 +69,7 @@ import fake_kanban  # noqa: E402  the kanban plugin's routes (BoardTests)
 import fake_profiles  # noqa: E402  the profiles' routes and RPCs (BotsTests)
 import fake_media  # noqa: E402  pictures and files (MediaTests)
 import fake_shion  # noqa: E402  the shion plugin's RPCs
+import fake_skills  # noqa: E402  skill reviews (ComposeTests)
 import fake_quick  # noqa: E402  詩音's answers to the ⌥Space window (QuickAskTests)
 import fake_extras  # noqa: E402  notifications to click and slow replies (ExtrasTests)
 import fake_reconnect  # noqa: E402  frames, replay and dropped sockets (ReconnectTests)
@@ -779,6 +780,9 @@ class Handler(BaseHTTPRequestHandler):
             # ideograph, 不 as U+F967); what is stored stays as sent (fake_words.py)
             params = {**params, "text": fake_words.read(params["text"])}
         if fake_reconnect.answer(self, method, params, rid):
+            return
+        # skills an assistant taught itself, and the sessions they are talked over in (ComposeTests)
+        if fake_skills.rpc(self, log, transcripts, method, params, rid):
             return
         if fake_control.handles(method, params):
             return fake_control.handle(self, method, params, rid)

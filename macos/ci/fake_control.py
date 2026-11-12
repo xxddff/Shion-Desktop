@@ -34,6 +34,19 @@ Hermes's notice after a blank line, as gateway/run_turn.py adds it); 「查一�
 tool (web_search) before it answers, so its retry has something that would run again. Once a
 turn's row has been rewound, the same words get a different reply (the retry). Which profiles have the shion
 plugin is fake_profiles.py's (詩音's only), so the server check has a failure to show.
+
+For ComposeTests, as Hermes main (2026-11-12) has them:
+
+- 「带个话再出错（CI）」 writes to another assistant (a `message_agent` call: tools/bot_mode_dm.py) and
+  then fails as 「出个错看看」 does: the message went out, so its 重试 has something that would go
+  out again.
+- `session.steer` / `session.redirect` {session_id, text, execution_generation} (a closed key set;
+  gateway/session_busy_controls.py correct): a message put into the turn that is running. Another
+  generation is refused (stale_generation); with no turn running the answer is `rejected` with
+  `delivered: false`, which a client may send as a prompt instead; taken, it is `queued`
+  (`redirected` for a redirect), the words are stored as a user row of kind `steer`
+  (tui_gateway/session_history.py shows such a row as your own words), and the story being told
+  says it heard them and ends there.
 """
 import itertools
 import threading
@@ -58,6 +71,9 @@ TOOLED = "查一下明天的天气"
 TOOLED_CALL = ("web_search", "明天 吉祥寺 天气")
 TOOLED_REPLY = "明天晴，最高 18 度。"
 TOOLED_RETRIED = "（重试）明天晴，最高 18 度，傍晚起风。"
+PEER_FAIL = "带个话再出错（CI）"
+PEER_CALL = {"target": "study", "message": "把第 8 回的课件发我一份（CI）。"}
+CORRECTIONS = {"session.steer": "queued", "session.redirect": "redirected"}
 MUTATE_KEYS = {"session_id", "request_id", "expected_revision", "operation", "payload"}
 
 state = {"log": print, "transcripts": None, "lock": threading.Lock()}
@@ -83,10 +99,10 @@ def snapshot_fences(session_id):
 
 
 def handles(method, params):
-    if method in ("session.interrupt", "session.mutate"):
+    if method in ("session.interrupt", "session.mutate") or method in CORRECTIONS:
         return True
     text = str(params.get("text", ""))
-    return method == "prompt.submit" and (STORY in text or FAIL in text or TOOLED in text)
+    return method == "prompt.submit" and any(words in text for words in (STORY, FAIL, TOOLED, PEER_FAIL))
 
 
 def handle(conn, method, params, rid):
@@ -94,7 +110,9 @@ def handle(conn, method, params, rid):
         return interrupt(conn, params, rid)
     if method == "session.mutate":
         return mutate(conn, params, rid)
-    if FAIL in str(params.get("text", "")):
+    if method in CORRECTIONS:
+        return correct(conn, method, params, rid)
+    if FAIL in str(params.get("text", "")) or PEER_FAIL in str(params.get("text", "")):
         return fail(conn, params, rid)
     if TOOLED in str(params.get("text", "")):
         return tooled(conn, params, rid)
@@ -143,6 +161,34 @@ def interrupt(conn, params, rid):
         "execution_generation": current["generation"], "execution_state": "running" if turn else "idle"}})
 
 
+# ---- session.steer, session.redirect ---------------------------------------------------------
+
+def correct(conn, method, params, rid):
+    args = {k: v for k, v in params.items() if k != "profile"}
+    wanted = {"session_id", "text", "execution_generation"}
+    if set(args) != wanted or not isinstance(args.get("text"), str) or not args["text"].strip():
+        return refuse(conn, rid, "invalid_params", fields=sorted(set(args) ^ wanted))
+    session_id, text, generation = args["session_id"], args["text"], args["execution_generation"]
+    current = fence(session_id)
+    if type(generation) is not int or generation != current["generation"]:
+        return refuse(conn, rid, "stale_generation")
+    answer = {"text": text, "execution_generation": generation, "authority_epoch": 1}
+    with state["lock"]:
+        turn = running.get(session_id)
+        if turn is not None:
+            state["transcripts"].setdefault(session_id, []).append(
+                {"row_id": next(row_ids), "row_kind": "message", "role": "user", "text": text,
+                 "display_kind": "steer", "timestamp": time.time()})
+            turn["heard"] = text
+    if turn is None:
+        state["log"](f"    {method}: nothing running, not delivered")
+        answer.update(status="rejected", delivered=False)
+    else:
+        state["log"](f"    {method} into generation {generation}: {text!r}")
+        answer["status"] = CORRECTIONS[method]
+    conn.send_json({"jsonrpc": "2.0", "id": rid, "result": answer})
+
+
 # ---- the scripted turn ------------------------------------------------------------------------
 
 def story(conn, params, rid):
@@ -171,8 +217,13 @@ def run_story(conn, session_id, turn, short):
         for part in ([RETRIED] if short else STORY_PARTS):
             if turn["stop"].wait(0.3):
                 break
+            if turn.get("heard"):
+                # a message came into the turn (session.steer): the story says so and ends here
+                part = f"（听到了：{turn['heard']}）故事先讲到这里。"
             said += part
             event(conn, "message.delta", session_id, {"text": part}, generation)
+            if turn.get("heard"):
+                break
         stopped = turn["stop"].is_set()
         assistant_row = next(row_ids)
         with state["lock"]:
@@ -209,7 +260,7 @@ def fail(conn, params, rid):
             {"row_id": user_row, "row_kind": "message", "role": "user", "text": fake_words.sent(text),
              "timestamp": time.time()})
         turn = {"generation": current["generation"], "stop": threading.Event(), "user_row": user_row,
-                "submission": params.get("submission_id")}
+                "submission": params.get("submission_id"), "peer": PEER_FAIL in text}
         running[session_id] = turn
         retried = text in rewound
     threading.Thread(target=run_fail, args=(conn, session_id, turn, retried), daemon=True).start()
@@ -225,6 +276,18 @@ def run_fail(conn, session_id, turn, retried):
             time.sleep(0.3)
             event(conn, "message.delta", session_id, {"text": FAIL_RETRIED}, generation)
         else:
+            if turn.get("peer"):
+                # the message to the other assistant goes out before the turn fails: a tool call in
+                # the turn, and a tool row in the transcript, with what it was called with
+                call = f"call-ci-peer-{generation}"
+                event(conn, "message.start", session_id, {}, generation)
+                event(conn, "tool.start", session_id, {"tool_id": call, "name": "message_agent", "args": PEER_CALL},
+                      generation)
+                event(conn, "tool.complete", session_id, {"tool_id": call, "name": "message_agent"}, generation)
+                with state["lock"]:
+                    state["transcripts"].setdefault(session_id, []).append(
+                        {"row_kind": "message", "role": "tool", "name": "message_agent", "args": PEER_CALL,
+                         "tool_call_id": call, "context": "study", "timestamp": time.time()})
             time.sleep(1)
         answer = next(row_ids)
         with state["lock"]:

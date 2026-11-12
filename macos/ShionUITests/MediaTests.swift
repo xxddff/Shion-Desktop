@@ -88,18 +88,11 @@ final class MediaTests: XCTestCase {
         XCTAssertTrue(card("ci-报告（CI）.pdf", in: app).exists, "your message does not show the file")
         XCTAssertFalse(waitForText("@file:", in: app, timeout: 1), "a reference shows as text")
 
-        // 2b. 重试 the files' turn: they are @file: lines in its words, which go again as they were;
-        // no question first, since no tool ran. The turn goes again in place of the first
-        let retry = element("retry", in: app)
-        XCTAssertTrue(retry.waitForExistence(timeout: 5), "no 重试 under the files' turn")
-        retry.click()
-        let filesAgain = waitForText("（重试）收到文件：ci-报告（CI）.pdf（40000 字节）", in: app, timeout: 15)
-        keep(window.screenshot(), "media-6-files-retried")
-        XCTAssertTrue(filesAgain, "the files' turn did not go again with its files")
+        // 2b. the files' turn answered: there is nothing to try again, so no 重试 under it
+        XCTAssertFalse(element("retry", in: app).waitForExistence(timeout: 2), "a turn that answered offers 重试")
         let reports = app.descendants(matching: .any).matching(identifier: "file-card")
             .matching(NSPredicate(format: "label BEGINSWITH %@", "ci-报告（CI）.pdf，"))
-        XCTAssertEqual(reports.count, 1, "the retried turn is not in place of the first")
-        XCTAssertFalse(waitForText("@file:", in: app, timeout: 1), "a reference sent again shows as text")
+        XCTAssertEqual(reports.count, 1, "the file shows \(reports.count) times")
 
         // 3. a screenshot a tool took: under its call; the stand-in clears it once read
         composer.click()

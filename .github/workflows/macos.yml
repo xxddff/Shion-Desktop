@@ -31,6 +31,7 @@ on:
           - BotPageTests
           - QuickAskTests
           - ChatControlTests
+          - ComposeTests
           - MediaTests
           - LocalDataTests
           - ReconnectTests
@@ -134,7 +135,7 @@ jobs:
           # would otherwise go to whichever test connects first, and BotsTests and BotPageTests change
           # its profiles
           failed=""
-          tests="SignInTests BoardTests BotsTests BotPageTests QuickAskTests ChatControlTests MediaTests LocalDataTests ReconnectTests WorkTests SecretsTests ExtrasTests"
+          tests="SignInTests BoardTests BotsTests BotPageTests QuickAskTests ChatControlTests ComposeTests MediaTests LocalDataTests ReconnectTests WorkTests SecretsTests ExtrasTests"
           if [ "$SHION_RUN" != all ]; then tests="$SHION_RUN"; fi
           for test in $tests; do
             python3 -u ci/fake_hermes.py --port 8765 > "build/fake_hermes-$test.log" 2>&1 &
@@ -179,7 +180,7 @@ jobs:
             wait "$standin" 2>/dev/null || true
           done
           if [ -n "$failed" ]; then
-            echo "::warning title=End to end::failed:$failed; see the signin-*, board-*, bots-*, page-*, quick-*, chatctl-*, media-*, local-*, reconnect-*, work-*, secrets-* and extras-* screenshots and the fake_hermes-*.log files in the shots artifact"
+            echo "::warning title=End to end::failed:$failed; see the signin-*, board-*, bots-*, page-*, quick-*, chatctl-*, compose-*, media-*, local-*, reconnect-*, work-*, secrets-* and extras-* screenshots and the fake_hermes-*.log files in the shots artifact"
             exit 1
           fi
 
@@ -221,7 +222,7 @@ jobs:
         if: always()
         run: |
           mkdir -p build/shots
-          for bundle in Shots SignInTests BoardTests BotsTests BotPageTests QuickAskTests ChatControlTests MediaTests LocalDataTests ReconnectTests WorkTests SecretsTests ExtrasTests; do
+          for bundle in Shots SignInTests BoardTests BotsTests BotPageTests QuickAskTests ChatControlTests ComposeTests MediaTests LocalDataTests ReconnectTests WorkTests SecretsTests ExtrasTests; do
             if [ -d "build/$bundle.xcresult" ]; then
               mkdir -p "build/export-$bundle"
               xcrun xcresulttool export attachments --path "build/$bundle.xcresult" --output-path "build/export-$bundle" \
@@ -234,6 +235,7 @@ jobs:
           out = 'build/shots'
           for folder in ('build/export-Shots', 'build/export-SignInTests', 'build/export-BoardTests', 'build/export-BotsTests',
                          'build/export-BotPageTests', 'build/export-QuickAskTests', 'build/export-ChatControlTests',
+                         'build/export-ComposeTests',
                          'build/export-MediaTests', 'build/export-LocalDataTests',
                          'build/export-ReconnectTests', 'build/export-WorkTests', 'build/export-SecretsTests',
                          'build/export-ExtrasTests'):

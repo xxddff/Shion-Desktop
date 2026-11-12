@@ -110,19 +110,23 @@ struct BusyModeMenu: View {
     }
 }
 
-/// Copy a message, or answer it: over its corner while the pointer is on it, and in its menu.
+/// Copy a message, or answer it: in its menu, and on two small buttons that show just above its
+/// corner while the pointer is on the message (in the gap between rows, so they cover none of it),
+/// and stay for the moment the pointer takes to reach them.
 struct MessageActions: ViewModifier {
     @Environment(AppStore.self) private var store
     let item: ChatItem
     let botId: String
-    @State private var hovered = false
+    @State private var onRow = false
+    @State private var onButtons = false
+    @State private var shown = false
 
     @ViewBuilder
     func body(content: Content) -> some View {
         if (item.role == .user || item.role == .assistant) && !item.streaming && !words.isEmpty {
             content
                 .overlay(alignment: .topTrailing) {
-                    if hovered {
+                    if shown {
                         HStack(spacing: 2) {
                             action("复制", symbol: "doc.on.doc", identifier: "message-copy", copy)
                             action("回复", symbol: "arrowshape.turn.up.left", identifier: "message-reply", reply)
@@ -130,16 +134,37 @@ struct MessageActions: ViewModifier {
                         .padding(3)
                         .background(.regularMaterial, in: Capsule())
                         .overlay(Capsule().strokeBorder(Palette.line))
-                        .offset(y: -16)
+                        .onHover { inside in
+                            onButtons = inside
+                            settle()
+                        }
+                        .offset(y: -18)
                     }
                 }
-                .onHover { hovered = $0 }
+                .onHover { inside in
+                    onRow = inside
+                    settle()
+                }
                 .contextMenu {
                     Button("复制", action: copy)
                     Button("回复", action: reply)
                 }
         } else {
             content
+        }
+    }
+
+    /// Shown at once; hidden a moment after the pointer has left both the message and the buttons.
+    private func settle() {
+        if onRow || onButtons {
+            shown = true
+            return
+        }
+        Task {
+            try? await Task.sleep(for: .milliseconds(300))
+            if !onRow && !onButtons {
+                shown = false
+            }
         }
     }
 
