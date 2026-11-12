@@ -581,4 +581,4 @@ HERMES_REF=<commit> ./test-with-hermes.sh                      # 换一个 Herme
 
 在改写 TLS 的代理后面造镜像：`HERMES_TEST_CA=<代理的 CA.pem>` 让构建信任它，`HERMES_TEST_NETWORK=host` 让构建用宿主机的网络（代理听在宿主机回环地址上时），`HTTPS_PROXY`、`NO_PROXY` 照环境变量传进去。
 
-CI：`.github/workflows/hermes-plugin.yml`，只在 `hermes-plugin/**` 或这个工作流改了时跑，ubuntu runner。两个任务：不装 Hermes 的测试在 Python 3.11 和 3.13 上跑；`./test-with-hermes.sh` 在容器里对着真的 Hermes 跑，和本地是同一个脚本。
+CI：`.github/workflows/hermes-plugin.yml`，只在 `hermes-plugin/**` 或这个工作流改了时跑，ubuntu runner。两个任务：不装 Hermes 的测试在 Python 3.11、3.13 和 3.14 上跑；`./test-with-hermes.sh` 在容器里对着真的 Hermes 跑，和本地是同一个脚本。
