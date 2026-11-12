@@ -1,7 +1,9 @@
 name: Hermes plugin
 
-# Runs the shion Hermes plugin's tests (hermes-plugin/tests). They need only pytest: Hermes itself is
-# replaced by stand-ins of the few interfaces the plugin uses.
+# Runs the shion Hermes plugin's tests (hermes-plugin/tests). Most need only pytest: Hermes itself is
+# replaced by stand-ins of the few interfaces the plugin uses. Skill reviews are also run against
+# Hermes itself (the second job): there the plugin reads Hermes's own skill ledger and calls its
+# rollback and archive, which a stand-in can only imitate as it was read.
 on:
   push:
     paths:
@@ -25,7 +27,8 @@ jobs:
     timeout-minutes: 10
     strategy:
       matrix:
-        python: ['3.11', '3.13']
+        # 3.14 is what Hermes itself runs on
+        python: ['3.11', '3.13', '3.14']
     defaults:
       run:
         working-directory: hermes-plugin
@@ -36,3 +39,20 @@ jobs:
           python-version: ${{ matrix.python }}
       - run: pip install pytest
       - run: python -m pytest -q
+
+  hermes:
+    name: skill reviews against Hermes itself
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: hermes-plugin
+    steps:
+      - uses: actions/checkout@v7
+      - name: Skill reviews over the real ledger, in a container
+        # What you run locally: builds an image with Hermes at the commit the script pins (HERMES_REF)
+        # and its dependencies from its own uv.lock, then runs tests/test_reviews_hermes.py in it.
+        # A Hermes that cannot be imported there fails the tests (SHION_REQUIRE_HERMES), not skips them.
+        run: ./test-with-hermes.sh
+      - name: The plugin's other tests beside Hermes, on its Python
+        run: ./test-with-hermes.sh python -m pytest -p no:cacheprovider -q -rs
