@@ -56,7 +56,11 @@ jobs:
         with:
           python-version: '3.13'
       - name: Install Hermes
-        run: pip install pytest "hermes-agent @ git+https://github.com/NousResearch/hermes-agent@${HERMES_REF}"
+        # from a checkout, editable: Hermes refuses to be built into a wheel (its setup.py)
+        run: |
+          git clone --quiet https://github.com/NousResearch/hermes-agent "$RUNNER_TEMP/hermes-agent"
+          git -C "$RUNNER_TEMP/hermes-agent" checkout --quiet "$HERMES_REF"
+          pip install pytest -e "$RUNNER_TEMP/hermes-agent"
       - name: Hermes's skill tool, ledger and archive are there to import
         # the tests skip themselves where Hermes is missing: here that would be a pass that tested nothing
         run: |
