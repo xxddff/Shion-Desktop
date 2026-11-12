@@ -19,7 +19,6 @@ struct CardDetail: View {
     /// Puts the detail away, where a button of its own is the way to.
     var close: (() -> Void)?
     let open: (String) -> Void
-    @State private var draft = ""
     /// Beside the page a long description shows its start; the whole on a click.
     @State private var wholeBody = false
     @State private var showsRuns = false
@@ -216,12 +215,12 @@ struct CardDetail: View {
                 }
             }
             HStack(spacing: 8) {
-                TextField(blocked ? "补充它需要的信息" : "留言", text: $draft)
+                TextField(blocked ? "补充它需要的信息" : "留言", text: draft)
                     .textFieldStyle(.roundedBorder)
                     .onSubmit { send(resume: blocked) }
                     .accessibilityIdentifier("card-comment")
                 Button(blocked ? "让它继续" : "发送") { send(resume: blocked) }
-                    .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(draft.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     .accessibilityIdentifier("card-comment-send")
             }
             // the last data, or the connection down: a comment waits for the server
@@ -229,10 +228,20 @@ struct CardDetail: View {
         }
     }
 
+    /// The comment being written, kept in the store (AppStore+Compose.swift): it goes with the
+    /// card from beside the board to over the page.
+    private var draft: Binding<String> {
+        Binding {
+            store.cardDraft(for: item.id, on: item.board)
+        } set: {
+            store.setCardDraft($0, for: item.id, on: item.board)
+        }
+    }
+
     private func send(resume: Bool) {
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = draft.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
-        draft = ""
+        draft.wrappedValue = ""
         let id = item.id
         let board = item.board
         Task { await store.board.comment(id, text, resume: resume, on: board) }

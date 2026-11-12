@@ -1,8 +1,8 @@
 import Foundation
 
-/// What is being written to an assistant, and how it goes out: the draft kept for each chat, the
-/// message it answers, and the way a message sent during a turn reaches the assistant
-/// (Compose.swift).
+/// What is being written to an assistant, and how it goes out: the draft kept for each chat (and
+/// for each card's comment), the message it answers, and the way a message sent during a turn
+/// reaches the assistant (Compose.swift).
 extension AppStore {
     // MARK: the draft, and the message it answers
 
@@ -50,6 +50,23 @@ extension AppStore {
         drafts[key] = nil
         replies[key] = nil
         return true
+    }
+
+    // MARK: a comment on a card
+
+    /// What is typed under a card and not sent, kept as a chat's draft is: it is still there when
+    /// the card's detail goes from beside the board to over the page and back, or the board is
+    /// left and come back to.
+    func cardDraft(for id: String, on board: String?) -> String {
+        drafts[cardKey(id, board)] ?? ""
+    }
+
+    func setCardDraft(_ text: String, for id: String, on board: String?) {
+        drafts[cardKey(id, board)] = text.isEmpty ? nil : text
+    }
+
+    private func cardKey(_ id: String, _ board: String?) -> String {
+        serverKey + "|card|" + (board ?? "") + "|" + id
     }
 
     // MARK: during a turn

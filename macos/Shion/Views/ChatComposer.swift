@@ -122,13 +122,17 @@ struct MessageActions: ViewModifier {
     @State private var onButtons = false
     @State private var shown = false
 
+    /// What is wrapped depends only on whose message it is, which never changes: were it to
+    /// depend on the reply still arriving, the row would be made again as the reply ends, its
+    /// tables measured and its pictures loaded a second time, and the transcript, having followed
+    /// the old row down, left short of the new one's end (run 180).
     @ViewBuilder
     func body(content: Content) -> some View {
-        if (item.role == .user || item.role == .assistant) && !item.streaming && !words.isEmpty {
+        if item.role == .user || item.role == .assistant {
             content
                 .frame(maxWidth: .infinity, alignment: item.role == .user ? .trailing : .leading)
                 .overlay(alignment: .topTrailing) {
-                    if shown {
+                    if shown && offered {
                         HStack(spacing: 2) {
                             action("复制", symbol: "doc.on.doc", identifier: "message-copy", copy)
                             action("回复", symbol: "arrowshape.turn.up.left", identifier: "message-reply", reply)
@@ -148,12 +152,19 @@ struct MessageActions: ViewModifier {
                     settle()
                 }
                 .contextMenu {
-                    Button("复制", action: copy)
-                    Button("回复", action: reply)
+                    if offered {
+                        Button("复制", action: copy)
+                        Button("回复", action: reply)
+                    }
                 }
         } else {
             content
         }
+    }
+
+    /// Once the message is whole and has words.
+    private var offered: Bool {
+        !item.streaming && !words.isEmpty
     }
 
     /// Shown at once; hidden a moment after the pointer has left both the message and the buttons.
