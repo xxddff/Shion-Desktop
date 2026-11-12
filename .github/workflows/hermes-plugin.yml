@@ -27,7 +27,8 @@ jobs:
     timeout-minutes: 10
     strategy:
       matrix:
-        python: ['3.11', '3.13']
+        # 3.14 is what Hermes itself runs on
+        python: ['3.11', '3.13', '3.14']
     defaults:
       run:
         working-directory: hermes-plugin
@@ -54,7 +55,8 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
         with:
-          python-version: '3.13'
+          # Hermes's own Python: its dependencies are declared for 3.14 only (its pyproject.toml)
+          python-version: '3.14'
       - name: Install Hermes
         # from a checkout, editable: Hermes refuses to be built into a wheel (its setup.py)
         run: |

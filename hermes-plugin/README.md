@@ -569,7 +569,8 @@ python -m pytest -q
 技能审核另外对着真的 Hermes 跑一遍（`tests/test_reviews_hermes.py`）：用 Hermes 自己的 `skill_manage` 以后台复盘的身份写技能和改技能，插件从它真的账本里读出卡片和变更前后的内容，拒绝时调它真的回滚和归档，再用它的 `restore_skill` 找回来。没装 Hermes 时这几个测试自己跳过；CI 的第二个任务装上 Hermes 再跑（`.github/workflows/hermes-plugin.yml`，`HERMES_REF` 是插件上次对照的那个提交，服务器上的 Hermes 升级后把它往前挪）。本地要跑：
 
 ```sh
-git clone https://github.com/NousResearch/hermes-agent /tmp/hermes-agent   # Hermes 不让打成 wheel，只能从检出的目录装
+# 要 Python 3.14：Hermes 的依赖只为 3.14 声明；它不让打成 wheel，只能从检出的目录装
+git clone https://github.com/NousResearch/hermes-agent /tmp/hermes-agent
 pip install pytest -e /tmp/hermes-agent
 HERMES_HOME="$(mktemp -d)" python -m pytest -q tests/test_reviews_hermes.py
 ```
