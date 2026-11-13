@@ -13,7 +13,8 @@ struct EventCard: View {
         case .board:
             BoardNoticeCard(item: item)
         case .received(let from):
-            NoticeCard(symbol: "bubble.left.and.bubble.right", title: "\(from) 发来的消息", item: item)
+            // the name it signed with, or (its answer to a message sent it) its handle: the assistant's name
+            NoticeCard(symbol: "bubble.left.and.bubble.right", title: "\(store.bot(from)?.name ?? from) 发来的消息", item: item)
         case .sent(let to):
             NoticeCard(symbol: "paperplane", title: "发给\(store.bot(to)?.name ?? to)的消息", item: item)
         case .background:

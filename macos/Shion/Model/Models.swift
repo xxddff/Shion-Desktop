@@ -146,7 +146,8 @@ enum ChatRole {
 nonisolated enum ChatEvent: Hashable, Codable, Sendable {
     /// The board's word on a card this chat made: done, stopped, given up, timed out.
     case board
-    /// Another assistant wrote to this one; `from` is its name as Hermes signs the message.
+    /// Another assistant wrote to this one; `from` is its name as Hermes signs the message, or, of
+    /// its answer to a message this one sent it, its handle (Notices.peerAnswers).
     case received(from: String)
     /// This assistant wrote to another (the message_agent tool).
     case sent(to: String)

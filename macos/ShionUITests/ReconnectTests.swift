@@ -114,19 +114,22 @@ final class ReconnectTests: XCTestCase {
         once("第1句。", whole: false, "the short reply is not in one bubble", "reconnect-count-2", in: app)
         XCTAssertTrue(element("send", in: app).waitForExistence(timeout: 5), "a bubble is still replying")
 
-        // 2b. what Hermes starts by itself while Shion is away: the board's word on a card done (and
-        // on no board any more), as the gateway wakes a session with it: nothing of it in the
-        // turn's start, only in the row. Then the same words from 课程 twice, each twice over: as
-        // frames from the replay (which say neither when nor which row) and as a row. One card each
+        // 2b. what Hermes starts by itself while Shion is away, as Hermes itself gives each (tried
+        // against a gateway with a stand-in model). The board's word on a card done (and on no
+        // board any more) and a message from 课程: nothing of either in the turn's start, only in
+        // the row. Then 课程's answer to a message of 詩音's, which Hermes hands back as the end of
+        // a background process, twice in the same words: each as a frame from the replay (which
+        // says neither when nor which row) and as a row. One card each
         say("断线：回传", in: app)
         XCTAssertTrue(waitForText("好（CI）。", in: app, timeout: 10), "the short reply did not come")
         XCTAssertTrue(waitForText("重新连接中…", in: app, timeout: 10), "the socket did not drop")
         StandIn.tunnelUp("2b. what Hermes started by itself while away")
         XCTAssertTrue(waitUntil(timeout: 40) { !self.hasText("重新连接中…", in: app) }, "the connection did not come back")
-        XCTAssertTrue(waitForText("课程又说了一遍收到（CI）。", in: app, timeout: 20), "the turns Hermes started while away did not come")
+        XCTAssertTrue(waitForText("课表的事知道了（CI）。", in: app, timeout: 20), "the turns Hermes started while away did not come")
         let notice = element("board-notice", in: app)
         // the notice's row is read a moment after its turn's frames
         let rowRead = notice.waitForExistence(timeout: 15)
+        let peer = waitUntil(timeout: 10) { self.cards("event-card", holding: "收到（CI）", in: app) == 1 }
         keep(app.windows.firstMatch.screenshot(), "reconnect-4b-notices-while-away")
         XCTAssertTrue(rowRead, "the board's word on the card is not a card of its own")
         XCTAssertEqual(cards("board-notice", holding: "归档旧发票（CI）", in: app), 1,
@@ -134,27 +137,41 @@ final class ReconnectTests: XCTestCase {
         XCTAssertTrue(holds("做完了：发票都归好了（CI）。", whole: false, in: notice), "the notice does not say what was handed in")
         XCTAssertFalse(hasText("[kanban]", in: app), "the board's notice shows as Hermes worded it for the assistant")
         XCTAssertFalse(hasText("automatic task-status notification", in: app), "what Hermes tells the model shows in the chat")
-        let peers = waitUntil(timeout: 10) { self.cards("event-card", holding: "收到（CI）", in: app) == 2 }
-        if !peers {
-            note("event cards saying 收到（CI）: \(cards("event-card", holding: "收到（CI）", in: app)); board notices: "
+        // 课程's message: a card from its row alone, Hermes's label on it in the chat's words
+        XCTAssertTrue(peer, "课程's message, which only its row says, is not one card: "
+                      + "\(cards("event-card", holding: "收到（CI）", in: app))")
+        XCTAssertEqual(cards("event-card", holding: "要回：一句话", in: app), 1, "what 课程 wants back is not on its card")
+        XCTAssertFalse(hasText("Reply needed", in: app), "Hermes's own label shows on 课程's message")
+        // 课程's answers: its words on a card under its name, twice, not the command that waited for them
+        let answered = waitUntil(timeout: 10) { self.cards("event-card", holding: "下周的课表排好了（CI）。", in: app) == 2 }
+        if !answered {
+            note("event cards saying the answer: \(cards("event-card", holding: "下周的课表排好了（CI）。", in: app)); board notices: "
                  + "\(app.descendants(matching: .any).matching(identifier: "board-notice").count)", "reconnect-notices")
         }
-        XCTAssertTrue(peers, "the same words from 课程 twice are not two cards")
-        // each ahead of the reply it started, in the order they came
-        let said = app.descendants(matching: .any).matching(identifier: "event-card").allElementsBoundByIndex
-            .filter { self.holds("收到（CI）", whole: false, in: $0) }.map { $0.frame.minY }.sorted()
-        let answers = ["课程把旧发票归好了（CI）。", "知道课程收到了（CI）。", "课程又说了一遍收到（CI）。"]
+        XCTAssertTrue(answered, "the same answer from 课程 twice is not two cards")
+        XCTAssertEqual(cards("event-card", holding: "课程（CI） 发来的消息", in: app), 2, "an answer is not said to be from 课程")
+        XCTAssertFalse(hasText("Background Process Finished", in: app), "an answer shows as the process that waited for it")
+        XCTAssertFalse(hasText("bot_mode_dm", in: app), "the command that waited for an answer shows in the chat")
+        XCTAssertFalse(hasText("[SILENT]", in: app), "the marker of a turn with nothing to say shows")
+        // each where it came: the board's card under the reply before it (run 197: placed by its
+        // row's time, it went above that reply), every card ahead of the reply it started, and the
+        // first answer, which started none, ahead of the second
+        func tops(_ words: String) -> [CGFloat] {
+            app.descendants(matching: .any).matching(identifier: "event-card").allElementsBoundByIndex
+                .filter { self.holds(words, whole: false, in: $0) }.map { $0.frame.minY }.sorted()
+        }
+        let said = tops("收到（CI）"), answers = tops("下周的课表排好了（CI）。")
+        let replies = ["课程把旧发票归好了（CI）。", "知道课程收到了（CI）。", "课表的事知道了（CI）。"]
             .compactMap { texts($0, whole: false, in: app).first?.frame.minY }
-        // the board's card under the reply that came before it, though only its row said it
-        // (run 197: placed by the row's time, it went above that reply)
-        let earlier = answers.first.flatMap { first in
+        let earlier = replies.first.flatMap { first in
             texts("好（CI）。", whole: true, in: app).map { $0.frame.minY }.filter { $0 < first }.max()
         }
-        if said.count == 2, answers.count == 3, let earlier {
-            let order = [earlier, notice.frame.minY, answers[0], said[0], answers[1], said[1], answers[2]]
+        if said.count == 1, answers.count == 2, replies.count == 3, let earlier {
+            let order = [earlier, notice.frame.minY, replies[0], said[0], replies[1], answers[0], answers[1], replies[2]]
             XCTAssertEqual(order, order.sorted(), "the cards and the replies they started are out of order")
         } else {
-            XCTFail("not two cards, three replies and the reply before them to tell the order of: \(said.count), \(answers.count), \(earlier != nil)")
+            XCTFail("not the cards, the replies and the reply before them to tell the order of: "
+                    + "\(said.count), \(answers.count), \(replies.count), \(earlier != nil)")
         }
 
         // 3. admitted, and the receipt lost with the connection

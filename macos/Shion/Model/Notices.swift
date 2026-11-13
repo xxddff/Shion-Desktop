@@ -7,7 +7,9 @@ import Foundation
 ///   Chat on `hermes gateway` gets, as tried against Hermes itself), and the line its own
 ///   terminal client and the messaging platforms get ("✔ [study] @study Kanban t_ab12 done — …":
 ///   tui_gateway/session_notifications.py);
-/// - another assistant's message ("Message from 🤖 Name (@handle): …": tools/bot_mode_dm.py);
+/// - another assistant's message ("Message from 🤖 Name (@handle): …": tools/bot_mode_dm.py), and
+///   its answer to a message this assistant sent it, which Hermes hands back as the end of a
+///   background process (`peerAnswers`);
 /// - the end of something that ran in the background (a row of kind `process_complete`,
 ///   `async_delegation_complete` or `internal_notification`: gateway/response_filters.py).
 /// Foundation only, so it can be checked away from a Mac.
@@ -46,9 +48,11 @@ nonisolated enum Notices {
             }
         }
         if let message = peerMessage(body) {
-            return [Notice(event: .received(from: message.from), text: message.words)]
+            return [Notice(event: .received(from: message.from), text: peerWords(message.words))]
         }
         if let kind, machineKinds.contains(kind) {
+            // a teammate's answer, not the command line of the process that waited for it
+            if let answers = peerAnswers(body) { return answers }
             let shown = (display ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             return [Notice(event: .background, text: shown.isEmpty ? body : shown)]
         }
@@ -239,6 +243,88 @@ nonisolated enum Notices {
         // "Name (@handle): words"; the name may itself hold brackets
         guard let match = rest.firstMatch(of: #/^(.+?) \(@[A-Za-z0-9_-]+\): /#) else { return nil }
         return (String(match.1), String(rest[match.range.upperBound...]))
+    }
+
+    private static let noReply = "[no reply needed] "
+    private static let envelope = [("Constraints: ", "限制："), ("Reply needed: ", "要回：")]
+
+    /// A message's words without Hermes's own marks on them (tools/bot_mode_dm.py): the marker of
+    /// one that wants no answer, and the labelled lines under it for what the answer must keep to
+    /// and what is wanted back (`_envelope`), said in the chat's words.
+    static func peerWords(_ words: String) -> String {
+        var body = words
+        let wantsNone = body.hasPrefix(noReply)
+        if wantsNone { body.removeFirst(noReply.count) }
+        var parts = body.components(separatedBy: "\n\n")
+        if parts.count > 1 {
+            let lines = parts[parts.count - 1].split(separator: "\n").map(String.init)
+            let said = lines.compactMap { line in
+                envelope.first { line.hasPrefix($0.0) }.map { $0.1 + line.dropFirst($0.0.count) }
+            }
+            // only a paragraph that is nothing else: the sender's own words can start the same way
+            if !said.isEmpty, said.count == lines.count { parts[parts.count - 1] = said.joined(separator: "\n") }
+        }
+        if wantsNone { parts.append("不用回复") }
+        return parts.joined(separator: "\n\n")
+    }
+
+    // MARK: another assistant's answer
+
+    /// What came of a message this assistant sent another (message_agent). Hermes waits for the
+    /// answer in a background process (`tools/bot_mode_dm.py --run-delivery`) and gives the sender
+    /// that process's end like any other, under a short form that is its command line. Its output
+    /// is one JSON line: `outcome` says who answered or why not (tools/bot_mode_dm_outcome.py),
+    /// `reply` is the answer; several asked at once come back together (`replies`, each with whom
+    /// it was `to`). As captured from Hermes itself.
+    ///
+    /// An answer is a message from that teammate, `from` its handle (the card shows the
+    /// assistant's name for it); no answer is said in Hermes's own sentence. Nil when the text is
+    /// not the end of such a process.
+    static func peerAnswers(_ text: String) -> [Notice]? {
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        guard let command = lines.firstIndex(where: { $0.hasPrefix("Command: ") && $0.contains("bot_mode_dm") }),
+              let output = lines[command...].firstIndex(where: { $0.hasPrefix("Output") && $0.hasSuffix(":") }),
+              let found = lines[(output + 1)...].lazy.compactMap({ outcome(in: $0) }).first,
+              let sentence = found["outcome"] as? String
+        else { return nil }
+        if let several = found["replies"] as? [[String: Any]] {
+            var notices = several.compactMap { entry -> Notice? in
+                guard let reply = (entry["reply"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      !reply.isEmpty else { return nil }
+                return Notice(event: .received(from: handle(entry["to"] as? String ?? "")), text: reply)
+            }
+            // someone did not answer: the sentence names each
+            if notices.count < several.count { notices.append(Notice(event: .background, text: sentence)) }
+            return notices
+        }
+        // "@study answered.", or "Your teammate answered." of Hermes's default profile: then the
+        // command names it, last ("… hermes -p default")
+        let who = sentence.firstMatch(of: #/^@([A-Za-z0-9_-]+) /#).map { String($0.1) }
+            ?? lines[command].firstMatch(of: #/ -p ([A-Za-z0-9_-]+)\s*$/#).map { String($0.1) }
+        if let reply = (found["reply"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !reply.isEmpty {
+            return [Notice(event: .received(from: who ?? "另一位助手"), text: reply)]
+        }
+        // its turn over and nothing said back (it may have had nothing to say); any other end
+        // (never answered, and why) in Hermes's own sentence
+        if sentence.hasSuffix(" finished its turn without replying.") {
+            return [Notice(event: .background, text: "\(who.map { "@" + $0 } ?? "对方") 这一轮没有回话")]
+        }
+        return [Notice(event: .background, text: sentence)]
+    }
+
+    private static func handle(_ label: String) -> String {
+        label.hasPrefix("@") ? String(label.dropFirst()) : label
+    }
+
+    /// The runner's JSON line, which Hermes closes its own bracket after.
+    private static func outcome(in line: String) -> [String: Any]? {
+        guard line.hasPrefix("{") else { return nil }
+        for candidate in [line, String(line.dropLast())] where candidate.hasSuffix("}") {
+            if let object = (try? JSONSerialization.jsonObject(with: Data(candidate.utf8))) as? [String: Any] {
+                return object
+            }
+        }
+        return nil
     }
 
     // MARK: what Hermes adds for the model
