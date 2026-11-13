@@ -134,7 +134,7 @@ hermes -p shion plugins doctor shion  # 用 Hermes 自己的发现和注册流�
 | --- | --- |
 | `invalid_params` | 参数缺了、多了、类型或取值不对；`detail` 里的说明写着是哪个参数 |
 | `not_found` | 按 id（或日期加种类）找不到 |
-| `conflict` | `todos.add` 带的 `id` 已经有一条内容不同的待办；技能审核里：卡片已经处理过、又有了新变更，或者撤销会盖掉后来的修改 |
+| `conflict` | `todos.add` 带的 `id` 已经有一条内容不同的待办；技能审核里：卡片已经处理过、又有了新变更，或者撤销会盖掉别人的修改 |
 | `unavailable` | 这台 Hermes 没有可读的技能账本，或者账本里已经没有这次变更的记录 |
 | `undo_failed` | Hermes 没能撤销（说明是 Hermes 给的原因）；卡片仍然待审核，可以再试 |
 
@@ -451,11 +451,19 @@ hermes -p shion plugins doctor shion  # 用 Hermes 自己的发现和注册流�
 按 Hermes `611bf53`（2026-11-12）的代码。Hermes 的后台复盘（background review）会自己新建、修改技能：**先写入生效**，再由你事后看。Hermes 把每次技能变更都记在自己的技能账本里（`tools/skill_ledger.py`：`<profile>/skills/.curator_ledger.jsonl`，文件内容按 sha256 存在 `<profile>/.curator_backups/blobs/`），每条有变更前后的文件、是谁改的（`actor`）、来自哪个会话。插件不另存技能内容，只存账本里没有的三样：哪几条变更算一张卡、你的决定、你讨论它用的会话。
 
 - **哪些变更有卡**：账本里 `actor` 是 `curator` 的（后台复盘和 curator 自己做的）。你在对话里让助手改的（`agent`）和你用命令行改的（`user`）没有卡。
-- **一张卡**：同一个技能、同一个来源会话、前后相隔不超过 5 分钟的连续变更（一次复盘常常先建 `SKILL.md` 再补参考文件）。卡片一旦处理过或者开过审核会话就不再收新变更，之后的变更另起一张。
+- **一张卡**：同一个技能、同一个来源会话、前后相隔不超过 5 分钟、**在账本里紧挨着**的变更（一次复盘常常先建 `SKILL.md` 再补参考文件）。这个技能中间只要有一条别人的变更（你在对话里让助手改的、命令行的回滚或恢复），前一张卡就封口，后面的另起一张：一张卡不会跨过不属于它的修改。卡片一旦处理过或者开过审核会话也不再收新变更。
+- **后台删除是一张卡**：Hermes 把后台复盘的一次删除（合并进别的技能时用，`skill_manage` 的 `delete` 带 `absorbed_into`）在账本里记成两条：先是真正动手的归档（`archive`，没有来源会话），再是删除本身（`delete`，`evidence.archived` 为真，带来源会话）。这两条归在同一张 `removed` 卡上，来源会话取后一条的。`reviews.detail` 列出的是被删掉的文件，不列 Hermes 挪到 `skills/.archive/` 里的那份。
 - **批准**只记下决定，技能不动。
-- **拒绝**把这张卡的变更撤回去：技能是这次新建的，整个归档到 `skills/.archive/`（Hermes 的 `archive_skill`，`hermes curator restore <名字>` 能找回）；是修改，就按从新到旧的顺序逐条调账本自己的回退（`rollback_entry`：先确认需要的旧内容都在，再把要被替换的现状记进账本，所以回退本身也能再回退）。这两步在账本里记成你（`user`）做的。
-- **不盖掉后来的修改**：拒绝前先核对，卡片改过的文件现在还是它改完的样子，并且这个技能在那之后没有别的、仍然有效的变更；不满足就报 `conflict`，什么都不动。
-- **撤到一半失败**（Hermes 拒绝某一条）报 `undo_failed`，已经撤回的保持撤回，卡片仍是待审核，再拒绝一次从剩下的接着撤。
+- **拒绝**把这张卡的变更撤回去，从新到旧，三种做法：
+  - 技能是这次新建的：整个归档到 `skills/.archive/`（Hermes 的 `archive_skill`，`hermes curator restore <名字>` 能找回）。
+  - 技能是被 Hermes 归档掉的（上面那种删除，或 curator 自己归档的旧技能）：用 Hermes 自己的恢复（`restore_skill`，就是 `hermes curator restore` 做的事），文件挪回来，Hermes 记的状态也改回在用。不用账本回退，因为回退只把文件写回去，Hermes 仍然当它是归档的，归档里那份也还留着。Hermes 的恢复总是放回技能目录顶层：原来在分类目录下的技能（`分类/名字`），回来后在顶层。
+  - 其余的修改：逐条调账本自己的回退（`rollback_entry`：先确认需要的旧内容都在，再把要被替换的现状记进账本，所以回退本身也能再回退）。
+
+  这几步在账本里都记成你（`user`）做的。
+- **不盖掉别人的修改**：拒绝前先核对四样，任何一样不满足就报 `conflict`，什么都不动：这张卡第一条变更之后，这个技能没有不属于这张卡、仍然有效的变更（夹在中间的和排在后面的都算；已经被回退的、别的卡上已经撤回的不算）；卡里相邻的变更首尾相接，后一条开始时的文件就是前一条留下的（中间有人直接改了文件，账本里没有记录，也能看出来）；卡片改过的文件现在还是它改完的样子；每撤一条之前，那一条写下的文件还是它写下的样子。
+- **撤的时候拿着 Hermes 的锁**：从重读账本、上面这些核对，到回退或恢复、写下决定，整个过程拿着 Hermes 写技能时用的那把每技能的锁（`tools/skill_manager_tool.py` 的 `_skill_mutation_lock`，跨进程的文件锁），所以核对和撤销之间不会有别的写入插进来；这时助手要改这个技能，会等到撤完再改。这把锁是 Hermes 内部的函数，不在它的插件接口里：换了一个没有它的 Hermes，照旧能拒绝，只是不加锁，日志里记一条警告；对真 Hermes 的测试会在那时失败（见「开发和测试」）。
+- **撤到一半失败**（Hermes 拒绝某一条）报 `undo_failed`，已经撤回的保持撤回并记在卡上，卡片仍是待审核，再拒绝一次从剩下的接着撤。
+- **卡片的改写不会互相盖掉**：绑定审核会话、写下决定、记下撤到哪一条，都是在一个数据库事务里重读卡片、核对、只改那几个字段。gateway 的 RPC 和 `skill_manage` 之后的钩子同时动同一张卡时，新归上去的变更不会丢；你看的时候卡上是几条变更，写下决定时还是那几条，否则报 `conflict`。
 - **账本会被 Hermes 清理**（默认 5 MB，内容文件过后回收）：清理过的变更不能再拒绝（`unavailable`），`reviews.detail` 的 `available` 是 `false`、缺的文件内容是 `null`；批准不受影响。
 - 每个 profile 有自己的技能和账本，`reviews.*` 要带那个助手的 `profile`，只看得到它自己的卡。Hermes 没有账本可读时（版本太旧）`reviews.list` 回 `available: false` 和空列表。
 
@@ -477,7 +485,7 @@ hermes -p shion plugins doctor shion  # 用 Hermes 自己的发现和注册流�
 
 ### `reviews.list`
 
-参数：无（带 `profile`）。先把账本里新的变更归到卡片上，再返回 `{"reviews": [卡片…], "available": true}`，新的在前，最多 200 张。
+参数：无（带 `profile`）。先把账本里新的变更归到卡片上，再返回 `{"reviews": [卡片…], "available": true}`，新的在前：还待审核的全部返回，不管多旧；处理过的只返回最近 200 张。
 
 ### `reviews.detail`
 
@@ -564,13 +572,13 @@ pip install pytest
 python -m pytest -q
 ```
 
-测试不装 Hermes：`tests/conftest.py` 的 `FakeCtx` 照 `PluginContext` 的接口记下 `register_rpc`、`register_tool`、`register_hook`、`on_unload`、`inject_message`，`FakeHermes` 代替 `broadcast_plugin_event` 和 `get_session_env`，`tests/test_reviews.py` 的 `FakeLedger` 照 Hermes 技能账本的行为（只记改动的文件、按 digest 取内容、回退和归档各自记账）；RPC 按 Hermes 的调用方式调（params 里留着 `profile`、`session_id`，`session_id` 另外作为关键字参数传）。存储用真的 SQLite。
+测试不装 Hermes：`tests/conftest.py` 的 `FakeCtx` 照 `PluginContext` 的接口记下 `register_rpc`、`register_tool`、`register_hook`、`on_unload`、`inject_message`，`FakeHermes` 代替 `broadcast_plugin_event` 和 `get_session_env`，`tests/test_reviews.py` 的 `FakeLedger` 照 Hermes 技能账本的行为（只记改动的文件、按 digest 取内容、回退、归档和恢复各自记账，后台删除记成归档和删除两条，撤销必须在技能的锁里做）；RPC 按 Hermes 的调用方式调（params 里留着 `profile`、`session_id`，`session_id` 另外作为关键字参数传）。存储用真的 SQLite。
 
-技能审核另外对着真的 Hermes 跑一遍（`tests/test_reviews_hermes.py`）：用 Hermes 自己的 `skill_manage` 以后台复盘的身份写技能和改技能，插件从它真的账本里读出卡片和变更前后的内容，拒绝时调它真的回滚和归档，再用它的 `restore_skill` 找回来。没装 Hermes 时这几个测试自己跳过。要跑，在容器里跑，本机只要 Docker 和 git：
+技能审核另外对着真的 Hermes 跑一遍（`tests/test_reviews_hermes.py`）：用 Hermes 自己的 `skill_manage` 以后台复盘的身份写技能、改技能、把一个技能并进另一个（删除），插件从它真的账本里读出卡片和变更前后的内容，拒绝时调它真的回滚、归档和恢复。其中三个是照着审查出的问题写的：两次自动变更之间夹着你的修改时，你的修改留着；一次后台删除只出一张卡，拒绝后技能回来、Hermes 记它在用；撤销时拿着的确实是 `skill_manage` 的那把锁（撤到一半让助手去改同一个技能，它等到撤完才改，两边都没被盖掉）。没装 Hermes 时这几个测试自己跳过。要跑，在容器里跑，本机只要 Docker 和 git：
 
 ```sh
 cd hermes-plugin
-./test-with-hermes.sh                                          # 那六个测试
+./test-with-hermes.sh                                          # 那九个测试
 ./test-with-hermes.sh python -m pytest -p no:cacheprovider -q   # 全部测试，Hermes 在旁边
 HERMES_REF=<commit> ./test-with-hermes.sh                      # 换一个 Hermes 提交试
 ```

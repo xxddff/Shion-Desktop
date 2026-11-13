@@ -3,7 +3,7 @@
 # commit with the dependencies its uv.lock pins (tests/hermes/Dockerfile), then runs
 # tests/test_reviews_hermes.py in it with this directory mounted read-only. Needs Docker and git.
 #
-#   ./test-with-hermes.sh                  the six tests
+#   ./test-with-hermes.sh                  the tests against Hermes
 #   ./test-with-hermes.sh <command...>     something else in the container, e.g. `python -m pytest -q`
 #
 #   HERMES_REF=<commit>          another Hermes than the one pinned below

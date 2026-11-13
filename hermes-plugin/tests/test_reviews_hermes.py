@@ -11,6 +11,7 @@ as Hermes's own ledger tests set theirs up (its tests/tools/test_skill_ledger.py
 
 import json
 import os
+import threading
 
 import pytest
 
@@ -46,6 +47,15 @@ Keep each note to three lines.
 """
 OLD_LINE = "Keep each note to three lines."
 NEW_LINE = "Keep each note to two lines."
+UMBRELLA = """---
+name: ci-study
+description: Use when studying. Notes and revision in one place.
+---
+
+# Study
+
+Keep each note to three lines.
+"""
 
 
 @pytest.fixture
@@ -89,13 +99,13 @@ def learn(skills, session="sess-1"):
     return (skills / "ci-notes" / "SKILL.md").read_text(encoding="utf-8")
 
 
-def revise(skills, session="sess-2"):
+def revise(skills, session="sess-2", old=OLD_LINE, new=NEW_LINE):
     """The review changes one line of it, having read it (Hermes's guard asks for that)."""
     document = skills / "ci-notes" / "SKILL.md"
 
     def patch():
         mark_background_review_skill_read(document)
-        return manage(action="patch", name="ci-notes", old_string=OLD_LINE, new_string=NEW_LINE, session_id=session)
+        return manage(action="patch", name="ci-notes", old_string=old, new_string=new, session_id=session)
 
     as_review(patch)
     return document.read_text(encoding="utf-8")
@@ -183,3 +193,92 @@ def test_a_change_made_since_is_not_taken_back_with_it(reviews, skills):
     assert refused.value.code == "conflict"
     assert (skills / "ci-notes" / "SKILL.md").read_text(encoding="utf-8") == yours
     assert [c["status"] for c in cards(reviews)] == ["pending"]
+
+
+def test_a_change_of_yours_between_two_of_the_reviews_is_kept(reviews, skills):
+    learn(skills)
+    [first] = cards(reviews)
+    reviews.decide(first["id"], "approved", first["entries"])
+    revise(skills)
+    # you have the assistant change it in the chat, and the review changes it once more in the same pass
+    manage(action="patch", name="ci-notes", old_string="# Notes", new_string="# My notes", session_id="sess-9")
+    yours = (skills / "ci-notes" / "SKILL.md").read_text(encoding="utf-8")
+    revise(skills, old=NEW_LINE, new="Keep each note to one line.")
+    latest, earlier, _ = cards(reviews)
+    # two cards: one never reaches across a change that is not the review's
+    assert (latest["entries"], earlier["entries"], latest["session"]) == (latest["entries"][:1], earlier["entries"][:1], "sess-2")
+    assert latest["id"] != earlier["id"]
+    for card in (earlier, latest, earlier):
+        if card is latest:
+            assert reviews.decide(card["id"], "rejected", card["entries"])["review"]["status"] == "rejected"
+        else:
+            # under your change: taking it back would take yours with it
+            with pytest.raises(ShionError) as refused:
+                reviews.decide(card["id"], "rejected", card["entries"])
+            assert refused.value.code == "conflict"
+    assert (skills / "ci-notes" / "SKILL.md").read_text(encoding="utf-8") == yours
+    assert [c["status"] for c in cards(reviews)] == ["rejected", "pending", "approved"]
+
+
+def test_a_skill_the_review_absorbed_is_one_card_and_rejecting_brings_it_back(reviews, skills):
+    written = learn(skills)
+    as_review(lambda: manage(action="create", name="ci-study", content=UMBRELLA, session_id="sess-1"))
+    for card in cards(reviews):
+        reviews.decide(card["id"], "approved", card["entries"])
+    as_review(lambda: manage(action="delete", name="ci-notes", absorbed_into="ci-study", session_id="sess-3"))
+    assert not (skills / "ci-notes").exists()
+    # Hermes writes the one delete down twice: the archive that did it, then the delete
+    archive, delete = reversed(skill_ledger.list_entries(skill="ci-notes")[:2])
+    assert (archive["action"], delete["action"], delete["evidence"]["archived"]) == ("archive", "delete", True)
+    [card] = [c for c in cards(reviews) if c["status"] == "pending"]
+    assert (card["skill"], card["kind"], card["session"]) == ("ci-notes", "removed", "sess-3")
+    assert card["entries"] == [archive["id"], delete["id"]]
+    detail = reviews.detail(card["id"])
+    assert [f["path"] for f in detail["files"]] == ["ci-notes/SKILL.md"]
+    assert (document(detail)["before"], document(detail)["after"]) == (written, None)
+
+    assert reviews.decide(card["id"], "rejected", card["entries"])["review"]["status"] == "rejected"
+    assert (skills / "ci-notes" / "SKILL.md").read_text(encoding="utf-8") == written
+    assert not (skills / ".archive" / "ci-notes").exists()
+    # as `hermes curator restore` leaves it: Hermes has it in use again, and wrote the restore down as yours
+    assert skill_usage.load_usage()["ci-notes"]["state"] == "active"
+    newest = skill_ledger.list_entries(skill="ci-notes")[0]
+    assert (newest["action"], newest["actor"]) == ("restore", "user")
+    assert [c["status"] for c in cards(reviews) if c["skill"] == "ci-notes"] == ["rejected", "approved"]
+    assert (skills / "ci-study" / "SKILL.md").read_text(encoding="utf-8") == UMBRELLA
+
+
+def test_a_change_is_taken_back_under_hermes_own_lock_on_the_skill(reviews, skills, monkeypatch):
+    """Between the checks and the rollback nothing else writes the skill: Hermes's writers wait for
+    the lock skill_manage takes, and the plugin holds that same lock."""
+    import fcntl
+
+    learn(skills)
+    [first] = cards(reviews)
+    reviews.decide(first["id"], "approved", first["entries"])
+    revise(skills)
+    card = cards(reviews)[0]
+    rollback, seen = skill_ledger.rollback_entry, {}
+
+    def rollback_while_the_assistant_writes(entry_id):
+        with open(skill_manager_tool._skill_lock_path("ci-notes"), "a+") as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(lock, fcntl.LOCK_UN)
+                seen["held"] = False
+            except BlockingIOError:
+                seen["held"] = True
+        # the assistant is told to change the skill at this very moment
+        seen["writer"] = threading.Thread(target=lambda: seen.update(wrote=manage(
+            action="patch", name="ci-notes", old_string="# Notes", new_string="# My notes", session_id="sess-9")))
+        seen["writer"].start()
+        seen["writer"].join(0.5)
+        seen["waited"] = seen["writer"].is_alive()
+        return rollback(entry_id)
+    monkeypatch.setattr(skill_ledger, "rollback_entry", rollback_while_the_assistant_writes)
+    assert reviews.decide(card["id"], "rejected", card["entries"])["review"]["status"] == "rejected"
+    seen["writer"].join(10)
+    assert (seen["held"], seen["waited"], "wrote" in seen) == (True, True, True)
+    # the review's change is taken back and yours came after it: neither wrote over the other
+    text = (skills / "ci-notes" / "SKILL.md").read_text(encoding="utf-8")
+    assert OLD_LINE in text and "# My notes" in text
