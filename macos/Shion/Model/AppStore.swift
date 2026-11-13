@@ -78,6 +78,9 @@ final class AppStore {
     let deliveries = Deliveries()
     /// What `runtime.describe` says the server can do (`session-transcript-v1`, …).
     @ObservationIgnored var serverCapabilities: Set<String> = []
+    /// What each session's frames last said that a snapshot says too, and where in its stream: a
+    /// snapshot older than that is not put over it (SessionWords, `resumed`).
+    @ObservationIgnored var words = SessionWords()
     /// Today, todos and reports come from the server's `shion` plugin (AppStore+Plugin.swift).
     var pluginData = false
     /// 詩音's paragraph at the top of 今天, from the plugin.
@@ -126,6 +129,7 @@ final class AppStore {
             return try await self.credential(for: settings, renew: renew)
         }
         gateway.onFrame = { [weak self] params in
+            self?.words.note(params)
             self?.noteFences(params)
             self?.noteDelivery(params)
         }
@@ -280,7 +284,7 @@ extension AppStore {
         for bot in bots where sessions[bot.id] == nil {
             guard live, gateway.phase == .online else { return }
             guard let id = try? await findBotChat(bot.id), sessions[bot.id] == nil,
-                  let snapshot = try? await gateway.call("session.resume", resumeParams(bot.id, id)),
+                  let snapshot = try? await resumed(bot.id, id),
                   sessions[bot.id] == nil  // opened meanwhile
             else { continue }
             attach(bot.id, snapshot: snapshot)
@@ -492,7 +496,7 @@ extension AppStore {
             } else {
                 let snapshot: JSONValue
                 if let id = try await findBotChat(botId) {
-                    snapshot = try await gateway.call("session.resume", resumeParams(botId, id))
+                    snapshot = try await resumed(botId, id)
                 } else {
                     snapshot = try await gateway.call("session.create", createParams(botId))
                 }
@@ -531,6 +535,27 @@ extension AppStore {
             : ["profile": .string(botId), "session_id": .string(sessionId), "display_projection": true]
     }
 
+    /// `session.resume` for a Bot Chat. Hermes reads the session with this socket already on its
+    /// stream and answers a moment later, so frames can come before a snapshot that is older than
+    /// they are (a turn that ends in that moment: its end is here, the snapshot still says it
+    /// runs and still lists what it asked). Such a snapshot is not the session as it is: it is
+    /// asked for again, a few times at most (SessionWords).
+    func resumed(_ botId: String, _ sessionId: String) async throws -> JSONValue {
+        var snapshot = try await gateway.call("session.resume", resumeParams(botId, sessionId))
+        var again = 0
+        while again < SessionWords.rereads, words.outdate(snapshot) {
+            again += 1
+            snapshot = try await gateway.call("session.resume", resumeParams(botId, sessionId))
+        }
+        return snapshot
+    }
+
+    /// Whether a turn runs in the session a snapshot is of: the newest word there is, a frame's
+    /// taken since the snapshot was read before the snapshot's own.
+    func runs(_ snapshot: JSONValue) -> Bool {
+        words.running(after: snapshot) ?? snapshot["running"]?.bool ?? false
+    }
+
     func attach(_ botId: String, snapshot: JSONValue) {
         guard let sessionId = snapshot["session_id"]?.string else { return }
         noteFences(snapshot)
@@ -546,8 +571,8 @@ extension AppStore {
             chats[botId] = uniqued(rows.flatMap(chatItems(from:)))
             olderPages[botId] = nil
         }
-        setRunning(botId, snapshot["running"]?.bool ?? false)
-        setReplying(botId, snapshot["running"]?.bool ?? false)
+        setRunning(botId, runs(snapshot))
+        setReplying(botId, runs(snapshot))
         for prompt in snapshot["prompts"]?.array ?? [] {
             addPrompt(prompt, sessionId: sessionId, botId: botId)
         }

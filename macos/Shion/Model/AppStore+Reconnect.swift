@@ -220,14 +220,15 @@ extension AppStore {
             caughtUp = await gateway.replay(sessionId, profile: botId)
         }
         guard sessions[botId] == sessionId,
-              let snapshot = try? await gateway.call("session.resume", resumeParams(botId, sessionId)),
+              let snapshot = try? await resumed(botId, sessionId),
               sessions[botId] == sessionId
         else { return }
         let reply = streaming[botId]
         // the session's run, revision, busy state and asks, as on any attach
         attach(botId, snapshot: snapshot)
         settleAsks(sessionId, snapshot: snapshot)
-        let running = snapshot["running"]?.bool == true
+        // by a frame taken since the snapshot was read, where one said (AppStore.runs)
+        let running = runs(snapshot)
         if caughtUp {
             // the rows held are whole: no page to read
             attachMarks[botId] = nil

@@ -149,7 +149,8 @@ struct SkillReviewSheet: View {
                 .accessibilityIdentifier("skill-review-talk-failure")
             }
             Composer(placeholder: "和\(bot?.name ?? "助手")讨论这个技能…", text: $talk.draft,
-                     canSend: !talk.busy && !talk.opening && !talk.retrying
+                     // not before the session is there: what is typed stays typed (SkillReviewTalk.send)
+                     canSend: talk.ready && !talk.busy && !talk.opening && !talk.retrying
                         && !talk.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                      send: { Task { await talk.send(in: store) } })
                 .disabled(store.readOnly)

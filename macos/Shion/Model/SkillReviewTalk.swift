@@ -36,6 +36,9 @@ final class SkillReviewTalk: Identifiable {
     @ObservationIgnored private var rejoining = false
 
     var id: String { review.id }
+    /// The session is there to be talked in. Not while it could not be made or put on the card:
+    /// nothing can be said then, and what is typed stays typed (`send`).
+    var ready: Bool { session != nil }
     /// The first message's id: what the assistant was given to review with (SkillReviewMaterial).
     var materialId: String { "shion-review-\(review.id)-material" }
 
@@ -86,15 +89,29 @@ final class SkillReviewTalk: Identifiable {
     /// without a receipt is there or it is not (SkillReviewDelivery), a turn runs or it does not,
     /// and the last one failed if its row says so. A reply under way keeps its bubble: what a
     /// replay brought is in it (`caughtUp`); otherwise an ellipsis stands where the part lost was.
+    ///
+    /// The snapshot is the session as Hermes read it, and its answer comes a moment later, the
+    /// session's frames coming on this socket meanwhile: a turn that ends in that moment has ended
+    /// here (its reply whole, nothing answering) before a snapshot that has neither the reply's
+    /// row nor the end. Put over what the frames said, it would take the reply away and leave the
+    /// talk answering for good, no frame being left to say otherwise. So a snapshot older than a
+    /// frame already taken is asked for again (SessionWords), and whether a turn runs is the
+    /// newest word there is: a later frame's before the snapshot's.
     func read(in store: AppStore, caughtUp: Bool = false) async throws {
         guard let session else { return }
-        let snapshot = try await store.gateway.call("session.resume", [
+        let params: JSONValue = [
             "profile": .string(review.profile), "session_id": .string(session), "display_projection": true,
-        ])
+        ]
+        var snapshot = try await store.gateway.call("session.resume", params)
+        var again = 0
+        while again < SessionWords.rereads, store.words.outdate(snapshot) {
+            again += 1
+            snapshot = try await store.gateway.call("session.resume", params)
+        }
         // the session's run and revision, which taking a failed turn back names (AppStore.rewind)
         store.noteFences(snapshot)
         let rows = snapshot["display_messages"]?.array ?? snapshot["messages"]?.array ?? []
-        let running = snapshot["running"]?.bool ?? false
+        let running = store.words.running(after: snapshot) ?? snapshot["running"]?.bool ?? false
         var fresh: [ChatItem] = []
         var places: [String: Int] = [:]
         // how the last turn ended, when Hermes closed it with a failure's row and nothing came since
@@ -177,9 +194,12 @@ final class SkillReviewTalk: Identifiable {
 
     // MARK: sending
 
+    /// What is typed goes to the session, once there is one. Before that (it could not be made,
+    /// or not put on the card: 再试一次 is over the composer) nothing is sent and the draft stays:
+    /// a bubble for it would be with nobody, and gone once the session is read.
     func send(in store: AppStore) async {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !busy, !opening, !retrying else { return }
+        guard ready, !text.isEmpty, !busy, !opening, !retrying else { return }
         draft = ""
         let id = UUID().uuidString
         items.append(ChatItem(id: id, role: .user, at: Date(), text: text))
@@ -190,7 +210,7 @@ final class SkillReviewTalk: Identifiable {
     /// all, it answers with that admission and runs nothing twice. The message moves to the
     /// bottom, after what Hermes has.
     func resend(_ id: String, in store: AppStore) async {
-        guard sent[id]?.resendable == true, !busy, !opening, !retrying,
+        guard ready, sent[id]?.resendable == true, !busy, !opening, !retrying,
               let index = items.firstIndex(where: { $0.id == id })
         else { return }
         items.append(items.remove(at: index))
@@ -201,7 +221,8 @@ final class SkillReviewTalk: Identifiable {
     /// where it is whatever comes of it, and the composer is not touched (what was typed since is
     /// yours). The receipt says Hermes has it; a refusal that it does not (没发出去, with 重发); no
     /// answer leaves it unsure, and the session is asked at once, or once the connection is back
-    /// (`read`).
+    /// (`read`). Every caller has the session (`open`, `send`, `resend`, `askAgain`): a message is
+    /// never in `items` without one.
     private func deliver(_ id: String, in store: AppStore) async {
         guard let session, let text = items.first(where: { $0.id == id })?.text else { return }
         sent[id] = .sending
