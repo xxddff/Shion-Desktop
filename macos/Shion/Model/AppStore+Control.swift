@@ -312,8 +312,9 @@ extension AppStore {
     }
 
     /// `session.mutate` rewind to `row`. A conflict names the session's fresh revision and run:
-    /// once more with them.
-    private func rewind(to row: Int, botId: String, sessionId: String) async throws -> JSONValue {
+    /// once more with them. Any session of the profile `botId`: its Bot Chat's, or the one a
+    /// skill is talked over in (SkillReviewTalk.askAgain).
+    func rewind(to row: Int, botId: String, sessionId: String) async throws -> JSONValue {
         var attempt = 0
         while true {
             attempt += 1

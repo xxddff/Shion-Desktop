@@ -16,7 +16,12 @@ import XCTest
 ///    first, naming it;
 /// 5. a turn with nothing to say (`[SILENT]`) leaves no bubble; what its review kept is a card,
 ///    and the skill it wrote is a card to look at, approved from 待你处理;
-/// 6. a second change to the skill is talked over in a session of its own, and rejected there.
+/// 6. a second change to the skill is talked over in a session of its own, and rejected there;
+/// 7. that session holds whatever becomes of a message or a turn (`reviewTalkHolds`): a message
+///    Hermes refused stays where it was said, with 重发, and what was typed meanwhile stays in the
+///    composer; a turn that failed is asked again by 再试一次; a reply goes on after this socket
+///    lost the session's events (`session.replay_gap`); a message sent as the connection went is
+///    settled by the session once it is back, sent again only when Hermes does not have it.
 /// A picture at each step (compose-*.png).
 final class ComposeTests: XCTestCase {
     private let server = "http://127.0.0.1:8765"
@@ -279,11 +284,124 @@ final class ComposeTests: XCTestCase {
         let rejected = waitForText("已拒绝 · 已撤销", in: app, timeout: 10)
         keep(window.screenshot(), "compose-9-rejected")
         XCTAssertTrue(rejected, "the rejected card does not say so")
+
+        // 7. the review's session, still open: what becomes of a message or a turn in it
+        reviewTalkHolds(app, sheet: sheet, window: window)
         element("skill-review-close", in: app).click()
         XCTAssertTrue(waitUntil(timeout: 5) { !sheet.exists }, "the review did not close")
         // the Bot Chat was not written to
         XCTAssertFalse(waitForText("审核意见（CI）", in: app, timeout: 1), "the review's talk is in the Bot Chat")
         app.terminate()
+    }
+
+    // MARK: the review's session
+
+    /// Step 7, in the review's sheet (ci/fake_skills.py scripts each sentence; the 「断线：」 ones are
+    /// ci/fake_reconnect.py's, as in a Bot Chat). A message is never taken out of the talk nor put
+    /// back in the composer, and never sent under a second id: the stand-in refuses 「排队满了（CI）」
+    /// for good under another id, and drops the socket again for a 「断线：」 sentence it has not seen.
+    @MainActor
+    private func reviewTalkHolds(_ app: XCUIApplication, sheet: XCUIElement, window: XCUIElement) {
+        let composer = element("composer", in: sheet)
+        let send = element("send", in: sheet)
+        guard composer.waitForExistence(timeout: 5) else { return XCTFail("no composer in the review") }
+        let unsent = element("review-unsent", in: sheet)
+        let unsure = element("review-unsure", in: sheet)
+        let resend = element("review-resend", in: sheet)
+
+        // a. refused, a moment after it was sent: it stays, saying so, and what was typed in the
+        // meantime is still what the composer holds; 重发 sends it again under its own id
+        composer.click()
+        composer.typeText("排队满了（CI）")
+        send.click()
+        composer.click()
+        composer.typeText("审核出错（CI）")
+        let refused = unsent.waitForExistence(timeout: 20)
+        keep(window.screenshot(), "compose-10-review-unsent")
+        // (what a message says under it is part of its row: there, the message is still in the talk)
+        XCTAssertTrue(refused, "a message Hermes refused is gone, or does not say it did not go")
+        XCTAssertTrue(waitForText("排队的消息太多了", in: sheet, timeout: 2), "it does not say why, in Hermes's reason")
+        XCTAssertEqual(composer.value as? String, "审核出错（CI）", "the composer does not hold what was typed while it was on its way")
+        if resend.waitForExistence(timeout: 3) {
+            resend.click()
+        } else {
+            XCTFail("no 重发 under the refused message")
+        }
+        XCTAssertTrue(waitForText("审核回复（CI）：排队满了（CI）", in: sheet, timeout: 15), "重发 did not get it answered")
+        XCTAssertTrue(waitUntil(timeout: 5) { !unsent.exists }, "it still says it did not go")
+        XCTAssertEqual(composer.value as? String, "审核出错（CI）", "重发 changed what the composer holds")
+
+        // b. the sentence typed meanwhile: its turn fails, which is said until 再试一次 has asked
+        // it again; the turn that failed is taken back, so the question is there once
+        XCTAssertTrue(waitUntil(timeout: 10) { send.isEnabled }, "the review still answers after the reply ended")
+        send.click()
+        let failure = element("skill-review-talk-failure", in: sheet)
+        let failed = failure.waitForExistence(timeout: 15) && waitForText("这一轮出错了", in: sheet, timeout: 5)
+        keep(window.screenshot(), "compose-11-review-failed")
+        XCTAssertTrue(failed, "a turn that failed in the review does not say so")
+        XCTAssertFalse(waitForText("rate-limited", in: sheet, timeout: 1), "Hermes's words about the failure show as a reply")
+        let again = element("skill-review-talk-retry", in: sheet)
+        if again.waitForExistence(timeout: 3) {
+            again.click()
+        } else {
+            XCTFail("no 再试一次 beside the failure")
+        }
+        XCTAssertTrue(waitForText("（重试）审核回复（CI）：审核出错（CI）", in: sheet, timeout: 20), "再试一次 did not ask the failed turn again")
+        XCTAssertTrue(waitUntil(timeout: 5) { !failure.exists }, "the failure is still said after the turn was answered")
+
+        // c. a reply during which this socket loses the session's events, the socket kept: the
+        // session is attached again, the reply is whole, and the talk is not left answering
+        composer.click()
+        composer.typeText("订阅断了（CI）")
+        XCTAssertTrue(waitUntil(timeout: 10) { send.isEnabled }, "the review still answers after the retried turn ended")
+        send.click()
+        let whole = waitForText("第2节。第3节。第4节。", in: sheet, timeout: 20) && waitForText("第8节。", in: sheet, timeout: 20)
+        keep(window.screenshot(), "compose-12-review-gap")
+        XCTAssertTrue(whole, "the reply did not go on after the session's events stopped on this socket")
+
+        // d. sent as the connection goes, before Hermes has it: unsure while away; back, the
+        // session does not have it, so it says 没发出去, and 重发 sends it under its own id
+        composer.click()
+        composer.typeText("断线：没收到")
+        XCTAssertTrue(waitUntil(timeout: 15) { send.isEnabled }, "the review is left answering after the reply that lost its events")
+        send.click()
+        let doubted = unsure.waitForExistence(timeout: 15)
+        keep(window.screenshot(), "compose-13-review-unsure")
+        XCTAssertTrue(doubted, "a message whose receipt did not come is gone, or does not say it is not known yet")
+        // (an empty field's value is its placeholder)
+        XCTAssertNotEqual(composer.value as? String, "断线：没收到", "its words were put back in the composer")
+        StandIn.tunnelUp("the review's message that never got there")
+        let notThere = unsent.waitForExistence(timeout: 45)
+        keep(window.screenshot(), "compose-14-review-not-there")
+        XCTAssertTrue(notThere, "back, the session does not have it, and the message does not say 没发出去")
+        if notThere, resend.waitForExistence(timeout: 3) {
+            XCTAssertTrue(waitUntil(timeout: 20) { resend.isEnabled }, "重发 cannot be clicked once connected")
+            resend.click()
+        }
+        let answered = waitForText("审核回复（CI）：断线：没收到", in: sheet, timeout: 20)
+        XCTAssertTrue(answered, "重发 after the connection came back did not get it answered")
+        if !answered {
+            // sent under another id, the stand-in dropped the socket again: back, for what follows
+            StandIn.tunnelUp("the review's message sent again under another id")
+        }
+        XCTAssertTrue(waitUntil(timeout: 5) { !unsent.exists && !unsure.exists }, "it still says it is not there")
+
+        // e. admitted, its receipt lost with the connection, and answered while away: back, the
+        // session has it and the answer, and nothing is sent again
+        composer.click()
+        composer.typeText("断线：还没回执")
+        XCTAssertTrue(waitUntil(timeout: 15) { send.isEnabled }, "the review still answers after the message sent again")
+        send.click()
+        XCTAssertTrue(unsure.waitForExistence(timeout: 15), "a message admitted without a receipt does not say it is not known yet")
+        StandIn.tunnelUp("the review's message admitted without its receipt")
+        let settled = waitForText("收到：断线：还没回执", in: sheet, timeout: 45)
+        keep(window.screenshot(), "compose-15-review-settled")
+        XCTAssertTrue(settled, "the answer that came while away is not in the review")
+        XCTAssertTrue(waitUntil(timeout: 10) { !unsure.exists && !unsent.exists },
+                      "the message Hermes has still says it is not known, or that it did not go")
+        XCTAssertFalse(resend.exists, "重发 under a message Hermes has")
+        // the card still answers to the server: the connection is whole again
+        XCTAssertTrue(waitUntil(timeout: 20) { send.exists && composer.isEnabled }, "the review cannot be written in after reconnecting")
     }
 
     // MARK: helpers

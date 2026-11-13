@@ -82,7 +82,10 @@ struct SkillReviewCard: View {
 }
 
 /// The talk about one skill: its card, what was said, and a composer. The first message is what
-/// the assistant was given to review with, folded away.
+/// the assistant was given to review with, folded away. A message of yours stays where you said
+/// it: one Hermes did not take says so under it, with 重发 (SkillReviewTalk.resend); a turn that
+/// failed, or a session that would not open, says so over the composer, with 再试一次
+/// (SkillReviewTalk.retry).
 struct SkillReviewSheet: View {
     @Environment(AppStore.self) private var store
     @Environment(\.dismiss) private var dismiss
@@ -108,7 +111,7 @@ struct SkillReviewSheet: View {
                         ForEach(talk.items) { item in
                             row(item, bot: bot).id(item.id)
                         }
-                        if talk.opening || (talk.busy && talk.items.last?.streaming != true) {
+                        if talk.opening || talk.retrying || (talk.busy && talk.items.last?.streaming != true) {
                             BusyDots().id("busy")
                         }
                     }
@@ -116,6 +119,12 @@ struct SkillReviewSheet: View {
                     .padding(.vertical, 4)
                 }
                 .onChange(of: talk.items.last?.text) {
+                    if let last = talk.items.last {
+                        reader.scrollTo(last.id, anchor: .bottom)
+                    }
+                }
+                // what a message says under it (没发出去, 重发) is part of its row: in view too
+                .onChange(of: talk.sent) {
                     if let last = talk.items.last {
                         reader.scrollTo(last.id, anchor: .bottom)
                     }
@@ -128,17 +137,20 @@ struct SkillReviewSheet: View {
                         .foregroundStyle(Palette.alert)
                         .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
+                    // what went wrong stays said until the new try has begun (SkillReviewTalk.retry)
                     Button("再试一次") {
-                        Task { await talk.open(in: store) }
+                        Task { await talk.retry(in: store) }
                     }
                     .controlSize(.small)
-                    .disabled(talk.opening)
+                    .disabled(talk.opening || talk.retrying || talk.busy || store.readOnly)
+                    .accessibilityIdentifier("skill-review-talk-retry")
                 }
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("skill-review-talk-failure")
             }
             Composer(placeholder: "和\(bot?.name ?? "助手")讨论这个技能…", text: $talk.draft,
-                     canSend: !talk.busy && !talk.opening && !talk.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                     canSend: !talk.busy && !talk.opening && !talk.retrying
+                        && !talk.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                      send: { Task { await talk.send(in: store) } })
                 .disabled(store.readOnly)
         }
@@ -156,19 +168,27 @@ struct SkillReviewSheet: View {
 
     @ViewBuilder
     private func row(_ item: ChatItem, bot: Bot?) -> some View {
-        if item.id == talk.materialId {
-            DisclosureGroup("给\(bot?.name ?? "助手")的审核资料：写入前的对话、这次变更、技能现在的内容") {
-                Text(item.text)
-                    .font(.t12)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.top, 4)
+        if talk.isMaterial(item) {
+            VStack(alignment: .leading, spacing: 4) {
+                DisclosureGroup("给\(bot?.name ?? "助手")的审核资料：写入前的对话、这次变更、技能现在的内容") {
+                    Text(item.text)
+                        .font(.t12)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, 4)
+                }
+                .font(.t12)
+                .accessibilityIdentifier("skill-review-material")
+                delivery(of: item)
             }
-            .font(.t12)
-            .accessibilityIdentifier("skill-review-material")
         } else if item.role == .user {
-            UserMessage(item: item)
+            let waits = talk.sent[item.id].map { $0 != .sending } ?? false
+            VStack(alignment: .trailing, spacing: 4) {
+                UserMessage(item: item)
+                    .opacity(waits ? 0.55 : 1)
+                delivery(of: item)
+            }
         } else if item.streaming {
             Text(item.text).font(.t13).textSelection(.enabled)
         } else {
@@ -177,6 +197,43 @@ struct SkillReviewSheet: View {
                 MarkdownView(blocks: MarkdownCache.shared.document(item.id, item.text).blocks)
                     .textSelection(.enabled)
             }
+        }
+    }
+
+    /// Under a message of yours Hermes has not said it has, as a Bot Chat says it (DeliveryMark):
+    /// not known yet (no answer came: the session is asked, at once or when the connection is
+    /// back), or 没发出去 with 重发, which sends the same message again under its id. Nothing
+    /// under one on its way or there.
+    @ViewBuilder
+    private func delivery(of item: ChatItem) -> some View {
+        switch talk.sent[item.id] {
+        case .unsent(let reason)?:
+            HStack(spacing: 10) {
+                Label {
+                    Text(reason.map { "没发出去：\($0)" } ?? "没发出去")
+                } icon: {
+                    Image(systemName: "exclamationmark.circle.fill")
+                        .foregroundStyle(Palette.alert)
+                }
+                .accessibilityIdentifier("review-unsent")
+                Button {
+                    Task { await talk.resend(item.id, in: store) }
+                } label: {
+                    Label("重发", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(.plain)
+                .disabled(store.readOnly || talk.busy || talk.opening || talk.retrying)
+                .accessibilityIdentifier("review-resend")
+            }
+            .font(.t12)
+            .foregroundStyle(.secondary)
+        case .unsure?, .unconfirmed?:
+            Label(store.gateway.phase == .online ? "正在向服务器确认有没有送到" : "等连上后确认", systemImage: "clock")
+                .font(.t12)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("review-unsure")
+        default:
+            EmptyView()
         }
     }
 }

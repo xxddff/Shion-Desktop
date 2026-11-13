@@ -748,7 +748,14 @@ extension AppStore {
             return pluginChanged(payload)
         }
         // a skill being talked over has a session of its own (SkillReviewTalk)
-        if reviewing?.take(type, sessionId: sessionId, payload) == true { return }
+        if let talk = reviewing, talk.take(type, sessionId: sessionId, payload) {
+            // its subscription on this socket was ended, the socket kept: it is no Bot Chat's, so
+            // noteDelivery does not see to it. Read and attached again
+            if type == "session.replay_gap" {
+                Task { await talk.rejoin(in: self) }
+            }
+            return
+        }
         guard let sessionId, let botId = sessionBots[sessionId] else { return }
         secretEvent(type, sessionId: sessionId, payload: payload)
         // a chat not opened yet has no rows to add to: its first page brings them
