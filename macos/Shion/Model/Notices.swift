@@ -16,6 +16,9 @@ nonisolated enum Notices {
         /// The board card it is about.
         var cardId: String?
         var assignee: String?
+        /// That card's title, when the notice says it (only a card done does): what is left to
+        /// tell which card it was once the board no longer lists it.
+        var cardTitle: String?
     }
 
     /// The row kinds Hermes gives turns it started itself.
@@ -28,7 +31,10 @@ nonisolated enum Notices {
         let body = withoutProvenance(text)
         let cards = kanban(body)
         if !cards.isEmpty {
-            return cards.map { Notice(event: .board, text: $0.line, cardId: $0.taskId, assignee: $0.assignee) }
+            return cards.map {
+                Notice(event: .board, text: $0.line, cardId: $0.taskId, assignee: $0.assignee,
+                       cardTitle: kanbanTitle($0.line, taskId: $0.taskId))
+            }
         }
         if let message = peerMessage(body) {
             return [Notice(event: .received(from: message.from), text: message.words)]
@@ -75,6 +81,17 @@ nonisolated enum Notices {
         }
         guard words.first == "Kanban", let id = words.dropFirst().first, !id.isEmpty else { return nil }
         return (String(id), assignee)
+    }
+
+    /// The card's title, as a notice that it is done says it: "… Kanban <id> done — title", the
+    /// title cut at 120 characters. Hermes puts the card's id there when the card has no title,
+    /// which names nothing; no other notice says the title (tui_gateway/session_notifications.py,
+    /// `_format_kanban_event_text`).
+    static func kanbanTitle(_ line: String, taskId: String) -> String? {
+        let head = line.split(separator: "\n", maxSplits: 1).first.map(String.init) ?? line
+        guard let said = head.range(of: " Kanban \(taskId) done — ") else { return nil }
+        let title = head[said.upperBound...].trimmingCharacters(in: .whitespaces)
+        return title.isEmpty || title == taskId ? nil : title
     }
 
     /// What a notice line says happened, in Chinese, and whether the card stopped for it.

@@ -7,41 +7,45 @@ extension AppStore {
     // MARK: as they come
 
     /// A turn Hermes started itself says with what, as it starts (`message.start` with a card's
-    /// `display_kind`, `display_text` and the turn's `text`: gateway/session_automation.py).
+    /// `display_kind`, `display_text` and the turn's `text`: gateway/session_automation.py). The
+    /// card the notice was told with, if it was, is this one, and comes to where its turn begins:
+    /// it may have waited behind another turn for as long as that took.
     func noteTurnStart(_ payload: JSONValue, in botId: String) {
         guard let text = payload["text"]?.string, !text.isEmpty else { return }
-        addLive(Notices.read(text, kind: payload["display_kind"]?.string, display: payload["display_text"]?.string),
-                to: botId)
+        let notices = Notices.read(text, kind: payload["display_kind"]?.string, display: payload["display_text"]?.string)
+        for card in Self.noticeCards(notices, id: NoticeCards.id(.begun), at: Date()) {
+            NoticeCards.begin(card, in: &chats[botId, default: []]) { Self.notice($0) }
+        }
     }
 
-    /// The board's word as Hermes's own poller sends it, just before the turn it starts
+    /// The board's word as Hermes's own poller sends it, ahead of the turn it starts
     /// (`status.update`, kind process). Other status lines are not for the chat.
     func noteStatus(_ payload: JSONValue, in botId: String) {
         guard payload["kind"]?.string == "process", let text = payload["text"]?.string else { return }
-        addLive(Notices.read(text, kind: nil, display: nil).filter { $0.event == .board }, to: botId)
-    }
-
-    private func addLive(_ notices: [Notices.Notice], to botId: String) {
-        for card in Self.noticeCards(notices, id: UUID().uuidString, at: Date()) where !has(card, in: botId) {
-            append(card, to: botId)
+        let notices = Notices.read(text, kind: nil, display: nil).filter { $0.event == .board }
+        for card in Self.noticeCards(notices, id: NoticeCards.id(.told), at: Date()) {
+            NoticeCards.tell(card, in: &chats[botId, default: []]) { Self.notice($0) }
         }
     }
 
-    /// The same card is in the chat already: under its row's id, or (one that came live has no
-    /// row's id yet) saying the same thing within a few minutes of it.
-    private func has(_ card: ChatItem, in botId: String) -> Bool {
-        (chats[botId] ?? []).contains { held in
-            held.id == card.id || (held.role == .card && held.event == card.event && held.text == card.text
-                                   && abs(held.at.timeIntervalSince(card.at)) < 300)
-        }
+    /// A chat's item as NoticeCards tells notices apart: only an event's card says a notice.
+    private static func notice(_ item: ChatItem) -> NoticeCards.Held {
+        NoticeCards.Held(id: item.id, event: item.role == .card ? item.event : nil, text: item.text, at: item.at)
     }
+
+    /// How many of the newest rows are read for what started a turn, and how many when a card
+    /// whose turn is over still has no row: more turns came while away than the first read reached.
+    private static let noticeRows = 12
+    private static let noticeRowsAtMost = 60
 
     /// A turn this Mac did not start (the board's word, another assistant's message, a background
     /// result): Hermes stores what started it as a row and tells a viewer nothing more, so the
     /// newest rows are read for it. At the turn's start, unless it plainly answers a message of
     /// yours, and at the end of a turn that was not one of yours (the row is written as the turn
-    /// begins, a moment after the start is announced). The cards among them that the chat does not
-    /// have go in where they belong in time; a later read of the page has them under the same ids.
+    /// begins, a moment after the start is announced). A row takes the place of the card that
+    /// came for it as a frame, live or replayed, and brings its own id and time; a row no card
+    /// came for goes in where it belongs in time; two rows are two cards, whatever they say
+    /// (NoticeCards.swift). A later read of the page has them under the same ids.
     func followNotices(_ botId: String, atStart: Bool) {
         guard pagesTranscripts, loadedChats.contains(botId), let sessionId = sessions[botId] else { return }
         if atStart, awaitsOwnReply(botId) { return }
@@ -49,12 +53,19 @@ extension AppStore {
             if atStart {
                 try? await Task.sleep(for: .milliseconds(600))
             }
-            guard let page = try? await gateway.call("session.transcript", [
-                "profile": .string(botId), "session_id": .string(sessionId), "order": "latest", "limit": 12,
-            ]), sessions[botId] == sessionId, loadedChats.contains(botId) else { return }
-            for card in transcriptItems(page) where card.role == .card && card.event?.startsTurn == true && !has(card, in: botId) {
-                let index = (chats[botId] ?? []).lastIndex { $0.at <= card.at }.map { $0 + 1 } ?? 0
-                chats[botId, default: []].insert(card, at: index)
+            var limit = Self.noticeRows
+            while true {
+                guard let page = try? await gateway.call("session.transcript", [
+                    "profile": .string(botId), "session_id": .string(sessionId), "order": "latest",
+                    "limit": .number(Double(limit)),
+                ]), sessions[botId] == sessionId, loadedChats.contains(botId) else { return }
+                for card in transcriptItems(page) where card.role == .card && card.event?.startsTurn == true {
+                    NoticeCards.put(row: card, in: &chats[botId, default: []]) { Self.notice($0) }
+                }
+                // a turn that is over has its row: once more, further up, for a card still without one
+                guard !atStart, limit < Self.noticeRowsAtMost, page["next_cursor"]?.string != nil,
+                      NoticeCards.awaitsRow(chats[botId] ?? [], as: { Self.notice($0) }) else { return }
+                limit = Self.noticeRowsAtMost
             }
         }
     }

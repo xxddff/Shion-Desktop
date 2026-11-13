@@ -69,6 +69,13 @@ before saying so does not take the rest of the test with it:
   跟不上     40 parts 0.25 s apart; the 6th does not fit: the socket's subscription is retired and
              it gets a session.replay_gap instead, the socket kept. Nothing drops; the 6th part is
              only in the kept frames, so Shion has it from its replay on the same socket
+  回传       a short reply, then the socket drops; while Shion is away Hermes starts three turns by
+             itself, with what came in the user's name (`unasked`): the board's word that a card is
+             done, told ahead with a status line, its row dated an hour before (as when it came
+             long before Shion was back) and its card on no board any more (as one archived
+             since); then the same message from another assistant twice, two minutes apart. Shion
+             has their frames from its replay, which say neither when nor which row, and their
+             rows from the transcript
 
 Stdlib only.
 """
@@ -470,11 +477,13 @@ def scripted(handler, what, session_id, submission, text, profile, rid):
     return True
 
 
-def keep(session_id, role, text):
+def keep(session_id, role, text, at=None, **more):
+    """A row of the session's transcript, dated now unless `at` says when."""
     row_id = next(row_ids)
     with state["lock"]:
         state["transcripts"].setdefault(session_id, []).append(
-            {"row_id": row_id, "row_kind": "message", "role": role, "text": text, "timestamp": time.time()})
+            {"row_id": row_id, "row_kind": "message", "role": role, "text": text,
+             "timestamp": time.time() if at is None else at, **more})
     return row_id
 
 
@@ -625,6 +634,59 @@ def lagging(turn):
     end(turn)
 
 
+GONE_CARD, GONE_TITLE = "t_ci_gone", "归档旧发票（CI）"
+AWAY_NOTICE = f"✔ [study] @study Kanban {GONE_CARD} done — {GONE_TITLE}\n发票都归好了（CI）。"
+AWAY_NOTICE_REPLY = "课程把旧发票归好了（CI）。"
+AWAY_PEER = "Message from 🤖 课程 (@study): 收到（CI）"
+AWAY_PEER_REPLIES = ["知道课程收到了（CI）。", "课程又说了一遍收到（CI）。"]
+
+
+def notices(turn):
+    begin(turn)
+    time.sleep(0.2)
+    say(turn, "好（CI）。")
+    end(turn)
+    time.sleep(0.5)
+    drop(turn["handler"], "after a short reply, before what Hermes starts by itself", turn["meanwhile"])
+    session_id, now = turn["session_id"], time.time()
+    # the board's word, long before Shion is back; then the same words from 课程 twice, 120 s apart
+    unasked(session_id, AWAY_NOTICE, AWAY_NOTICE_REPLY, now - 3600, told=True)
+    unasked(session_id, AWAY_PEER, AWAY_PEER_REPLIES[0], now - 130)
+    unasked(session_id, AWAY_PEER, AWAY_PEER_REPLIES[1], now - 10)
+    turn["meanwhile"].set()  # all three over while Shion was away: its replay has them
+
+
+def unasked(session_id, text, reply, at, told=False):
+    """A turn Hermes starts by itself, with what it gives the assistant in the user's name (the
+    board's word, another assistant's message). A status line first when Hermes tells of it ahead of
+    the turn (tui_gateway/session_notifications.py: once, when it has the notice, however long the
+    turn then waits); the row it is stored with, dated `at`, of the kind Hermes gives such turns;
+    the turn's start, saying with what (gateway/session_automation.py admission_display:
+    display_kind, display_text and the turn's text; no row, no time); the reply and its row; the
+    end, which names the rows and no submission."""
+    if told:
+        publish(session_id, "status.update", {"kind": "process", "text": text})
+    with bus:
+        current = fence(session_id)
+        current["generation"] += 1
+        generation = current["generation"]
+    kind = "internal_notification"
+    user_row = keep(session_id, "user", text, at, display_kind=kind, display_metadata={"display_text": text})
+    publish(session_id, "message.start", {"display_kind": kind, "display_text": text, "text": text}, generation)
+    for start in range(0, len(reply), CHUNK):
+        publish(session_id, "message.delta", {"text": reply[start:start + CHUNK]}, generation)
+    answer_row = keep(session_id, "assistant", reply, at + 5)
+    with bus:
+        fence(session_id)["revision"] += 1
+    publish(session_id, "message.complete", {
+        "text": reply, "content": reply, "status": "complete", "outcome": "completed",
+        "persisted_turn": {"row_ids": [user_row, answer_row], "complete": True, "user_row_id": user_row,
+                           "user_row_ids": [user_row], "final_assistant_row_id": answer_row},
+    }, generation)
+    publish_pending(session_id)
+    log(f"  -> a turn Hermes started itself on {session_id}: {text.splitlines()[0]!r}, its row dated {time.time() - at:.0f} s ago")
+
+
 def retire(handler, session_id):
     """The owner gives up on a viewer that cannot keep up: its subscription goes, its socket stays,
     and it gets one session.replay_gap in place of the frame that did not fit, naming the newest
@@ -663,7 +725,7 @@ def expire(attachments):
 
 
 SCRIPTS = {"讲到一半": halfway, "讲完了": finished, "还没回执": unacked, "没收到": None, "等你批准": approval,
-           "说很多": flood, "跟不上": lagging}
+           "说很多": flood, "跟不上": lagging, "回传": notices}
 
 
 def respond(handler, params, rid):

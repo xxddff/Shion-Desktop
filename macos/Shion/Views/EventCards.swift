@@ -78,6 +78,8 @@ struct NoticeCard: View {
 
 /// The board's word on a card this chat made: the card as it is now (its chip follows the board),
 /// and under it what happened then, in plain words, with what was handed in or why it stopped.
+/// Once the board no longer lists the card (archived), the chip still says which it was, without
+/// a status: by the title the notice gives, or the card's id (AppStore.chatCard).
 struct BoardNoticeCard: View {
     @Environment(AppStore.self) private var store
     let item: ChatItem

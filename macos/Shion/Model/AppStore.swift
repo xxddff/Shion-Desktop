@@ -566,7 +566,13 @@ extension AppStore {
         let recent = rows.suffix(8)
         // nor a card put in from the newest rows meanwhile (followNotices), which the page has under the same id
         let streamed = held[mark...].filter { item in
-            item.streaming || !(recent.contains { $0.role == item.role && $0.text == item.text } || rows.contains { $0.id == item.id })
+            if item.streaming { return true }
+            // a notice's card that came as a frame: its row, anywhere on the page, is the card (NoticeCards.swift)
+            if NoticeCards.stage(of: item.id) != nil,
+               rows.contains(where: { $0.role == .card && $0.event == item.event && $0.text == item.text }) {
+                return false
+            }
+            return !(recent.contains { $0.role == item.role && $0.text == item.text } || rows.contains { $0.id == item.id })
         }
         chats[botId] = rows + uniqued(streamed, besides: rows)
         olderPages[botId] = page["next_cursor"]?.string
@@ -692,7 +698,7 @@ extension AppStore {
     static func noticeCards(_ notices: [Notices.Notice], id: String, at: Date) -> [ChatItem] {
         notices.enumerated().map { index, notice in
             ChatItem(id: index == 0 ? id : "\(id)-card\(index + 1)", role: .card, at: at, text: notice.text,
-                     event: notice.event, cardId: notice.cardId, cardAssignee: notice.assignee)
+                     event: notice.event, cardId: notice.cardId, cardTitle: notice.cardTitle, cardAssignee: notice.assignee)
         }
     }
 

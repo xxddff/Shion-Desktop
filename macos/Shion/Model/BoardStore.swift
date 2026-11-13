@@ -1146,20 +1146,27 @@ extension AppStore {
             }
     }
 
-    /// The card a chat row stands for: in the demo, a demo card; connected, the server's card by
-    /// its id, or else by the title and assignee it was made with (a transcript keeps the
-    /// kanban_create call, not its result). `known` is false when the server has no such card
-    /// (yet): the row's own title and assignee, without a status.
+    /// The card a chat row stands for: in the demo, a demo card; connected, the server's card. A
+    /// row that names its card (the board's notice, a card made while the chat was open) is that
+    /// card and no other: when no board lists it (put away since, or made a moment ago), it shows
+    /// as the row itself says it (`unlisted`), never as another card of the same title. A row that
+    /// names none (a transcript keeps the kanban_create call, not its result) is found by the
+    /// title and assignee it was made with. `known` is false when no board has the card: without
+    /// a status.
     func chatCard(_ item: ChatItem) -> (card: Card, known: Bool)? {
         guard board.active else {
-            // the demo's cards, or the last data's: by id, else (a call read from the transcript) by title
-            let found = item.cardId.flatMap { card($0) }
-                ?? item.cardTitle.flatMap { title in cards.first { $0.title == title } }
-            return found.map { (card: $0, known: true) }
+            // the demo's cards, or the last data's
+            if let id = item.cardId {
+                return card(id).map { (card: $0, known: true) } ?? unlisted(item, id: id)
+            }
+            return item.cardTitle.flatMap { title in cards.first { $0.title == title } }.map { (card: $0, known: true) }
         }
         let all = serverCards
-        if let id = item.cardId, let found = all.first(where: { $0.id == id }) {
-            return (card: found.card, known: true)
+        if let id = item.cardId {
+            if let found = all.first(where: { $0.id == id }) {
+                return (card: found.card, known: true)
+            }
+            return unlisted(item, id: id)
         }
         guard let title = item.cardTitle, !title.isEmpty else { return nil }
         let named = all.filter { $0.title == title && (item.cardAssignee == nil || $0.assignee == item.cardAssignee) }
@@ -1170,6 +1177,18 @@ extension AppStore {
         }
         let unknown = Card(id: item.id, title: title, assignee: item.cardAssignee ?? "", status: .queued, line: "", updatedAt: item.at)
         return (card: unknown, known: false)
+    }
+
+    /// The card of a row that names one no board lists: which card it was is still said, by what
+    /// is left to say it. As 工作记录 read it, when it is an archived card read there
+    /// (BoardStore.archived); else by the title the row has (the one it was made with, or the one
+    /// its notice says: only a card done says it, Notices.kanbanTitle); else by its id.
+    private func unlisted(_ item: ChatItem, id: String) -> (card: Card, known: Bool) {
+        let kept = board.archived.values.joined().first { $0.id == id }
+        let said = item.cardTitle.flatMap { $0.isEmpty ? nil : $0 }
+        let card = Card(id: item.id, title: kept?.title ?? said ?? "卡片 \(id)",
+                        assignee: kept?.assignee ?? item.cardAssignee ?? "", status: .queued, line: "", updatedAt: item.at)
+        return (card: card, known: false)
     }
 
     /// Every board's cards as 今天 and the chats show them.
