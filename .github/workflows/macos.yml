@@ -8,7 +8,8 @@ name: macOS app
 # A downloadable Release build (Shion.dmg) is made on full manual runs, or when the commit message
 # contains [package]. A manual run can also do less (`run`): only build, the debug app for the
 # tests and the release app as it is packaged (which leaves the screenshots' made-up day out), or
-# build and run one suite against the stand-in.
+# build and run one suite against the stand-in, with more named beside it (`suites`), each on its
+# own runner: what failed is run again in about six minutes, not the eighteen of everything.
 #
 # UI tests own the screen, so a runner runs one suite at a time; the run is split over runners:
 #   build        compiles for testing once and hands the products on (test-products, a tar: a
@@ -49,6 +50,10 @@ on:
           - WorkTests
           - SecretsTests
           - ExtrasTests
+      suites:
+        description: with one suite chosen above, more suites to run beside it (their names, separated by spaces)
+        type: string
+        default: ''
 
 concurrency:
   group: macos-${{ github.ref }}
@@ -56,6 +61,7 @@ concurrency:
 
 env:
   SHION_RUN: ${{ inputs.run || 'all' }}
+  SHION_SUITES: ${{ inputs.suites }}
 
 jobs:
   build:
@@ -83,7 +89,8 @@ jobs:
           echo "id=$( (sw_vers -buildVersion; xcodebuild -version; uname -m) | shasum -a 256 | cut -c1-12)" >> "$GITHUB_OUTPUT"
 
       # which suites go to which runner: about twelve minutes each (the times of runs 189 and 191), so the shards
-      # end before the screenshots do; one suite when the run asks for one
+      # end before the screenshots do; when the run asks for one suite, that one and any named
+      # beside it, a runner each
       - name: Plan the end-to-end shards
         id: plan
         run: |
@@ -92,7 +99,14 @@ jobs:
                      {"id":"2","suites":"BotPageTests BoardTests QuickAskTests MediaTests"},
                      {"id":"3","suites":"ReconnectTests BotsTests ChatControlTests ComposeTests WorkTests"}]'
           else
-            shards="[{\"id\":\"$SHION_RUN\",\"suites\":\"$SHION_RUN\"}]"
+            shards="" seen=""
+            for suite in $SHION_RUN $SHION_SUITES; do
+              case "$suite" in *[!A-Za-z]*) echo "not a suite's name: $suite"; exit 1 ;; esac
+              case " $seen " in *" $suite "*) continue ;; esac
+              seen="$seen $suite"
+              shards="$shards${shards:+,}{\"id\":\"$suite\",\"suites\":\"$suite\"}"
+            done
+            shards="[$shards]"
           fi
           echo "shards=$(printf '%s' "$shards" | tr -s '\n ' '  ')" >> "$GITHUB_OUTPUT"
           echo "$shards"
