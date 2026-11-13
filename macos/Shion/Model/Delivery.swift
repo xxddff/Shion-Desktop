@@ -67,10 +67,11 @@ nonisolated enum DeliveryCheck {
 
     // MARK: a message put into a running turn
 
-    /// The chat's other messages in the same words as one about to be put into a running turn
-    /// (`session.steer`, `session.redirect`), as they stood then: what Hermes may already have
-    /// that reads the same. A correction has no receipt, so only a row of the transcript can say
-    /// it got there, and it must not be one of these.
+    /// The chat's other messages in the same words as a message, as they stood when it was said:
+    /// what Hermes may already have had that reads the same. A message put into a running turn
+    /// (`session.steer`, `session.redirect`) has no receipt, so only a row of the transcript can
+    /// say it got there, and it must not be one of these; nor does a page read in the chat's
+    /// place stand for a message still on its way because one of these is on it.
     nonisolated struct Before: Equatable, Sendable {
         /// The transcript rows they are known to be stored as.
         var rows: Set<Int> = []

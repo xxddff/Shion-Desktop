@@ -19,6 +19,12 @@ final class ChatControl {
     /// A prompt sent from here (its chat item's id, which is also its `submission_id`) → the
     /// transcript row Hermes stored it as (`message.complete.persisted_turn`).
     @ObservationIgnored var storedRows: [String: Int] = [:]
+    /// session id → the transcript rows that have each confirmed a message put into a running
+    /// turn as the connection went (AppStore.settleCorrections). Such a message has no receipt,
+    /// so a row of yours in its words is all that says it got there, and a row says so of one
+    /// message only: kept for as long as the session is the chat's, so a later look does not
+    /// give the same row to another message in the same words.
+    @ObservationIgnored var confirmedRows: [String: Set<Int>] = [:]
 
     struct Fence {
         var generation: Int?

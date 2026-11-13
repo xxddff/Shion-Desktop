@@ -98,8 +98,12 @@ extension AppStore {
                  sending: Sending) async throws {
         if params["attachments"] == nil, let text = params["text"],
            let correction = sending.correction(running: turnRunning(botId), generation: control.fences[sessionId]?.generation) {
-            // should the connection go before the answer: what else in the chat reads the same
-            deliveries.aim(id, past: sameWords(as: id, in: botId))
+            // should the connection go before the answer: what else in the chat read the same
+            // when it was said (`say`). Not asked of the chat now: it may have been read again
+            // while this waited to go, and its item taken for an older row in the same words
+            if deliveries.sent[id]?.before == nil {
+                deliveries.aim(id, past: sameWords(as: id, in: botId))
+            }
             let answer: JSONValue?
             do {
                 answer = try await gateway.call(correction.method, [
@@ -126,10 +130,15 @@ extension AppStore {
 
     /// The chat's other messages in the same words as item `id` that Hermes has or may have, as
     /// they stand now (DeliveryCheck.Before): those stored as a known row, and how many more are
-    /// not known not to be there (said and not stored yet, or their own receipt still out).
-    private func sameWords(as id: String, in botId: String) -> DeliveryCheck.Before {
+    /// not known not to be there (said and not stored yet, or their own receipt still out). The
+    /// words are the item's, or (the item gone from the chat) the ones it was sent with, as a
+    /// row shows them.
+    func sameWords(as id: String, in botId: String) -> DeliveryCheck.Before {
         var before = DeliveryCheck.Before()
-        guard let items = chats[botId], let words = items.first(where: { $0.id == id })?.text else { return before }
+        let items = chats[botId] ?? []
+        guard let words = items.first(where: { $0.id == id })?.text
+            ?? deliveries.sent[id].map({ Self.userItem(id: id, at: $0.at, text: $0.text).text })
+        else { return before }
         for item in items where item.role == .user && item.id != id && item.text == words {
             switch deliveries.state(item.id) {
             case .unsent?, .unconfirmed?:

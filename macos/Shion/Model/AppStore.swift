@@ -580,7 +580,8 @@ extension AppStore {
     }
 
     /// The newest page of a resumed transcript (`session.transcript`, latest first), in place of
-    /// whatever was held, keeping what streamed in since the attach.
+    /// whatever was held, keeping what streamed in since the attach, and any message of yours
+    /// Hermes has not said it has unless a row of the page can be it (`onPage`).
     func loadLatestPage(_ botId: String) async throws {
         guard let sessionId = sessions[botId] else { return }
         let page = try await gateway.call("session.transcript", [
@@ -593,9 +594,13 @@ extension AppStore {
         let mark = min(attachMarks.removeValue(forKey: botId) ?? 0, held.count)
         // a turn that finished between the attach and this read is in both: keep the page's copy
         let recent = rows.suffix(8)
+        // a message of yours still on its way, in doubt or not sent: not what an older row in
+        // the same words stands for (AppStore+Reconnect.swift)
+        let own = onPage(held, page: page, rows: rows, botId: botId)
         // nor a card put in from the newest rows meanwhile (followNotices), which the page has under the same id
         let streamed = held[mark...].filter { item in
             if item.streaming { return true }
+            if let there = own[item.id] { return !there }
             // a notice's card that came as a frame: its row, anywhere on the page, is the card (NoticeCards.swift)
             if NoticeCards.stage(of: item.id) != nil,
                rows.contains(where: { $0.role == .card && $0.event == item.event && $0.text == item.text }) {
@@ -603,7 +608,9 @@ extension AppStore {
             }
             return !(recent.contains { $0.role == item.role && $0.text == item.text } || rows.contains { $0.id == item.id })
         }
-        chats[botId] = rows + uniqued(streamed, besides: rows)
+        // one said before the attach is not on the page either: it stays, ahead of what came since
+        let waiting = held[..<mark].filter { own[$0.id] == false }
+        chats[botId] = rows + uniqued(waiting + streamed, besides: rows)
         olderPages[botId] = page["next_cursor"]?.string
         olderErrors[botId] = nil
     }

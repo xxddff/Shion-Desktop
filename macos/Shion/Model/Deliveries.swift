@@ -21,8 +21,10 @@ final class Deliveries {
         /// The pictures and files that went with the words, up on the server already: 重发 sends
         /// them again.
         var drafts: [Draft] = []
-        /// Put into a running turn: the chat's other messages in the same words as it went
-        /// (DeliveryCheck.Before), should the connection go before Hermes answers.
+        /// The chat's other messages in the same words as it was said (DeliveryCheck.Before): what
+        /// Hermes had, or may have had, that reads the same. Taken then and kept here, not read
+        /// off the chat later: by the time it is needed (no receipt came, and only the transcript
+        /// can say whether it got there) the chat may have been read again and its item replaced.
         var before: DeliveryCheck.Before?
     }
 
@@ -30,16 +32,21 @@ final class Deliveries {
 
     func state(_ id: String) -> Delivery? { sent[id]?.state }
 
-    /// Sent now, as the chat's item `id`; the server has not said it has it yet.
-    func track(_ id: String, botId: String, text: String, at: Date, drafts: [Draft] = []) {
-        sent[id] = seen.contains(id) ? nil : Sent(botId: botId, text: text, at: at, state: .sending, drafts: drafts)
+    /// Sent now, as the chat's item `id`; the server has not said it has it yet. `before` is what
+    /// else in the chat read the same as it was said; a message already followed keeps the one
+    /// it has (it is said once, and may go out a moment later).
+    func track(_ id: String, botId: String, text: String, at: Date, drafts: [Draft] = [],
+               before: DeliveryCheck.Before? = nil) {
+        let before = before ?? sent[id]?.before
+        sent[id] = seen.contains(id) ? nil
+            : Sent(botId: botId, text: text, at: at, state: .sending, drafts: drafts, before: before)
     }
 
     func set(_ id: String, _ state: Delivery) {
         sent[id]?.state = state
     }
 
-    /// It is about to be put into a running turn, with these others in the same words in the chat.
+    /// What else in the chat reads the same as it, as it stands now (a message sent again).
     func aim(_ id: String, past before: DeliveryCheck.Before) {
         sent[id]?.before = before
     }

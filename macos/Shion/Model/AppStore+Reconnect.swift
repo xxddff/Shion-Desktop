@@ -39,6 +39,9 @@ extension AppStore {
         while let sentence = sentences.first {
             let text = sentence.line(sentAt: Date())
             chats[botId, default: []].append(Self.userItem(id: sentence.id, at: Date(), text: text))
+            // followed as it is said, with what else in the chat reads the same now (`say`)
+            deliveries.track(sentence.id, botId: botId, text: text, at: Date(),
+                             before: sameWords(as: sentence.id, in: botId))
             guard await submit(text, id: sentence.id, to: botId, sessionId: sessionId) else {
                 chats[botId]?.removeAll { $0.id == sentence.id }
                 return QuickAsk.shared.putBack(sentences)
@@ -61,6 +64,10 @@ extension AppStore {
         let sending = settled(mode, to: botId, sessionId: sessionId)
         // as the transcript will show it: words a retry sends again can start with their files' `@file:` lines
         chats[botId, default: []].append(Self.userItem(id: id, at: written, text: text))
+        // followed from this moment, with what else in the chat reads the same now: it may wait
+        // for the chat to be attached again before it goes, and the chat be read again meanwhile
+        // (loadLatestPage), which must not take it for an older message in the same words
+        deliveries.track(id, botId: botId, text: text, at: written, before: sameWords(as: id, in: botId))
         Task {
             if await !submit(text, id: id, to: botId, sessionId: sessionId, sending: sending) {
                 requeue(id, text: text, at: written, to: botId)
@@ -73,7 +80,8 @@ extension AppStore {
     /// has it; a refusal that it does not (没发出去, with 重发); no answer, the connection having gone,
     /// leaves it unsure until the server can say (`comeBack`). False when it did not go out at all:
     /// no connection by the time it could. While the assistant is still in the turn it was sent
-    /// for, `sending` may put it into that turn instead (AppStore+Compose.swift).
+    /// for, `sending` may put it into that turn instead (AppStore+Compose.swift). What else in the
+    /// chat read the same when it was said stays on its record (Deliveries.track).
     @discardableResult
     func submit(_ text: String, id: String, to botId: String, sessionId: String, sending: Sending = .queued) async -> Bool {
         deliveries.track(id, botId: botId, text: text, at: Date())
@@ -129,6 +137,8 @@ extension AppStore {
         var item = Self.userItem(id: id, at: written, text: sent.text)
         item.media = media
         chats[botId, default: []].append(item)
+        // said again now: what else reads the same is what the chat has at this moment
+        deliveries.aim(id, past: sameWords(as: id, in: botId))
         Task {
             if !sent.drafts.isEmpty {
                 await submit(sent.text, sent.drafts, botId: botId, sessionId: sessionId, submission: id, again: false)
@@ -308,7 +318,10 @@ extension AppStore {
     /// with the frames replayed they are the ones from before, where the same words can only be
     /// an earlier message. Found, it is an ordinary message again: the page's row where the chat
     /// was read again, else the item itself, marked as part of that turn. Not found (or the page
-    /// could not be read), it stays as it is, in doubt, and is never sent again by itself.
+    /// could not be read), it stays as it is, in doubt, and is never sent again by itself. A row
+    /// that confirmed one message is that message's for as long as the session is the chat's
+    /// (ChatControl.confirmedRows): at the next look it does not confirm another in the same
+    /// words, which was not there to be found the first time.
     private func settleCorrections(_ botId: String, _ sessionId: String) async {
         let unconfirmed = deliveries.unconfirmed(in: botId)
         guard !unconfirmed.isEmpty else { return }
@@ -321,7 +334,7 @@ extension AppStore {
                 .map { StoredUserRow(text: $0.text, at: $0.at, row: DeliveryCheck.row(of: $0.id)) }
         }
         guard sessions[botId] == sessionId else { return }
-        var taken: Set<Int> = []
+        var taken = control.confirmedRows[sessionId] ?? []
         for (id, sent) in unconfirmed where deliveries.state(id) == .unconfirmed {
             // as a row shows it: a file's `@file:` line is not among its words
             let item = Self.userItem(id: id, at: sent.at, text: sent.text)
@@ -336,6 +349,7 @@ extension AppStore {
             deliveries.arrived(id)
             guard let row = stored.row else { continue }
             taken.insert(row)
+            control.confirmedRows[sessionId, default: []].insert(row)
             if chats[botId]?.contains(where: { $0.id == "row-\(row)" }) == true {
                 // the chat was read again and has the row: this is the same message
                 chats[botId]?.removeAll { $0.id == id }
@@ -344,6 +358,43 @@ extension AppStore {
                 control.storedRows[id] = row
             }
         }
+    }
+
+    /// The messages of yours in `held` that Hermes has not said it has, when a page is read in the
+    /// chat's place (loadLatestPage): true where a row of the page is that message, so the page's
+    /// copy stands for it; false where none can be, so its bubble stays under the page with what
+    /// it says about getting there. A row that names the submission is it (Hermes keeps a
+    /// prompt's `submission_id` on its row), and Hermes has it. Without one, a row of yours in the
+    /// same words that the chat did not have in those words when the message was said, and that
+    /// no other message has (DeliveryCheck.stored, as `settleCorrections` looks): never a row
+    /// that was there before, which reads the same and is another message. One Hermes refused,
+    /// or a turn did not take, is on no row.
+    func onPage(_ held: [ChatItem], page: JSONValue, rows: [ChatItem], botId: String) -> [String: Bool] {
+        let named = Set((page["rows"]?.array ?? []).compactMap { $0["display_metadata"]?["submission_id"]?.string })
+        let stored = rows.filter { $0.role == .user }
+            .map { StoredUserRow(text: $0.text, at: $0.at, row: DeliveryCheck.row(of: $0.id)) }
+        var taken = sessions[botId].flatMap { control.confirmedRows[$0] } ?? []
+        var there: [String: Bool] = [:]
+        for item in held where item.role == .user {
+            guard let sent = deliveries.sent[item.id] else { continue }
+            if named.contains(item.id) {
+                there[item.id] = true
+                deliveries.arrived(item.id)
+                continue
+            }
+            switch sent.state {
+            case .unsent, .declined:
+                there[item.id] = false
+            case .sending, .unsure, .unconfirmed:
+                let before = sent.before ?? sameWords(as: item.id, in: botId)
+                let row = DeliveryCheck.stored(item.text, before: before, taken: taken, page: stored).first
+                there[item.id] = row != nil
+                if let number = row?.row {
+                    taken.insert(number)
+                }
+            }
+        }
+        return there
     }
 
     // MARK: the sidebar
