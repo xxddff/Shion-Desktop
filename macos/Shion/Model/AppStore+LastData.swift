@@ -90,6 +90,11 @@ nonisolated struct StoredTodo: Codable, Sendable {
     var dueAt: Date?
     var doAllDay: Bool?
     var dueAllDay: Bool?
+    /// A whole day's date in words (`2026-11-13`, WholeDay.swift): the day itself, where `doAt` /
+    /// `dueAt` is only where it started in the time zone the Mac was in when this was written.
+    /// Nil for a date with a time, and in a file written before days were kept.
+    var doDay: String?
+    var dueDay: String?
     var done: Bool
     var nudges: Int
     var proposed: Bool
@@ -172,7 +177,9 @@ extension AppStore {
         chats = Dictionary(bots.map { bot in (bot.id, (pages[bot.id] ?? []).compactMap { $0.item }) },
                            uniquingKeysWith: { first, _ in first })
         asks = []
-        todos = file.todos?.map { $0.todo } ?? demo?.todos ?? []
+        // a whole day is its day in the time zone the Mac is in now, not the one it was kept in
+        let zone = Fmt.zone
+        todos = file.todos?.map { $0.todo(in: zone) } ?? demo?.todos ?? []
         reports = file.reports?.map { $0.report } ?? demo?.reports ?? []
         todaySummary = file.today
         cards = file.cards?.map { $0.card } ?? demo?.cards ?? []
@@ -256,7 +263,8 @@ extension AppStore {
         file.notes = notes.filter { id, _ in bots.contains { $0.id == id } }.mapValues { $0.map { StoredItem($0) } }
         file.skillReviews = skillReviews.filter { id, _ in bots.contains { $0.id == id } }
         if pluginData {
-            file.todos = todos.map { StoredTodo($0) }
+            let zone = Fmt.zone
+            file.todos = todos.map { StoredTodo($0, in: zone) }
             file.today = todaySummary
             file.reports = reports.map { StoredReport($0) }
         }
@@ -385,14 +393,21 @@ extension StoredItem {
 }
 
 extension StoredTodo {
-    init(_ todo: Todo) {
+    /// `zone`: this Mac's time zone, in which a whole day's moment is where that day starts.
+    init(_ todo: Todo, in zone: TimeZone) {
         self.init(id: todo.id, title: todo.title, area: todo.area.rawValue, source: todo.source, doAt: todo.doAt,
                   dueAt: todo.dueAt, doAllDay: todo.doAllDay ? true : nil, dueAllDay: todo.dueAllDay ? true : nil,
+                  doDay: WholeDay.kept(todo.doAt, allDay: todo.doAllDay, in: zone),
+                  dueDay: WholeDay.kept(todo.dueAt, allDay: todo.dueAllDay, in: zone),
                   done: todo.done, nudges: todo.nudges, proposed: todo.proposed)
     }
 
-    var todo: Todo {
-        Todo(id: id, title: title, area: Area(rawValue: area) ?? .life, source: source, doAt: doAt, dueAt: dueAt,
+    /// The todo in `zone`, the time zone this Mac is in now: a whole day is that day here, also
+    /// when it was kept in another zone (WholeDay.restored).
+    func todo(in zone: TimeZone) -> Todo {
+        Todo(id: id, title: title, area: Area(rawValue: area) ?? .life, source: source,
+             doAt: WholeDay.restored(doAt, day: doDay, allDay: doAllDay ?? false, in: zone),
+             dueAt: WholeDay.restored(dueAt, day: dueDay, allDay: dueAllDay ?? false, in: zone),
              doAllDay: doAllDay ?? false, dueAllDay: dueAllDay ?? false, done: done, nudges: nudges, proposed: proposed)
     }
 }

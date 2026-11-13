@@ -50,17 +50,18 @@ enum Fmt {
 // MARK: - whole days
 
 extension Fmt {
-    /// A whole day as the plugin writes it (`2026-11-10`): where that day starts on this Mac.
+    /// This Mac's time zone, as every date here is read in: the one `calendar` was made with.
+    static var zone: TimeZone { calendar.timeZone }
+
+    /// A whole day as the plugin writes it (`2026-11-10`): where that day starts on this Mac. Its
+    /// year, month and day are the Gregorian calendar's, not `calendar`'s (WholeDay.swift).
     static func day(_ text: String) -> Date? {
-        let parts = text.split(separator: "-").compactMap { Int($0) }
-        guard text.count == 10, parts.count == 3 else { return nil }
-        return calendar.date(from: DateComponents(year: parts[0], month: parts[1], day: parts[2]))
+        WholeDay.start(text, in: zone)
     }
 
     /// The day `date` is in on this Mac, as the plugin takes a whole day.
     static func isoDay(_ date: Date) -> String {
-        let day = calendar.dateComponents([.year, .month, .day], from: date)
-        return String(format: "%04d-%02d-%02d", day.year ?? 0, day.month ?? 1, day.day ?? 1)
+        WholeDay.text(date, in: zone)
     }
 }
 
