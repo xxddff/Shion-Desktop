@@ -50,16 +50,19 @@ extension AppStore {
     // MARK: sending, and its receipt
 
     /// A new message in the chat, out at once. The item's id is its submission id: the turn's end
-    /// says which row it was stored as, and sending it again can never make it twice.
-    func say(_ text: String, to botId: String, sessionId: String) {
+    /// says which row it was stored as, and sending it again can never make it twice. `mode` is
+    /// how it reaches an assistant in the middle of a turn (AppStore.send: a composer's choice,
+    /// else behind the turn).
+    func say(_ text: String, to botId: String, sessionId: String, mode: BusyMode = .queue) {
         let id = UUID().uuidString
         let written = Date()
-        // how it reaches an assistant in the middle of a turn, as chosen when it was sent
-        let mode = busyMode
+        // settled as it is sent: the way, and the turn running now. By the time it can go (the
+        // chat may have to be attached again first) another turn may be, and that one is not its
+        let sending = settled(mode, to: botId, sessionId: sessionId)
         // as the transcript will show it: words a retry sends again can start with their files' `@file:` lines
         chats[botId, default: []].append(Self.userItem(id: id, at: written, text: text))
         Task {
-            if await !submit(text, id: id, to: botId, sessionId: sessionId, mode: mode) {
+            if await !submit(text, id: id, to: botId, sessionId: sessionId, sending: sending) {
                 requeue(id, text: text, at: written, to: botId)
             }
         }
@@ -69,10 +72,10 @@ extension AppStore {
     /// submission id once, and an exact retry gets the same admission back. The receipt says Hermes
     /// has it; a refusal that it does not (没发出去, with 重发); no answer, the connection having gone,
     /// leaves it unsure until the server can say (`comeBack`). False when it did not go out at all:
-    /// no connection by the time it could. While the assistant is in a turn, `mode` may put it into
-    /// that turn instead (AppStore+Compose.swift).
+    /// no connection by the time it could. While the assistant is still in the turn it was sent
+    /// for, `sending` may put it into that turn instead (AppStore+Compose.swift).
     @discardableResult
-    func submit(_ text: String, id: String, to botId: String, sessionId: String, mode: BusyMode = .queue) async -> Bool {
+    func submit(_ text: String, id: String, to botId: String, sessionId: String, sending: Sending = .queued) async -> Bool {
         deliveries.track(id, botId: botId, text: text, at: Date())
         await waitForChat(botId)
         guard gateway.phase == .online, sessions[botId] == sessionId else {
@@ -85,7 +88,7 @@ extension AppStore {
                 "session_id": .string(sessionId),
                 "text": .string(text),
                 "submission_id": .string(id),
-            ], id: id, to: botId, sessionId: sessionId, mode: mode)
+            ], id: id, to: botId, sessionId: sessionId, sending: sending)
             deliveries.arrived(id)
         } catch {
             noteUndelivered(id, error)
@@ -114,9 +117,11 @@ extension AppStore {
     /// all, it answers with that admission and runs nothing twice; its pictures and files by the
     /// same references (a picture the server cleared meanwhile goes up again, under a new id:
     /// AppStore+Media.swift). The message moves to the bottom, after what Hermes has, as Hermes
-    /// puts it.
+    /// puts it. 再发一次, under a message a running turn did not take (Delivery.declined), is the
+    /// same call: a message of its own, behind the turn. That one was never a submission, so
+    /// Hermes cannot tell it from the first: it is for you to press, never done by itself.
     func resend(_ id: String, in botId: String) {
-        guard let sent = deliveries.sent[id], sent.state.unsent, canResend(botId), let sessionId = sessions[botId]
+        guard let sent = deliveries.sent[id], sent.state.resendable, canResend(botId), let sessionId = sessions[botId]
         else { return }
         let written = Date()
         let media = chats[botId]?.first(where: { $0.id == id })?.media ?? sent.drafts.map(\.media)
@@ -238,6 +243,7 @@ extension AppStore {
             }
         }
         reconcile(botId, caughtUp: caughtUp, snapshot: snapshot)
+        await settleCorrections(botId, sessionId)
     }
 
     /// No replay: what came while away is not in the chat until the page is read. A reply still
@@ -268,25 +274,14 @@ extension AppStore {
     }
 
     /// What went out just before the connection went, now that the server can say: there (an
-    /// ordinary message again), or 没发出去 with 重发 (DeliveryCheck).
+    /// ordinary message again), or 没发出去 with 重发 (DeliveryCheck). What was put into a running
+    /// turn then has no receipt to go by: `settleCorrections`.
     private func reconcile(_ botId: String, caughtUp: Bool, snapshot: JSONValue) {
         let doubtful = deliveries.unsure(in: botId)
-        let unconfirmed = deliveries.unconfirmed(in: botId)
-        guard !doubtful.isEmpty || !unconfirmed.isEmpty else { return }
+        guard !doubtful.isEmpty else { return }
         let pending = DeliveryCheck.pending(in: snapshot)
         let rows = (chats[botId] ?? []).filter { $0.role == .user && deliveries.state($0.id) == nil }
             .map { StoredUserRow(text: $0.text, at: $0.at) }
-        // put into a running turn as the connection went: no receipt names it, so only the page
-        // can say it got there (the same words, stored since). Otherwise it stays as it is, in doubt
-        for (id, sent) in unconfirmed {
-            let row = Self.userItem(id: id, at: sent.at, text: sent.text)
-            if rows.contains(where: { $0.text == row.text && $0.at >= sent.at.addingTimeInterval(-60) }) {
-                deliveries.arrived(id)
-                chats[botId]?.removeAll { $0.id == id }
-            } else if chats[botId]?.contains(where: { $0.id == id }) != true {
-                chats[botId, default: []].append(row)
-            }
-        }
         for (id, sent) in doubtful {
             // as a row shows it: a file's `@file:` line is not among its words
             let row = Self.userItem(id: id, at: sent.at, text: sent.text)
@@ -301,6 +296,51 @@ extension AppStore {
                     back.media += sent.drafts.map(\.media)
                     chats[botId, default: []].append(back)
                 }
+            }
+        }
+    }
+
+    /// What was put into a running turn as the connection went (引导, 打断), now that the server
+    /// can be asked. No receipt names such a message, so only the transcript can say it got
+    /// there: the newest page is read for a row of yours in the same words that is not a message
+    /// the chat had before it was sent (DeliveryCheck.stored). The rows the chat holds cannot say:
+    /// with the frames replayed they are the ones from before, where the same words can only be
+    /// an earlier message. Found, it is an ordinary message again: the page's row where the chat
+    /// was read again, else the item itself, marked as part of that turn. Not found (or the page
+    /// could not be read), it stays as it is, in doubt, and is never sent again by itself.
+    private func settleCorrections(_ botId: String, _ sessionId: String) async {
+        let unconfirmed = deliveries.unconfirmed(in: botId)
+        guard !unconfirmed.isEmpty else { return }
+        var page: [StoredUserRow] = []
+        if pagesTranscripts, let read = try? await gateway.call("session.transcript", [
+            "profile": .string(botId), "session_id": .string(sessionId),
+            "order": "latest", "limit": .number(Double(Self.pageSize)),
+        ]) {
+            page = transcriptItems(read).filter { $0.role == .user }
+                .map { StoredUserRow(text: $0.text, at: $0.at, row: DeliveryCheck.row(of: $0.id)) }
+        }
+        guard sessions[botId] == sessionId else { return }
+        var taken: Set<Int> = []
+        for (id, sent) in unconfirmed where deliveries.state(id) == .unconfirmed {
+            // as a row shows it: a file's `@file:` line is not among its words
+            let item = Self.userItem(id: id, at: sent.at, text: sent.text)
+            let found = DeliveryCheck.stored(item.text, before: sent.before ?? DeliveryCheck.Before(), taken: taken, page: page)
+            guard let stored = found.first else {
+                // a page read in its place: it goes back at the bottom, still in doubt
+                if chats[botId]?.contains(where: { $0.id == id }) != true {
+                    chats[botId, default: []].append(item)
+                }
+                continue
+            }
+            deliveries.arrived(id)
+            guard let row = stored.row else { continue }
+            taken.insert(row)
+            if chats[botId]?.contains(where: { $0.id == "row-\(row)" }) == true {
+                // the chat was read again and has the row: this is the same message
+                chats[botId]?.removeAll { $0.id == id }
+            } else if let index = chats[botId]?.firstIndex(where: { $0.id == id }) {
+                chats[botId]?[index].midTurn = true
+                control.storedRows[id] = row
             }
         }
     }

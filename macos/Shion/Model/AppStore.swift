@@ -215,7 +215,11 @@ final class AppStore {
         }
     }
 
-    func send(_ text: String, to botId: String) {
+    /// Says `text` in a Bot Chat. `mode` is how it reaches an assistant in the middle of a turn:
+    /// only a chat's composer passes the way chosen for that (AppStore.sendMessage). Everything
+    /// else (the ⌥Space window, a shortcut, 今天's field, a notification's reply) waits for the
+    /// turn to end and starts its own, where its answer is looked for.
+    func send(_ text: String, to botId: String, mode: BusyMode = .queue) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         // not connected: it waits, with the ⌥Space window's sentences, and goes out once connected
@@ -232,7 +236,7 @@ final class AppStore {
             return
         }
         // with its receipt, or checked once the connection is back (AppStore+Reconnect.swift)
-        say(trimmed, to: botId, sessionId: sessionId)
+        say(trimmed, to: botId, sessionId: sessionId, mode: mode)
     }
 }
 

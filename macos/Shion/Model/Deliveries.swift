@@ -21,6 +21,9 @@ final class Deliveries {
         /// The pictures and files that went with the words, up on the server already: 重发 sends
         /// them again.
         var drafts: [Draft] = []
+        /// Put into a running turn: the chat's other messages in the same words as it went
+        /// (DeliveryCheck.Before), should the connection go before Hermes answers.
+        var before: DeliveryCheck.Before?
     }
 
     private static let seenKept = 500
@@ -34,6 +37,11 @@ final class Deliveries {
 
     func set(_ id: String, _ state: Delivery) {
         sent[id]?.state = state
+    }
+
+    /// It is about to be put into a running turn, with these others in the same words in the chat.
+    func aim(_ id: String, past before: DeliveryCheck.Before) {
+        sent[id]?.before = before
     }
 
     /// It did not go out after all (no connection by the time it could): it waits again instead.

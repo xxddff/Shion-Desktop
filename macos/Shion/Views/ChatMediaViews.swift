@@ -38,10 +38,12 @@ struct UserMessage: View {
                                 }
                                 .accessibilityIdentifier("reply-quote")
                         }
-                        // ⌘F marks what it finds in it (ChatControls.swift)
-                        FoundText(reply.words)
-                            .font(.t13)
-                            .textSelection(.enabled)
+                        if !reply.words.isEmpty || reply.quote == nil {
+                            // ⌘F marks what it finds in it (ChatControls.swift)
+                            FoundText(reply.words)
+                                .font(.t13)
+                                .textSelection(.enabled)
+                        }
                     }
                     .foregroundStyle(Palette.onAccent)
                     .padding(.horizontal, 12)

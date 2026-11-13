@@ -37,13 +37,16 @@ extension AppStore {
         replies[composeKey(botId)] = nil
     }
 
-    /// Sends the draft with what is in the composer, as a reply when a message is marked. False
-    /// when it did not go (a picture still going up): the draft and the mark stay.
+    /// Sends the draft with what is in the composer, as a reply when a message is marked: the
+    /// quote goes with words, and with pictures or files that go without any. False when it did
+    /// not go (a picture still going up, or nothing to send: a mark is not a message by itself):
+    /// the draft and the mark stay.
     @discardableResult
     func sendDraft(to botId: String) -> Bool {
         let key = composeKey(botId)
         var text = (drafts[key] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if let target = replies[key], !text.isEmpty {
+        guard canSend(botId, text) else { return false }
+        if let target = replies[key] {
             text = ReplyQuote.wrap(text, replyingTo: target)
         }
         guard sendMessage(text, to: botId) else { return false }
@@ -71,11 +74,20 @@ extension AppStore {
 
     // MARK: during a turn
 
+    /// How a message typed into this chat's composer goes, settled now: the way chosen for a busy
+    /// assistant, and the turn running at this moment (Sending). The ⌥Space window, a shortcut,
+    /// 今天's field and a notification's reply never ask: theirs is `Sending.queued`.
+    func settled(_ mode: BusyMode, to botId: String, sessionId: String) -> Sending {
+        Sending(mode: mode, generation: turnRunning(botId) ? control.fences[sessionId]?.generation : nil)
+    }
+
     /// Hands Hermes a message it has not seen, the item `id` of the chat. Normally a prompt
-    /// (`prompt.submit`, which Hermes queues behind a running turn). While the assistant is in a
-    /// turn and `mode` says so, it goes into that turn instead (`session.steer`,
-    /// `session.redirect`), as Hermes's own clients send it: named for the run it is meant for,
-    /// and words only (pictures travel with a prompt). What Hermes then says decides:
+    /// (`prompt.submit`, which Hermes queues behind a running turn). While the assistant is still
+    /// in the turn the message was sent for and `sending` says so, it goes into that turn instead
+    /// (`session.steer`, `session.redirect`), as Hermes's own clients send it: named for the run
+    /// it was meant for, and words only (pictures travel with a prompt). A turn that began since
+    /// (the chat had to be attached again first) is not interrupted for it: it goes as a prompt.
+    /// What Hermes then says decides:
     /// - taken (`queued`, `redirected`): the item is marked as part of that turn;
     /// - refused outright, or `rejected` with `delivered: false` (the turn was just over, nothing
     ///   live could take it): no assistant saw it, so it goes as a prompt after all;
@@ -83,14 +95,16 @@ extension AppStore {
     ///   again by itself (`CorrectionError.refused`);
     /// - no answer, the connection having gone: `CorrectionError.unconfirmed`.
     func deliver(_ params: [String: JSONValue], id: String, to botId: String, sessionId: String,
-                 mode: BusyMode) async throws {
-        if let method = mode.correction, params["attachments"] == nil, turnRunning(botId),
-           let generation = control.fences[sessionId]?.generation, let text = params["text"] {
+                 sending: Sending) async throws {
+        if params["attachments"] == nil, let text = params["text"],
+           let correction = sending.correction(running: turnRunning(botId), generation: control.fences[sessionId]?.generation) {
+            // should the connection go before the answer: what else in the chat reads the same
+            deliveries.aim(id, past: sameWords(as: id, in: botId))
             let answer: JSONValue?
             do {
-                answer = try await gateway.call(method, [
+                answer = try await gateway.call(correction.method, [
                     "profile": .string(botId), "session_id": .string(sessionId), "text": text,
-                    "execution_generation": .number(Double(generation)),
+                    "execution_generation": .number(Double(correction.generation)),
                 ])
             } catch GatewayError.rpc {
                 answer = nil
@@ -110,13 +124,35 @@ extension AppStore {
         try await gateway.call("prompt.submit", .object(params))
     }
 
+    /// The chat's other messages in the same words as item `id` that Hermes has or may have, as
+    /// they stand now (DeliveryCheck.Before): those stored as a known row, and how many more are
+    /// not known not to be there (said and not stored yet, or their own receipt still out).
+    private func sameWords(as id: String, in botId: String) -> DeliveryCheck.Before {
+        var before = DeliveryCheck.Before()
+        guard let items = chats[botId], let words = items.first(where: { $0.id == id })?.text else { return before }
+        for item in items where item.role == .user && item.id != id && item.text == words {
+            switch deliveries.state(item.id) {
+            case .unsent?, .unconfirmed?:
+                // not there, or in doubt itself: it is looked for apart (settleCorrections)
+                continue
+            case nil, .sending?, .unsure?, .declined?:
+                if let row = DeliveryCheck.row(of: item.id) ?? control.storedRows[item.id] {
+                    before.rows.insert(row)
+                } else {
+                    before.unstored += 1
+                }
+            }
+        }
+        return before
+    }
+
     /// Why a message did not reach Hermes, or may not have, on the message.
     func noteUndelivered(_ id: String, _ error: Error) {
         switch error {
         case CorrectionError.unconfirmed:
             deliveries.set(id, .unconfirmed)
         case CorrectionError.refused:
-            deliveries.set(id, .unsent("助手这一轮没有接下这句话"))
+            deliveries.set(id, .declined)
         case GatewayError.rpc(_, let message, let reason):
             deliveries.set(id, .unsent(DeliveryCheck.refusal(reason) ?? reason ?? message))
         default:

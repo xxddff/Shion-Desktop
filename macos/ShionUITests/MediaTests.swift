@@ -94,6 +94,38 @@ final class MediaTests: XCTestCase {
             .matching(NSPredicate(format: "label BEGINSWITH %@", "ci-报告（CI）.pdf，"))
         XCTAssertEqual(reports.count, 1, "the file shows \(reports.count) times")
 
+        // 2c. answering a message with a file and no words: the quote goes with the file, so the
+        // assistant knows what the file answers (and the bubble shows it over the file)
+        continueAfterFailure = true
+        let filesReply = text("收到文件：ci-重试（CI）.txt（1200 字节）", in: app)
+        filesReply.hover()
+        let replyButton = element("message-reply", in: app)
+        if replyButton.waitForExistence(timeout: 3) {
+            replyButton.click()
+        } else {
+            // the menu has it too
+            filesReply.rightClick()
+            app.menuItems["回复"].firstMatch.click()
+        }
+        if element("reply-target", in: app).waitForExistence(timeout: 5) {
+            putFiles(["ci-报告（CI）.pdf"])
+            composer.click()
+            composer.typeKey("v", modifierFlags: .command)
+            XCTAssertTrue(waitUntil(timeout: 10) { files.count == 1 }, "the pasted file is not in the composer: \(files.count)")
+            XCTAssertTrue(waitUntil(timeout: 30) { send.isEnabled }, "the file did not go up")
+            send.click()
+            let wentQuoted = waitForText("你说：[Replying to your previous message:", in: app, timeout: 15)
+            let showsQuote = element("reply-quote", in: app).waitForExistence(timeout: 5)
+            keep(window.screenshot(), "media-6-file-reply")
+            XCTAssertTrue(wentQuoted, "a reply of a file alone went out without the message it answers")
+            XCTAssertTrue(showsQuote, "the reply of a file alone does not show the message it answers")
+            XCTAssertFalse(element("reply-target", in: app).exists, "the mark stayed after the reply went")
+            XCTAssertFalse(waitForText("@file:", in: app, timeout: 1), "a reference shows as text")
+        } else {
+            XCTFail("no message marked to answer over the composer")
+        }
+        continueAfterFailure = false
+
         // 3. a screenshot a tool took: under its call; the stand-in clears it once read
         composer.click()
         composer.typeText("截个图（CI）")
@@ -342,6 +374,14 @@ final class MediaTests: XCTestCase {
             Thread.sleep(forTimeInterval: 0.5)
         } while Date() < deadline
         return false
+    }
+
+    /// The first text that has `words`, plain or selectable.
+    @MainActor
+    private func text(_ words: String, in app: XCUIApplication) -> XCUIElement {
+        let either = NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", words, words)
+        let plain = app.staticTexts.matching(either).firstMatch
+        return plain.exists ? plain : app.textViews.matching(either).firstMatch
     }
 
     /// Text anywhere in the app, plain or selectable; `value` only on text elements.

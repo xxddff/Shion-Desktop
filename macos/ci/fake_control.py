@@ -47,6 +47,13 @@ For ComposeTests, as Hermes main (2026-11-12) has them:
   (`redirected` for a redirect), the words are stored as a user row of kind `steer`
   (tui_gateway/session_history.py shows such a row as your own words), and the story being told
   says it heard them and ends there.
+- 「别接这一句（CI）」 put into a running turn is answered as a live agent that did not take it
+  answers: `rejected`, with no `delivered` key (correct's last return, when the agent's own
+  steer/redirect says no). Nothing is stored and the story goes on. Hermes's own client then
+  neither sends it again nor says it was lost (ui-tui/src/app/submissionCore.ts settleControlReply).
+- A prompt for the default echo sent while one of this module's turns runs waits behind it, in
+  order, as Hermes queues a prompt behind the turn under way and never cuts it short (`behind`):
+  its turn starts once that one has ended.
 """
 import itertools
 import threading
@@ -74,6 +81,7 @@ TOOLED_RETRIED = "（重试）明天晴，最高 18 度，傍晚起风。"
 PEER_FAIL = "带个话再出错（CI）"
 PEER_CALL = {"target": "study", "message": "把第 8 回的课件发我一份（CI）。"}
 CORRECTIONS = {"session.steer": "queued", "session.redirect": "redirected"}
+DECLINED = "别接这一句（CI）"
 MUTATE_KEYS = {"session_id", "request_id", "expected_revision", "operation", "payload"}
 
 state = {"log": print, "transcripts": None, "lock": threading.Lock()}
@@ -81,6 +89,7 @@ fences = {}  # session id -> {"generation", "revision"}
 running = {}  # session id -> the turn under way: {"generation", "stop", "user_row"}
 receipts = {}  # request id -> the mutation's answer (an exact retry gets it again)
 rewound = set()  # the words of prompts whose turn was rewound: their next run is the short one
+queued = {}  # session id -> the turns waiting behind the one under way, oldest first
 row_ids = itertools.count(5000)
 
 
@@ -173,9 +182,11 @@ def correct(conn, method, params, rid):
     if type(generation) is not int or generation != current["generation"]:
         return refuse(conn, rid, "stale_generation")
     answer = {"text": text, "execution_generation": generation, "authority_epoch": 1}
+    # as written: XCUI's typing can give a compatibility ideograph (fake_words.py)
+    declined = DECLINED in fake_words.read(text)
     with state["lock"]:
         turn = running.get(session_id)
-        if turn is not None:
+        if turn is not None and not declined:
             state["transcripts"].setdefault(session_id, []).append(
                 {"row_id": next(row_ids), "row_kind": "message", "role": "user", "text": text,
                  "display_kind": "steer", "timestamp": time.time()})
@@ -183,10 +194,55 @@ def correct(conn, method, params, rid):
     if turn is None:
         state["log"](f"    {method}: nothing running, not delivered")
         answer.update(status="rejected", delivered=False)
+    elif declined:
+        # the live agent said no: Hermes does not say whether it had the words by then
+        state["log"](f"    {method} into generation {generation}: not taken, and no `delivered`")
+        answer["status"] = "rejected"
     else:
         state["log"](f"    {method} into generation {generation}: {text!r}")
         answer["status"] = CORRECTIONS[method]
     conn.send_json({"jsonrpc": "2.0", "id": rid, "result": answer})
+
+
+# ---- behind a turn ----------------------------------------------------------------------------
+
+def behind(session_id, run):
+    """Queues `run` (a turn the caller would start now) behind the turn under way on this session,
+    after whatever waits already. False when nothing runs and nothing waits: the caller starts it."""
+    with state["lock"]:
+        if session_id not in running and not queued.get(session_id):
+            return False
+        waiting = queued.setdefault(session_id, [])
+        waiting.append(run)
+        first = len(waiting) == 1
+    state["log"](f"    a turn is under way on {session_id}: this one waits behind it")
+    if first:
+        threading.Thread(target=drain, args=(session_id,), daemon=True).start()
+    return True
+
+
+def drain(session_id):
+    """Starts what waits, one after another, once the turn under way has ended and said so."""
+    while True:
+        while session_id in running:
+            time.sleep(0.1)
+        # the turn's own message.complete and session.info go out just after it is taken off
+        time.sleep(0.5)
+        if session_id in running:
+            continue
+        with state["lock"]:
+            waiting = queued.get(session_id) or []
+            if not waiting:
+                queued.pop(session_id, None)
+                return
+            run = waiting[0]
+        try:
+            run()
+        except OSError:
+            pass
+        with state["lock"]:
+            if queued.get(session_id):
+                queued[session_id].pop(0)
 
 
 # ---- the scripted turn ------------------------------------------------------------------------

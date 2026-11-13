@@ -55,12 +55,36 @@ nonisolated enum BusyMode: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
+/// How a message goes out, settled as it is sent: the way chosen then, and the turn it was meant
+/// for. Hermes's own clients name the run when the message is committed, not when the call is
+/// made (ui-tui/src/app/useSubmission.ts, captureBusyControl): between the two the chat may have
+/// had to be attached again, and another turn may be running by then.
+nonisolated struct Sending: Equatable, Sendable {
+    var mode: BusyMode
+    /// The run under way as it was sent (its `execution_generation`); nil when none was.
+    var generation: Int?
+
+    /// A turn of its own, behind whatever runs: how everything goes that is not typed into a
+    /// chat's composer (the ⌥Space window, a shortcut, 今天's field, a reply from a notification,
+    /// what waited for a connection, 重发). Their answer is looked for in the turn they start.
+    static let queued = Sending(mode: .queue, generation: nil)
+
+    /// The call that puts it into a running turn, and the run to name: only while the turn it
+    /// was sent for is still the one running. Otherwise (that turn is over, or another has
+    /// started) it goes as a prompt, behind whatever runs now.
+    func correction(running: Bool, generation current: Int?) -> (method: String, generation: Int)? {
+        guard let method = mode.correction, running, let generation, generation == current else { return nil }
+        return (method, generation)
+    }
+}
+
 /// A message put into a running turn that did not get there for sure.
 nonisolated enum CorrectionError: Error {
     /// The connection went before Hermes answered: it may have reached the assistant, and there is
     /// no receipt to ask for afterwards (a correction is not a submission).
     case unconfirmed
-    /// Hermes answered that the assistant did not take it, without saying it never saw it.
+    /// Hermes answered that the assistant did not take it, without saying it never saw it
+    /// (Delivery.declined).
     case refused
 }
 
@@ -92,12 +116,17 @@ nonisolated enum ReplyQuote {
         return (target.theirs ? toTheirs : toYours) + quoted + close + words
     }
 
-    /// The quote and the words of a message sent as a reply; any other message is all words.
+    /// The quote and the words of a message sent as a reply; any other message is all words. A
+    /// reply of pictures or files alone is the quote and no words: it ends where the quote does.
     static func split(_ text: String) -> (quote: String?, theirs: Bool, words: String) {
         for (open, theirs) in [(toTheirs, true), (toYours, false)] where text.hasPrefix(open) {
             let rest = text.dropFirst(open.count)
-            guard let end = rest.range(of: close) else { break }
-            return (String(rest[..<end.lowerBound]), theirs, String(rest[end.upperBound...]))
+            if let end = rest.range(of: close) {
+                return (String(rest[..<end.lowerBound]), theirs, String(rest[end.upperBound...]))
+            }
+            let bare = close.trimmingCharacters(in: .newlines)
+            guard rest.hasSuffix(bare) else { break }
+            return (String(rest.dropLast(bare.count)), theirs, "")
         }
         return (nil, false, text)
     }

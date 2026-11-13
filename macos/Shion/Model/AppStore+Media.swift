@@ -242,11 +242,13 @@ extension AppStore {
         return !drafts.isEmpty || !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    /// Sends the words with what is in the composer; false when it is not all up yet.
+    /// Sends the words with what is in the composer, the way chosen for an assistant in the
+    /// middle of a turn (`busyMode`: this is the composer's send, and only it goes that way);
+    /// false when it is not all up yet.
     @discardableResult
     func sendMessage(_ text: String, to botId: String) -> Bool {
         guard media.drafts[botId]?.isEmpty == false else {
-            send(text, to: botId)
+            send(text, to: botId, mode: busyMode)
             return true
         }
         guard !readOnly, canSend(botId, text) else { return false }
@@ -262,7 +264,8 @@ extension AppStore {
         // the submission id names the item, as send's does: the turn's end says which row it was
         // stored as, which 重试 needs (AppStore+Control.swift)
         let id = UUID().uuidString
-        let mode = busyMode
+        // how it reaches an assistant in the middle of a turn, and which turn, as it is sent
+        let sending = settled(busyMode, to: botId, sessionId: sessionId)
         chats[botId, default: []].append(ChatItem(id: id, role: .user, at: Date(), text: words,
                                                   media: drafts.map(\.media)))
         Task {
@@ -270,7 +273,7 @@ extension AppStore {
             for hash in drafts.filter({ $0.kind == .image }).compactMap(\.sha256) {
                 await media.disk.keep(hash)
             }
-            await submit(words, drafts, botId: botId, sessionId: sessionId, submission: id, again: false, mode: mode)
+            await submit(words, drafts, botId: botId, sessionId: sessionId, submission: id, again: false, sending: sending)
         }
         return true
     }
@@ -291,7 +294,7 @@ extension AppStore {
     /// 没发出去 under it, with 重发 (the same id and references; a picture cleared meanwhile goes
     /// up again, as below).
     func submit(_ words: String, _ drafts: [Draft], botId: String, sessionId: String, submission: String,
-                again: Bool, mode: BusyMode = .queue) async {
+                again: Bool, sending: Sending = .queued) async {
         let refs = drafts.compactMap(\.ref).joined(separator: "\n")
         var body = [refs, words].filter { !$0.isEmpty }.joined(separator: "\n\n")
         let pictures = drafts.filter { $0.kind == .image }
@@ -315,7 +318,7 @@ extension AppStore {
             return deliveries.set(submission, .unsent(nil))
         }
         do {
-            try await deliver(params, id: submission, to: botId, sessionId: sessionId, mode: mode)
+            try await deliver(params, id: submission, to: botId, sessionId: sessionId, sending: sending)
             deliveries.arrived(submission)
         } catch GatewayError.rpc(_, let message, let reason) where !again && !pictures.isEmpty && (reason ?? message) == "invalid_params" {
             // a picture staged too long ago was cleared: up again from the Mac's copy, once

@@ -3,7 +3,8 @@ import SwiftUI
 /// A message of yours the server does not have yet, as a chat shows it: lighter, with a line under
 /// it saying where it is. Waiting for a connection (and since when: it goes out saying so when it
 /// is late, QuickAskWaiting.swift); sent as the connection went, until the server can say whether
-/// it has it; or 没发出去, with 重发 (AppStore+Reconnect.swift).
+/// it has it; 没发出去, with 重发 (AppStore+Reconnect.swift); or, put into a running turn that did
+/// not take it, saying so without saying it never got there, with 再发一次 (Delivery.declined).
 struct DeliveryMark: ViewModifier {
     @Environment(AppStore.self) private var store
     let item: ChatItem
@@ -36,6 +37,20 @@ struct DeliveryMark: ViewModifier {
             } else if state == .unconfirmed {
                 Label("不确定有没有送到，看看\(store.bot(botId)?.name ?? "助手")接下来怎么说", systemImage: "questionmark.circle")
                     .accessibilityIdentifier("unconfirmed")
+            } else if state == .declined {
+                HStack(spacing: 10) {
+                    Label("这一轮没有接下这句话，也可能已经看到了", systemImage: "questionmark.circle")
+                        .accessibilityIdentifier("declined")
+                    Button {
+                        store.resend(item.id, in: botId)
+                    } label: {
+                        Label("再发一次", systemImage: "arrow.clockwise")
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!store.canResend(botId))
+                    .help("作为新的一句发给\(store.bot(botId)?.name ?? "助手")，排在这一轮后面")
+                    .accessibilityIdentifier("resend")
+                }
             } else if case .unsent(let reason)? = state {
                 HStack(spacing: 10) {
                     Label {

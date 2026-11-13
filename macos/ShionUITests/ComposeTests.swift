@@ -9,7 +9,9 @@ import XCTest
 /// 2. a turn that answered has no 重试; a message is answered from the buttons over it, and goes
 ///    out as Hermes words a reply, shown back as a quote;
 /// 3. while a long reply streams, 引导 puts the next message into that turn (`session.steer`): it
-///    is marked as part of the turn, and the reply says it heard it;
+///    is marked as part of the turn, and the reply says it heard it; a message the turn does not
+///    take says so (not 没发出去) and goes again only on 再发一次, as a message of its own; and
+///    what is said in 今天's field waits for the turn to end, though the composer is set to 引导;
 /// 4. a turn that wrote to another assistant and then failed: the message is a card, and 重试 asks
 ///    first, naming it;
 /// 5. a turn with nothing to say (`[SILENT]`) leaves no bubble; what its review kept is a card,
@@ -133,6 +135,56 @@ final class ComposeTests: XCTestCase {
         XCTAssertTrue(waitUntil(timeout: 15) { !stop.exists }, "the turn did not end")
         XCTAssertFalse(waitForText("收到：讲短一点", in: app, timeout: 2), "the message also went as a turn of its own")
         XCTAssertFalse(element("retry", in: app).exists, "重试 under a turn that answered")
+
+        // 3b. another long reply, the composer still on 引导. A message the turn does not take
+        // (Hermes answers `rejected` and does not say no assistant saw it): it says so, not
+        // 没发出去, is not sent again by itself, and 再发一次 sends it as a message of its own
+        composer.click()
+        composer.typeText("讲一个长故事")
+        send.click()
+        XCTAssertTrue(stop.waitForExistence(timeout: 10), "the second story did not start")
+        composer.click()
+        composer.typeText("别接这一句（CI）")
+        send.click()
+        let declined = element("declined", in: app)
+        let saysDeclined = declined.waitForExistence(timeout: 10)
+        keep(window.screenshot(), "compose-4b-declined")
+        XCTAssertTrue(saysDeclined, "a message the turn did not take does not say so")
+        XCTAssertFalse(element("unsent", in: app).exists, "it says 没发出去, though the assistant may have seen it")
+        XCTAssertFalse(waitForText("听到了：别接这一句", in: app, timeout: 1), "the stand-in took the message it declines")
+        XCTAssertFalse(waitForText("收到：别接这一句", in: app, timeout: 1), "the declined message was sent again by itself")
+        let again = element("resend", in: app)
+        if again.waitForExistence(timeout: 5), waitUntil(timeout: 5, { again.isEnabled }) {
+            XCTAssertTrue(again.label.contains("再发一次") || app.buttons["再发一次"].exists,
+                          "the way to send a declined message again is not 再发一次: \(again.label)")
+            again.click()
+            XCTAssertTrue(waitUntil(timeout: 10) { !declined.exists }, "it still says the turn did not take it after 再发一次")
+        } else {
+            XCTFail("no 再发一次 under the declined message")
+        }
+        // 今天's field: a turn of its own behind the story, not put into it, whatever the composer says
+        element("nav-today", in: app).click()
+        let todayField = app.textFields["today-ask"]
+        if todayField.waitForExistence(timeout: 5) {
+            todayField.click()
+            todayField.typeText("今天页的话（CI）")
+            app.typeKey(.return, modifierFlags: [])
+        } else {
+            XCTFail("no field on 今天 to say something to 詩音")
+            chief.click()
+        }
+        XCTAssertTrue(composer.waitForExistence(timeout: 5), "今天's field did not open 詩音's chat")
+        XCTAssertFalse(waitForText("听到了：今天页的话", in: app, timeout: 3), "what 今天's field said went into the running turn")
+        // the story is stopped (unless it ran out meanwhile), and what waited behind it is answered, in order
+        if stop.exists {
+            stop.click()
+        }
+        XCTAssertTrue(waitUntil(timeout: 20) { !stop.exists }, "the second story did not end")
+        let resentAnswered = waitForText("收到：别接这一句（CI）", in: app, timeout: 20)
+        let todayAnswered = waitForText("收到：今天页的话（CI）", in: app, timeout: 20)
+        keep(window.screenshot(), "compose-4c-behind-the-turn")
+        XCTAssertTrue(resentAnswered, "再发一次 did not send the declined message as one of its own")
+        XCTAssertTrue(todayAnswered, "what 今天's field said was not answered once the turn ended")
 
         // 4. a message to another assistant, then a failure: the message is a card, and 重试 asks
         // first, since it would go out again; 取消 leaves the chat as it is, 重试 goes ahead

@@ -40,10 +40,12 @@ struct TodayView: View {
                     .disabled(store.readOnly)
                     .font(.system(size: 14))
                     .onSubmit {
+                        // a turn of its own, whatever the chat's composer is set to (AppStore.send)
                         store.send(draft, to: store.chiefId)
                         draft = ""
                         store.route = .chat(store.chiefId)
                     }
+                    .accessibilityIdentifier("today-ask")
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 9)

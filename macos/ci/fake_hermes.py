@@ -903,16 +903,22 @@ class Handler(BaseHTTPRequestHandler):
                 return self.homework(session_id, text)
             if "等一会儿再说" in text:
                 return self.later(session_id, text)
-            with lock:
-                rows = transcripts.setdefault(session_id, [])
-                rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "user",
-                             "text": fake_words.sent(text), "timestamp": time.time()})
-                rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "assistant",
-                             "text": "收到：" + text, "timestamp": time.time()})
-            self.event("message.start", session_id, {})
-            self.event("message.delta", session_id, {"text": "收到："})
-            self.event("message.delta", session_id, {"text": text})
-            self.event("message.complete", session_id, {"text": "收到：" + text, "status": "complete"})
+
+            def echo():
+                with lock:
+                    rows = transcripts.setdefault(session_id, [])
+                    rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "user",
+                                 "text": fake_words.sent(text), "timestamp": time.time()})
+                    rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "assistant",
+                                 "text": "收到：" + text, "timestamp": time.time()})
+                self.event("message.start", session_id, {})
+                self.event("message.delta", session_id, {"text": "收到："})
+                self.event("message.delta", session_id, {"text": text})
+                self.event("message.complete", session_id, {"text": "收到：" + text, "status": "complete"})
+
+            # behind a turn under way (fake_control's story), as Hermes queues a prompt
+            if not fake_control.behind(session_id, echo):
+                echo()
             return
         if result is None:
             self.send_json({"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": f"no method {method}"}})
