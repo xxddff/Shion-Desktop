@@ -142,14 +142,13 @@ final class ReconnectTests: XCTestCase {
                       + "\(cards("event-card", holding: "收到（CI）", in: app))")
         XCTAssertEqual(cards("event-card", holding: "要回：一句话", in: app), 1, "what 课程 wants back is not on its card")
         XCTAssertFalse(hasText("Reply needed", in: app), "Hermes's own label shows on 课程's message")
-        // 课程's answers: its words on a card under its name, twice, not the command that waited for them
-        let answered = waitUntil(timeout: 10) { self.cards("event-card", holding: "下周的课表排好了（CI）。", in: app) == 2 }
-        if !answered {
-            note("event cards saying the answer: \(cards("event-card", holding: "下周的课表排好了（CI）。", in: app)); board notices: "
-                 + "\(app.descendants(matching: .any).matching(identifier: "board-notice").count)", "reconnect-notices")
-        }
-        XCTAssertTrue(answered, "the same answer from 课程 twice is not two cards")
-        XCTAssertEqual(cards("event-card", holding: "课程（CI） 发来的消息", in: app), 2, "an answer is not said to be from 课程")
+        // 课程's answers: its words on a card under its name, twice, not the command that waited
+        // for them. Counted by where the words stand: run 199 found three elements for the two
+        // cards in the window, both of which took the place of a frame's card
+        let answered = waitUntil(timeout: 10) { self.places("下周的课表排好了（CI）。", in: app).count == 2 }
+        note(eventCards(in: app), "reconnect-notices")
+        XCTAssertTrue(answered, "the same answer from 课程 twice is not two cards: \(places("下周的课表排好了（CI）。", in: app))")
+        XCTAssertEqual(places("课程（CI） 发来的消息", in: app).count, 2, "an answer is not said to be from 课程")
         XCTAssertFalse(hasText("Background Process Finished", in: app), "an answer shows as the process that waited for it")
         XCTAssertFalse(hasText("bot_mode_dm", in: app), "the command that waited for an answer shows in the chat")
         XCTAssertFalse(hasText("[SILENT]", in: app), "the marker of a turn with nothing to say shows")
@@ -160,7 +159,7 @@ final class ReconnectTests: XCTestCase {
             app.descendants(matching: .any).matching(identifier: "event-card").allElementsBoundByIndex
                 .filter { self.holds(words, whole: false, in: $0) }.map { $0.frame.minY }.sorted()
         }
-        let said = tops("收到（CI）"), answers = tops("下周的课表排好了（CI）。")
+        let said = tops("收到（CI）"), answers = places("下周的课表排好了（CI）。", in: app)
         let replies = ["课程把旧发票归好了（CI）。", "知道课程收到了（CI）。", "课表的事知道了（CI）。"]
             .compactMap { texts($0, whole: false, in: app).first?.frame.minY }
         let earlier = replies.first.flatMap { first in
@@ -441,6 +440,34 @@ final class ReconnectTests: XCTestCase {
     private func holds(_ text: String, whole: Bool, in root: XCUIElement) -> Bool {
         let predicate = whole ? NSPredicate(format: "label == %@ OR value == %@", text, text) : matching(text)
         return root.staticTexts.matching(predicate).firstMatch.exists || root.textViews.matching(predicate).firstMatch.exists
+    }
+
+    /// Where the texts that are just `text` stand, top to bottom: one place each, however many
+    /// elements accessibility has there.
+    @MainActor
+    private func places(_ text: String, in app: XCUIApplication) -> [CGFloat] {
+        var tops: [CGFloat] = []
+        for element in texts(text, whole: true, in: app) where element.exists {
+            let frame = element.frame
+            if frame.height > 0, !tops.contains(where: { abs($0 - frame.minY) < 2 }) {
+                tops.append(frame.minY)
+            }
+        }
+        return tops.sorted()
+    }
+
+    /// Every event card accessibility has, for reading after the run: where it is and what it says.
+    @MainActor
+    private func eventCards(in app: XCUIApplication) -> String {
+        app.descendants(matching: .any).matching(identifier: "event-card").allElementsBoundByIndex
+            .filter { $0.exists }
+            .map { card in
+                let said = (card.staticTexts.allElementsBoundByIndex + card.textViews.allElementsBoundByIndex)
+                    .filter { $0.exists }
+                    .map { "\($0.label.isEmpty ? ($0.value as? String ?? "") : $0.label) @\(Int($0.frame.minY))" }
+                return "\(card.elementType.rawValue) \(card.frame): \(said.joined(separator: " | "))"
+            }
+            .joined(separator: "\n")
     }
 
     /// How many of the chat's cards of one kind (their identifier: `board-notice`, `event-card`)

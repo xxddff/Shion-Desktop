@@ -164,8 +164,14 @@ final class ComposeTests: XCTestCase {
         if again.waitForExistence(timeout: 5), waitUntil(timeout: 5, { again.isEnabled && again.isHittable }) {
             XCTAssertTrue(again.label.contains("再发一次") || app.buttons["再发一次"].exists,
                           "the way to send a declined message again is not 再发一次: \(again.label)")
-            again.click()
-            XCTAssertTrue(waitUntil(timeout: 10) { !declined.exists }, "it still says the turn did not take it after 再发一次")
+            // the reply above is still arriving, and each new line of it moves this one for a
+            // moment: a press that falls in that moment lands beside it (run 199), so press again
+            var pressed = false
+            for _ in 0..<3 where !pressed {
+                if again.exists, again.isHittable { again.click() }
+                pressed = waitUntil(timeout: 4) { !declined.exists }
+            }
+            XCTAssertTrue(pressed, "it still says the turn did not take it after 再发一次")
         } else {
             XCTFail("no 再发一次 to press under the declined message (there: \(again.exists), in view: \(again.exists && again.isHittable))")
         }
