@@ -71,11 +71,11 @@ before saying so does not take the rest of the test with it:
              only in the kept frames, so Shion has it from its replay on the same socket
   回传       a short reply, then the socket drops; while Shion is away Hermes starts three turns by
              itself, with what came in the user's name (`unasked`): the board's word that a card is
-             done, told ahead with a status line, its row dated an hour before (as when it came
-             long before Shion was back) and its card on no board any more (as one archived
-             since); then the same message from another assistant twice, two minutes apart. Shion
-             has their frames from its replay, which say neither when nor which row, and their
-             rows from the transcript
+             done, as the gateway wakes a session with it (fake_kanban.wake, captured from Hermes
+             itself: only the row says it, the start frame nothing), its card on no board any more
+             (as one archived since); then the same message from another assistant twice, two
+             minutes apart, whose start frames say what they start with. Shion has the frames from
+             its replay, which say neither when nor which row, and the rows from the transcript
 
 Stdlib only.
 """
@@ -88,6 +88,7 @@ import threading
 import time
 import uuid
 
+import fake_kanban
 import fake_words
 
 try:  # the run and revision a turn bumps, kept with the stop and retry module's where it is there
@@ -635,7 +636,7 @@ def lagging(turn):
 
 
 GONE_CARD, GONE_TITLE = "t_ci_gone", "归档旧发票（CI）"
-AWAY_NOTICE = f"✔ [study] @study Kanban {GONE_CARD} done — {GONE_TITLE}\n发票都归好了（CI）。"
+AWAY_NOTICE = fake_kanban.wake(GONE_CARD, GONE_TITLE, "study", "study", result="发票都归好了（CI）。")
 AWAY_NOTICE_REPLY = "课程把旧发票归好了（CI）。"
 AWAY_PEER = "Message from 🤖 课程 (@study): 收到（CI）"
 AWAY_PEER_REPLIES = ["知道课程收到了（CI）。", "课程又说了一遍收到（CI）。"]
@@ -649,30 +650,32 @@ def notices(turn):
     time.sleep(0.5)
     drop(turn["handler"], "after a short reply, before what Hermes starts by itself", turn["meanwhile"])
     session_id, now = turn["session_id"], time.time()
-    # the board's word, long before Shion is back; then the same words from 课程 twice, 120 s apart
-    unasked(session_id, AWAY_NOTICE, AWAY_NOTICE_REPLY, now - 3600, told=True)
+    # the board's word, as a wake; then the same words from 课程 twice, 120 s apart
+    unasked(session_id, AWAY_NOTICE, AWAY_NOTICE_REPLY, now, wake=True)
     unasked(session_id, AWAY_PEER, AWAY_PEER_REPLIES[0], now - 130)
     unasked(session_id, AWAY_PEER, AWAY_PEER_REPLIES[1], now - 10)
     turn["meanwhile"].set()  # all three over while Shion was away: its replay has them
 
 
-def unasked(session_id, text, reply, at, told=False):
+def unasked(session_id, text, reply, at, wake=False):
     """A turn Hermes starts by itself, with what it gives the assistant in the user's name (the
-    board's word, another assistant's message). A status line first when Hermes tells of it ahead of
-    the turn (tui_gateway/session_notifications.py: once, when it has the notice, however long the
-    turn then waits); the row it is stored with, dated `at`, of the kind Hermes gives such turns;
-    the turn's start, saying with what (gateway/session_automation.py admission_display:
-    display_kind, display_text and the turn's text; no row, no time); the reply and its row; the
-    end, which names the rows and no submission."""
-    if told:
-        publish(session_id, "status.update", {"kind": "process", "text": text})
+    board's word, another assistant's message): the row it is stored with, dated `at`, of the kind
+    Hermes gives such turns; the turn's start; the reply and its row; the end, which names the rows
+    and no submission.
+
+    The start says with what the turn starts where its producer gave it a card to show
+    (gateway/session_automation.py admission_display: display_kind, display_text and the turn's
+    text; no row, no time). A board `wake` gives none: its start frame is empty and only the row
+    says what it was, as captured from Hermes itself (fake_kanban.wake)."""
     with bus:
         current = fence(session_id)
         current["generation"] += 1
         generation = current["generation"]
     kind = "internal_notification"
-    user_row = keep(session_id, "user", text, at, display_kind=kind, display_metadata={"display_text": text})
-    publish(session_id, "message.start", {"display_kind": kind, "display_text": text, "text": text}, generation)
+    shown = {"gateway_input_owner": "ci"} if wake else {"display_text": text}
+    user_row = keep(session_id, "user", text, at, display_kind=kind, display_metadata=shown)
+    publish(session_id, "message.start",
+            {} if wake else {"display_kind": kind, "display_text": text, "text": text}, generation)
     for start in range(0, len(reply), CHUNK):
         publish(session_id, "message.delta", {"text": reply[start:start + CHUNK]}, generation)
     answer_row = keep(session_id, "assistant", reply, at + 5)

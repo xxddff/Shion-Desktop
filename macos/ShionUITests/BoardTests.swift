@@ -164,7 +164,7 @@ final class BoardTests: XCTestCase {
         keep(window.screenshot(), "board-9-card-done")
         XCTAssertTrue(finished, "no turn after the board's notice")
         XCTAssertTrue(shownDone, "the card in the chat does not show it is done")
-        XCTAssertFalse(waitForText("Kanban t_", in: app, timeout: 1), "the board's notice shows as text")
+        XCTAssertFalse(waitForText("[kanban]", in: app, timeout: 1), "the board's notice shows as text")
         // read again from the transcript, which keeps the call but not the card's id: a chat stays
         // loaded while connected, so disconnect and connect, and the chat starts over from the server
         app.typeKey(",", modifierFlags: .command)
@@ -187,7 +187,7 @@ final class BoardTests: XCTestCase {
             noteRereadChat(in: app, window: window)
         }
         XCTAssertTrue(reread, "after reading the chat again, the call and the notice are not both the card")
-        XCTAssertFalse(waitForText("Kanban t_", in: app, timeout: 1), "the board's notice shows as text after reading again")
+        XCTAssertFalse(waitForText("[kanban]", in: app, timeout: 1), "the board's notice shows as text after reading again")
         element("nav-board", in: app).click()
         XCTAssertTrue(waitForText("整理第8回录音（CI）", in: app, timeout: 10), "back on the board")
 

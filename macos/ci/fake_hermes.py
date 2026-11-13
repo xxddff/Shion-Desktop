@@ -541,17 +541,19 @@ class Handler(BaseHTTPRequestHandler):
 
     def card_done(self, session_id, tid, title):
         fake_kanban.worker_completes("study", tid, "笔记整理好了。")
-        notice = f"✔ [study] @study Kanban {tid} done — {title}"
+        # as the gateway wakes the session that made the card (fake_kanban.wake): a row of kind
+        # internal_notification, an empty message.start, and no status line ahead of it
+        notice = fake_kanban.wake(tid, title, "study", "study", result="笔记整理好了。")
         reply = "课程把笔记整理好了。"
         with lock:
             rows = transcripts.setdefault(session_id, [])
             rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "user", "text": notice,
+                         "display_kind": "internal_notification", "display_metadata": {"gateway_input_owner": "ci"},
                          "timestamp": time.time()})
             rows.append({"row_id": len(rows) + 1000, "row_kind": "message", "role": "assistant", "text": reply,
                          "timestamp": time.time()})
-        log(f"  -> kanban notice on {session_id}: {notice}")
+        log(f"  -> kanban wake on {session_id}: {notice.splitlines()[0]}")
         try:
-            self.event("status.update", session_id, {"kind": "process", "text": notice})
             self.event("message.start", session_id, {})
             self.event("message.delta", session_id, {"text": reply})
             self.event("message.complete", session_id, {"text": reply, "status": "complete"})

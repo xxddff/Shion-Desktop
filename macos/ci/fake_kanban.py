@@ -391,6 +391,25 @@ def assistant_creates(slug, title, assignee, creator, body=None):
     return tid
 
 
+WAKE_GUIDANCE = ("This is an automatic task-status notification, not a request to decompose the task again. "
+                 "Inspect the current board before creating follow-up tasks; do not recreate tasks or graphs that "
+                 "already exist.")
+
+
+def wake(tid, title, assignee, board, status="completed", result=None):
+    """What `hermes gateway` gives the session that subscribed to a card, as the text of the turn it
+    wakes it with (gateway/kanban_watchers_notifier.py build_wake_text, the English of
+    `gateway.kanban.wake.*`). Word for word as captured from Hermes 611bf53 on 2026-11-13, with a
+    card completed and one blocked ("blocked; needs attention", which has no Result line). Hermes
+    stores it as a user row of kind `internal_notification`; the turn's `message.start` says
+    nothing of it, and no status line comes ahead of it: a Bot Chat learns of it from the row."""
+    text = (f"[kanban] Task {tid} {status}.\nTitle: {title}\nAssignee: @{assignee}\nBoard: {board}\n\n"
+            "Check the result or decide the next step.")
+    if result:
+        text += f"\nResult: {result}"
+    return text + "\n\n" + WAKE_GUIDANCE
+
+
 def worker_completes(slug, tid, summary):
     """The assignee's worker ran the card and finished it, handing off a summary."""
     with lock:

@@ -2,8 +2,11 @@ import Foundation
 
 /// What Hermes gives an assistant as a turn in your name without your having written it, read
 /// for what it is, so a chat can show a card for it instead of a message of yours:
-/// - the board's word on cards the chat made ("✔ [study] @study Kanban t_ab12 done — …":
-///   tui_gateway/session_notifications.py, the wording Telegram gets);
+/// - the board's word on cards the chat made, in the two wordings Hermes has for it: what the
+///   gateway wakes a session with ("[kanban] Task t_ab12 completed. …", `kanbanWake`: what a Bot
+///   Chat on `hermes gateway` gets, as tried against Hermes itself), and the line its own
+///   terminal client and the messaging platforms get ("✔ [study] @study Kanban t_ab12 done — …":
+///   tui_gateway/session_notifications.py);
 /// - another assistant's message ("Message from 🤖 Name (@handle): …": tools/bot_mode_dm.py);
 /// - the end of something that ran in the background (a row of kind `process_complete`,
 ///   `async_delegation_complete` or `internal_notification`: gateway/response_filters.py).
@@ -29,6 +32,12 @@ nonisolated enum Notices {
     /// (`display_metadata.display_text`), used in place of the text written for the model.
     static func read(_ text: String, kind: String?, display: String?) -> [Notice] {
         let body = withoutProvenance(text)
+        // only a row Hermes marks as its own notification: a message you typed that starts the
+        // same way is yours
+        if kind == "internal_notification", let wake = kanbanWake(body) {
+            return [Notice(event: .board, text: wake.text, cardId: wake.taskId, assignee: wake.assignee,
+                           cardTitle: wake.title)]
+        }
         let cards = kanban(body)
         if !cards.isEmpty {
             return cards.map {
@@ -99,6 +108,9 @@ nonisolated enum Notices {
     /// repeated spawn failures", " worker crashed (pid gone); dispatcher will retry", " timed out
     /// (max_runtime=…s); will retry", " → status".
     static func kanbanOutcome(_ line: String) -> (words: String, detail: String?, stopped: Bool) {
+        if let wake = kanbanWake(line) {
+            return wake.outcome
+        }
         let lines = line.split(separator: "\n", maxSplits: 1).map(String.init)
         let extra = lines.count > 1 ? lines[1].trimmingCharacters(in: .whitespacesAndNewlines) : nil
         guard let range = lines.first?.range(of: " Kanban "), let head = lines.first else { return (line, nil, false) }
@@ -124,6 +136,96 @@ nonisolated enum Notices {
             return ("状态变了：\(rest.dropFirst().trimmingCharacters(in: .whitespaces))", extra, false)
         }
         return (String(rest), extra, false)
+    }
+
+    // MARK: the board, as the gateway wakes a session with it
+
+    /// What `hermes gateway` gives the session that subscribed to a card when the card is done,
+    /// stops or is handed over (gateway/kanban_watchers_notifier.py, `build_wake_text`), stored as
+    /// a row of kind `internal_notification`; the turn's start frame says nothing of it. Captured
+    /// from Hermes 611bf53:
+    ///
+    ///     [kanban] Task t_3beef09c completed.
+    ///     Title: 归档旧发票
+    ///     Assignee: @study
+    ///     Board: default
+    ///
+    ///     Check the result or decide the next step.
+    ///     Result: 发票都归好了。
+    ///
+    ///     This is an automatic task-status notification, not a request to …
+    ///
+    /// The last paragraph is for the model. The wording is Hermes's `gateway.kanban.wake.*`:
+    /// English in nearly every language it has, Chinese in `zh` (任务 … 已完成。标题: … 结果：…).
+    struct Wake: Equatable {
+        var taskId: String
+        var title: String?
+        var assignee: String?
+        var board: String?
+        /// What happened, in Hermes's words ("completed", "blocked; needs attention", 已完成).
+        var status: String
+        /// The first line of what was handed in, or of the review's reason.
+        var summary: String?
+        /// The notice without the paragraph for the model: what a card keeps of it.
+        var text: String
+
+        /// In Chinese, and whether the card stopped for it. Hermes's words stand where they are
+        /// not among the ones known (a language that has its own, a status added since).
+        var outcome: (words: String, detail: String?, stopped: Bool) {
+            for (signs, words, stopped) in Notices.wakeOutcomes where signs.contains(where: { status.contains($0) }) {
+                return (words, summary, stopped)
+            }
+            return (status, summary, false)
+        }
+    }
+
+    /// Hermes's statuses by what marks them, the more particular first (a review's own words say
+    /// "done" and "BLOCK" too), and what a card says for each.
+    private static let wakeOutcomes: [(signs: [String], words: String, stopped: Bool)] = [
+        (["review requested changes", "评审要求修改"], "检查没通过，要改", false),
+        (["handed off for review", "已交付评审"], "做完了，交来检查", false),
+        (["routed to triage", "转入待分诊"], "反复卡住，等人来处理", true),
+        (["gave up", "已放弃"], "试了几次都没能开始，放弃了", true),
+        (["crashed", "崩溃"], "中途出错，会再试一次", false),
+        (["timed out", "超时"], "超时了，会再试一次", false),
+        (["blocked", "被阻塞"], "停下了", true),
+        (["completed", "已完成"], "做完了", false),
+    ]
+
+    private static let wakeOpening = "[kanban] "
+
+    /// A wake's notice read from a turn's text; nil for anything else. Read by its shape, which
+    /// is the same in every language: the opening, the card's id on the first line, then the
+    /// title, the assignee and the board a line each, and in the next paragraph a fixed sentence
+    /// with what was handed in under it.
+    static func kanbanWake(_ text: String) -> Wake? {
+        guard text.hasPrefix(wakeOpening) else { return nil }
+        let paragraphs = text.components(separatedBy: "\n\n")
+        let head = paragraphs[0].split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let first = head[0].dropFirst(wakeOpening.count)
+        guard let id = first.firstMatch(of: #/\bt_[A-Za-z0-9_]+/#) else { return nil }
+        let status = first[id.range.upperBound...].trimmingCharacters(in: .whitespaces)
+            .trimmingCharacters(in: CharacterSet(charactersIn: ".。"))
+        let assignee = head.count > 2 ? head[2].split(separator: "@", maxSplits: 1).dropFirst().first.map(String.init) : nil
+        var summary: String?
+        var kept = paragraphs[0]
+        if paragraphs.count > 1 {
+            kept += "\n\n" + paragraphs[1]
+            // under the fixed sentence: "Result: …", or a review's "Review feedback: …"
+            let under = paragraphs[1].split(separator: "\n").dropFirst().first.map(String.init)
+            summary = under.flatMap { said($0) }
+        }
+        return Wake(taskId: String(id.output), title: head.count > 1 ? said(head[1]) : nil,
+                    assignee: assignee.flatMap { ["", "None"].contains($0.trimmingCharacters(in: .whitespaces)) ? nil : $0 },
+                    board: head.count > 3 ? said(head[3]) : nil,
+                    status: status.isEmpty ? String(first) : status, summary: summary, text: kept)
+    }
+
+    /// What a line says after its label ("Title: …", 结果：…); nil when nothing does.
+    private static func said(_ line: String) -> String? {
+        guard let colon = line.firstIndex(where: { $0 == ":" || $0 == "：" }) else { return nil }
+        let value = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+        return value.isEmpty ? nil : value
     }
 
     // MARK: another assistant

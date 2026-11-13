@@ -13,11 +13,12 @@ import XCTest
 ///    in order, saying when they were written (the run counts them as written two hours before);
 /// 2. into a reply that ends while the tunnel is down: once back, the bubble has all of it, and
 ///    nothing is still replying;
-/// 2b. before turns Hermes starts by itself: the board's word that a card is done, an hour before
-///    Shion is back and its card on no board any more, then the same message from 课程 twice. Once
-///    back, each is one card (the replay's frames and the transcript's row are the same notice),
-///    the board's saying when it came and which card it was, the two from 课程 both there, each
-///    ahead of the reply it started;
+/// 2b. before turns Hermes starts by itself: the board's word that a card is done, as the gateway
+///    wakes a session with it (only its row says so) and its card on no board any more, then the
+///    same message from 课程 twice. Once back, each is one card (the replay's frames and the
+///    transcript's row are the same notice), the board's saying which card it was and what was
+///    handed in, not Hermes's words for the model, the two from 课程 both there, each ahead of the
+///    reply it started;
 /// 3. after a sentence was admitted, before its receipt: 等连上后确认 while down, then an ordinary
 ///    message with its answer, once;
 /// 4. before a sentence was admitted: once back, 没发出去 with 重发, which sends it, once;
@@ -113,30 +114,26 @@ final class ReconnectTests: XCTestCase {
         once("第1句。", whole: false, "the short reply is not in one bubble", "reconnect-count-2", in: app)
         XCTAssertTrue(element("send", in: app).waitForExistence(timeout: 5), "a bubble is still replying")
 
-        // 2b. what Hermes starts by itself while Shion is away: the board's word on a card done long
-        // before Shion is back (and on no board any more), then the same words from 课程 twice.
-        // Each comes twice over, as frames from the replay (which say neither when nor which row)
-        // and as a row of the transcript: one card each, the row's
+        // 2b. what Hermes starts by itself while Shion is away: the board's word on a card done (and
+        // on no board any more), as the gateway wakes a session with it: nothing of it in the
+        // turn's start, only in the row. Then the same words from 课程 twice, each twice over: as
+        // frames from the replay (which say neither when nor which row) and as a row. One card each
         say("断线：回传", in: app)
         XCTAssertTrue(waitForText("好（CI）。", in: app, timeout: 10), "the short reply did not come")
         XCTAssertTrue(waitForText("重新连接中…", in: app, timeout: 10), "the socket did not drop")
-        // the stand-in dates the notice's row an hour before the drop
-        let dated = Date().addingTimeInterval(-3600)
         StandIn.tunnelUp("2b. what Hermes started by itself while away")
         XCTAssertTrue(waitUntil(timeout: 40) { !self.hasText("重新连接中…", in: app) }, "the connection did not come back")
         XCTAssertTrue(waitForText("课程又说了一遍收到（CI）。", in: app, timeout: 20), "the turns Hermes started while away did not come")
-        let clock = DateFormatter()
-        clock.dateFormat = "HH:mm"
-        let then = [dated, dated.addingTimeInterval(-60)].map { clock.string(from: $0) }
         let notice = element("board-notice", in: app)
-        // the rows are read a moment after the frames: until then the card says when it was replayed
-        let rowsRead = waitUntil(timeout: 15) { then.contains { self.holds($0, whole: true, in: notice) } }
+        // the notice's row is read a moment after its turn's frames
+        let rowRead = notice.waitForExistence(timeout: 15)
         keep(app.windows.firstMatch.screenshot(), "reconnect-4b-notices-while-away")
-        XCTAssertTrue(rowsRead, "the board's notice does not say when it came (\(then.joined(separator: " or "))), an hour before Shion was back")
+        XCTAssertTrue(rowRead, "the board's word on the card is not a card of its own")
         XCTAssertEqual(cards("board-notice", holding: "归档旧发票（CI）", in: app), 1,
                        "the board's notice is not one card that still names its card, gone from the board")
         XCTAssertTrue(holds("做完了：发票都归好了（CI）。", whole: false, in: notice), "the notice does not say what was handed in")
-        XCTAssertFalse(hasText("Kanban t_ci_gone", in: app), "the board's notice shows as text")
+        XCTAssertFalse(hasText("[kanban]", in: app), "the board's notice shows as Hermes worded it for the assistant")
+        XCTAssertFalse(hasText("automatic task-status notification", in: app), "what Hermes tells the model shows in the chat")
         let peers = waitUntil(timeout: 10) { self.cards("event-card", holding: "收到（CI）", in: app) == 2 }
         if !peers {
             note("event cards saying 收到（CI）: \(cards("event-card", holding: "收到（CI）", in: app)); board notices: "
