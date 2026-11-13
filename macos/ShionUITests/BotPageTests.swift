@@ -280,9 +280,18 @@ final class BotPageTests: XCTestCase {
     @MainActor
     private func type(_ text: String, into field: XCUIElement) {
         XCTAssertTrue(field.waitForExistence(timeout: 5), "no field \(field)")
-        field.click()
-        field.typeKey("a", modifierFlags: .command)
-        field.typeText(text)
+        // a field of a sheet still coming in can miss the click, and the words then go nowhere
+        // (run 202: the server's address kept its old value, and no change was saved): typed
+        // again until the field holds them. A password's field does not say what it holds, and
+        // is typed once.
+        for _ in 0..<3 {
+            field.click()
+            field.typeKey("a", modifierFlags: .command)
+            field.typeText(text)
+            if field.elementType == .secureTextField || waitUntil(timeout: 1, { (field.value as? String) == text }) {
+                return
+            }
+        }
     }
 
     @MainActor
