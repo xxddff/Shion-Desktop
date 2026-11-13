@@ -65,7 +65,8 @@ struct ChatView: View {
                         // a message came, a reply grew or finished, a call was made: followed down
                         // while the reader is at the end. Opening or closing a run changes none of
                         // this, so the transcript keeps its top and the run's line stays put.
-                        .onChange(of: TranscriptEnd(lines, retry: store.retryTarget(botId))) {
+                        .onChange(of: TranscriptEnd(lines, retry: store.retryTarget(botId),
+                                                    delivery: lines.last.flatMap { store.deliveries.state($0.id) })) {
                             guard follow.on, let last = lines.last else { return }
                             follow.until = Date().addingTimeInterval(1)
                             reader.scrollTo(last.id, anchor: .bottom)
@@ -523,9 +524,19 @@ private nonisolated struct TranscriptEnd: Equatable {
     let stopped: Bool
     /// The line 重试 goes under (AppStore.retryTarget).
     let retry: String?
+    /// The reply still arriving, when it is not the last line: what you said during its turn
+    /// stands under it and is pushed down as it grows (run 195: 再发一次 under the composer).
+    let arriving: Int
+    /// What the last message of yours says under it about getting there (DeliveryMark): a line
+    /// that comes and goes after the message itself is in view.
+    let delivery: Delivery?
+
+    /// How far up from the end a reply still arriving is looked for: the messages said during
+    /// its turn come after it.
+    private static let near = 8
 
     @MainActor
-    init(_ lines: [ChatLine], retry: String?) {
+    init(_ lines: [ChatLine], retry: String?, delivery: Delivery?) {
         last = lines.last?.id
         let item = lines.last?.items.last
         length = item?.text.utf8.count ?? 0
@@ -533,6 +544,9 @@ private nonisolated struct TranscriptEnd: Equatable {
         todos = item?.todoIds.count ?? 0
         stopped = item?.stopped ?? false
         self.retry = retry
+        arriving = lines.suffix(Self.near).dropLast().compactMap { $0.items.last }
+            .last { $0.streaming }?.text.utf8.count ?? 0
+        self.delivery = delivery
     }
 }
 

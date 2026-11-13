@@ -159,13 +159,15 @@ final class ComposeTests: XCTestCase {
         XCTAssertFalse(waitForText("听到了：别接这一句", in: app, timeout: 1), "the stand-in took the message it declines")
         XCTAssertFalse(waitForText("收到：别接这一句", in: app, timeout: 1), "the declined message was sent again by itself")
         let again = element("resend", in: app)
-        if again.waitForExistence(timeout: 5), waitUntil(timeout: 5, { again.isEnabled }) {
+        // in view, not under the composer: the chat follows the line that came under the message
+        // (run 195: the click went to the composer, and nothing was sent again)
+        if again.waitForExistence(timeout: 5), waitUntil(timeout: 5, { again.isEnabled && again.isHittable }) {
             XCTAssertTrue(again.label.contains("再发一次") || app.buttons["再发一次"].exists,
                           "the way to send a declined message again is not 再发一次: \(again.label)")
             again.click()
             XCTAssertTrue(waitUntil(timeout: 10) { !declined.exists }, "it still says the turn did not take it after 再发一次")
         } else {
-            XCTFail("no 再发一次 under the declined message")
+            XCTFail("no 再发一次 to press under the declined message (there: \(again.exists), in view: \(again.exists && again.isHittable))")
         }
         // 今天's field: a turn of its own behind the story, not put into it, whatever the composer says
         element("nav-today", in: app).click()
