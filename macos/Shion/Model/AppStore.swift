@@ -798,7 +798,8 @@ extension AppStore {
                 // a turn of someone else's making: what started it is a row to read (AppStore+Events.swift)
                 let submission = payload["persisted_turn"]?["submission_id"]?.string
                 if submission == nil || chats[botId]?.contains(where: { $0.id == submission }) != true {
-                    followNotices(botId, atStart: false)
+                    // the end names the row the turn began with: read up to it
+                    followNotices(botId, atStart: false, row: payload["persisted_turn"]?["user_row_id"]?.int)
                 }
             }
             if payload["status"]?.string == "error" {

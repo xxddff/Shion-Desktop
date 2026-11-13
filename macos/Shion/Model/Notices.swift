@@ -51,8 +51,13 @@ nonisolated enum Notices {
             return [Notice(event: .received(from: message.from), text: peerWords(message.words))]
         }
         if let kind, machineKinds.contains(kind) {
-            // a teammate's answer, not the command line of the process that waited for it
-            if let answers = peerAnswers(body) { return answers }
+            // a teammate's answer, not the command line of the process that waited for it. Several
+            // results can come as one turn (`results`): each is read for what it is, so an answer
+            // among them hides neither another answer nor a command that failed
+            let all = results(body)
+            if all.contains(where: { peerAnswers($0) != nil }) {
+                return all.flatMap { peerAnswers($0) ?? [Notice(event: .background, text: unwrapped($0))] }
+            }
             let shown = (display ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             return [Notice(event: .background, text: shown.isEmpty ? body : shown)]
         }
@@ -268,6 +273,37 @@ nonisolated enum Notices {
         return parts.joined(separator: "\n\n")
     }
 
+    // MARK: results that came together
+
+    private static let resultOpening = "[IMPORTANT: "
+
+    /// The background results in one turn's text, each as Hermes wrote it. Results that arrive
+    /// while the session is busy are folded into one turn (gateway/session_automation.py
+    /// `_fold_completion`): under one header (`withoutProvenance` takes it off), each result's own
+    /// block, opening with `[IMPORTANT: ` on a line of its own start. One result, or a text that
+    /// is not such a block, is itself.
+    static func results(_ body: String) -> [String] {
+        guard body.hasPrefix(resultOpening) else { return [body] }
+        var blocks: [[String]] = []
+        for line in body.split(separator: "\n", omittingEmptySubsequences: false).map(String.init) {
+            if line.hasPrefix(resultOpening) || blocks.isEmpty {
+                blocks.append([line])
+            } else {
+                blocks[blocks.count - 1].append(line)
+            }
+        }
+        return blocks.map { $0.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines) }
+    }
+
+    /// One result without the brackets Hermes puts around it for the model: what ended and how,
+    /// its command and what it put out, in Hermes's words.
+    static func unwrapped(_ result: String) -> String {
+        var words = result
+        if words.hasPrefix(resultOpening) { words.removeFirst(resultOpening.count) }
+        if words.hasSuffix("]") { words.removeLast() }
+        return words.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     // MARK: another assistant's answer
 
     /// What came of a message this assistant sent another (message_agent). Hermes waits for the
@@ -279,7 +315,7 @@ nonisolated enum Notices {
     ///
     /// An answer is a message from that teammate, `from` its handle (the card shows the
     /// assistant's name for it); no answer is said in Hermes's own sentence. Nil when the text is
-    /// not the end of such a process.
+    /// not the end of such a process. One result at a time (`results`).
     static func peerAnswers(_ text: String) -> [Notice]? {
         let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         guard let command = lines.firstIndex(where: { $0.hasPrefix("Command: ") && $0.contains("bot_mode_dm") }),

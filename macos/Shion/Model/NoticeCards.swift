@@ -40,20 +40,26 @@ nonisolated enum NoticeCards {
         var event: ChatEvent?
         var text: String
         var at: Date
-        /// Whose it is (you, the assistant, a card, …), to tell a row from a live item of the
-        /// same words: only what `place` goes by, for anything that is no notice's card.
+        /// Whose it is (you, the assistant, a card, …): with its words, what tells which row an
+        /// item that came live is.
         var role = ""
+        /// It is a row of the transcript under the row's own id (read from a page), not something
+        /// that came as a frame or was said here: it is that row and no other, whatever it says.
+        var stored = false
 
         var stage: Stage? { NoticeCards.stage(of: id) }
+
+        /// Hermes gave it to the assistant as a turn: its card stands where that turn begins.
+        var startsTurn: Bool { event?.startsTurn == true }
 
         func says(_ other: Held) -> Bool {
             event != nil && event == other.event && text == other.text
         }
 
-        /// A row of the transcript and the chat's item for it: under the row's id, or (what
-        /// came live has no row's id yet) the same words from the same side.
-        func isRow(_ row: Held) -> Bool {
-            id == row.id || (!text.isEmpty && role == row.role && event == row.event && text == row.text)
+        /// Something that came live and may be this row: the same words from the same side, and
+        /// no row's id of its own.
+        func isLive(_ row: Held) -> Bool {
+            !stored && stage == nil && !text.isEmpty && role == row.role && event == row.event && text == row.text
         }
     }
 
@@ -86,50 +92,117 @@ nonisolated enum NoticeCards {
         return held[(row + 1)...].allSatisfy { $0.event?.startsTurn == true }
     }
 
-    /// Where a row's card goes.
-    enum Place: Equatable, Sendable {
-        /// The chat has it, under the row's id.
-        case held
-        /// In place of the card at this index, which came as a frame and stood for it.
-        case inPlaceOf(Int)
-        /// A card of its own, at this index: after the last item no later than it.
-        case at(Int)
+    // MARK: rows of the transcript
+
+    /// What a page's rows came to in a chat (`put(page:)`).
+    struct Put: Equatable, Sendable {
+        /// Cards put in for rows no card stood for.
+        var added = 0
+        /// Cards that came as frames and are their rows now.
+        var settled = 0
+        /// The chat's item for the oldest row of the page that the chat has now: the rows of an
+        /// older page go above it.
+        var top: String?
     }
 
-    /// A row of the transcript read while its chat is open: the oldest card that came as a frame
-    /// and says the same is this notice (one whose turn began, before one only told of: the row is
-    /// written as the turn begins), and the row takes its place, where it is: the frames came in
-    /// the order things happened, and a replayed reply is dated when it was replayed, so the row's
-    /// own time would put it before replies that came ahead of it. A row takes one card's place,
-    /// and never another row's.
+    /// How far below the newest place it may stand a row is looked for among what came live: the
+    /// rows of the page still to place, and this many items that are no row (cards told of, a
+    /// line about a turn). Words said again long before are not this row.
+    private static let reach = 8
+
+    /// A page of the transcript read while its chat is open, oldest row first: every row that
+    /// started a turn has its card in the chat afterwards, once, where the transcript has it.
     ///
-    /// A row no frame's card stood for (the gateway's board wake: its turn's start says nothing)
-    /// goes where the transcript has it, among the rows of the page it was read on: ahead of the
-    /// nearest row `after` it that the chat has (the reply it started), else behind the nearest
-    /// row `before` it. Not by its time while a neighbour is known: a row's time is the server's,
-    /// written a moment after the start is announced, and a live item's is when this Mac took its
-    /// frame, so the two do not order a notice against the replies around it (run 197 had one
-    /// above the reply before it). By time only when the chat has none of its neighbours.
-    static func place(row card: Held, among held: [Held], before: [Held] = [], after: [Held] = []) -> Place {
-        if held.contains(where: { $0.id == card.id }) { return .held }
-        if let index = held.firstIndex(where: { $0.stage == .begun && $0.says(card) })
-            ?? held.firstIndex(where: { $0.stage == .told && $0.says(card) }) {
-            return .inPlaceOf(index)
+    /// The page's rows and the chat's items tell of the same things in the same order, so they are
+    /// matched from the newest back, each row to an item above the one the row after it was
+    /// matched to:
+    /// - the item under the row's own id is the row (read before);
+    /// - a card that came as a frame and says the same is this notice, and the row takes its
+    ///   place, with its id and its time: the newest such card for the newest row, so a page that
+    ///   holds only the last of several notices in the same words gives them to the last of the
+    ///   cards (matched from the oldest they went to the wrong ones: the review's RR10);
+    /// - for any other row, something that came live in the same words from the same side: never
+    ///   an item that is another row (RR11), and none further up than the page can reach.
+    /// A row that started a turn and has none of these (the gateway's board wake and another
+    /// assistant's message: their turn's start says nothing) gets its card: ahead of the item
+    /// of the nearest row after it (the reply it started), else behind that of the nearest row
+    /// before it, and by its time only when the chat has no row of the page at all. Not by time
+    /// otherwise: a row's time is the server's, a live item's is when this Mac took its frame.
+    ///
+    /// `above` is `top` of the page read before this one (a newer one): nothing of this page is
+    /// looked for or put at or below that item.
+    @discardableResult
+    static func put<Item>(page: [Item], in items: inout [Item], above: String? = nil, as held: (Item) -> Held) -> Put {
+        var among = items.map(held)
+        var result = Put()
+        // the chat's items from here on are of rows after the ones still to place
+        var limit = above.flatMap { id in among.firstIndex { $0.id == id } } ?? among.count
+        // where the nearest row after the one being placed stands, once one does
+        var next: Int?
+        // cards with no row after them in the chat yet, the newest first
+        var waiting: [Item] = []
+        for index in page.indices.reversed() {
+            let row = held(page[index])
+            let floor = max(0, limit - (index + 1 + reach))
+            var found = among[..<limit].lastIndex { $0.id == row.id }
+            var takesPlace = false
+            if found == nil, row.startsTurn {
+                found = among[floor..<limit].lastIndex { $0.stage == .begun && $0.says(row) }
+                    ?? among[floor..<limit].lastIndex { $0.stage == .told && $0.says(row) }
+                takesPlace = found != nil
+            } else if found == nil {
+                found = among[floor..<limit].lastIndex { $0.isLive(row) }
+            }
+            if let found {
+                if takesPlace {
+                    items[found] = page[index]
+                    among[found] = row
+                    result.settled += 1
+                }
+                // the cards after this row with nothing after them: right behind it, in their order
+                for card in waiting {
+                    items.insert(card, at: found + 1)
+                    among.insert(held(card), at: found + 1)
+                    result.added += 1
+                }
+                waiting = []
+                limit = found
+                next = found
+                result.top = among[found].id
+            } else if row.startsTurn {
+                if let next {
+                    items.insert(page[index], at: next)
+                    among.insert(row, at: next)
+                    result.added += 1
+                    limit = next
+                    result.top = row.id
+                } else {
+                    waiting.append(page[index])
+                }
+            }
         }
-        // the same words can be in the chat more than once: the row before it is the newest of
-        // them, the row after it the first one past that
-        var behind: Int?
-        for row in before.reversed() {
-            if let index = held.lastIndex(where: { $0.isRow(row) }) { behind = index + 1; break }
+        // the chat has no row of the page: each by its time, among what is above `above`
+        for card in waiting {
+            let row = held(card)
+            let place = among[..<limit].lastIndex { $0.at <= row.at }.map { $0 + 1 } ?? 0
+            items.insert(card, at: place)
+            among.insert(row, at: place)
+            result.added += 1
+            limit = place
+            result.top = row.id
         }
-        let from = behind ?? 0
-        for row in after {
-            if let index = held[from...].firstIndex(where: { $0.isRow(row) }) { return .at(index) }
-            // said on both sides of the notice: the newest of them is the row after it
-            if from > 0, held[from - 1].isRow(row) { return .at(from - 1) }
-        }
-        if let behind { return .at(behind) }
-        return .at(held.lastIndex { $0.at <= card.at }.map { $0 + 1 } ?? 0)
+        return result
+    }
+
+    /// Whether to read further up the transcript after `pages` pages, for the row that started a
+    /// turn now over (`row`, as its end names it) or for a card that came as a frame and still
+    /// has no row (`awaiting`). `read` are the ids of the rows read so far. The row is looked
+    /// for until it was read or passed; a card without a row is worth one more page, as it was.
+    /// So notices that came while away are all found, however many turns there were, and nothing
+    /// is read for a turn whose row is among the newest.
+    static func readsFurther(for row: Int?, read: [Int], pages: Int, awaiting: Bool) -> Bool {
+        if let row, !read.isEmpty, !read.contains(where: { $0 <= row }) { return true }
+        return awaiting && pages < 2
     }
 
     // MARK: on a chat's items
@@ -152,20 +225,6 @@ nonisolated enum NoticeCards {
         }
         if !hasRow(held(card), among: items.map(held)) {
             items.append(card)
-        }
-    }
-
-    /// A row of the transcript that started a turn, read while the chat is open (`place`).
-    /// `before` and `after` are the rows of the page it was read on, around it.
-    static func put<Item>(row card: Item, in items: inout [Item], before: [Item] = [], after: [Item] = [],
-                          as held: (Item) -> Held) {
-        switch place(row: held(card), among: items.map(held), before: before.map(held), after: after.map(held)) {
-        case .held:
-            break
-        case .inPlaceOf(let index):
-            items[index] = card
-        case .at(let index):
-            items.insert(card, at: index)
         }
     }
 

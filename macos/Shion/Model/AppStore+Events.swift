@@ -30,47 +30,69 @@ extension AppStore {
 
     /// A chat's item as NoticeCards tells notices apart: only an event's card says a notice.
     private static func notice(_ item: ChatItem) -> NoticeCards.Held {
+        // a row read from a page is under its own id: its number, or its call's for a tool's row
         NoticeCards.Held(id: item.id, event: item.role == .card ? item.event : nil, text: item.text, at: item.at,
-                         role: String(describing: item.role))
+                         role: String(describing: item.role),
+                         stored: item.id.hasPrefix("row-") || item.id.hasPrefix("tool-") || item.id.hasPrefix("compaction-"))
     }
 
-    /// How many of the newest rows are read for what started a turn, and how many when a card
-    /// whose turn is over still has no row: more turns came while away than the first read reached.
+    /// How many of the newest rows are read for what started a turn, and how many pages further
+    /// up (of a page's rows each) when the row is not among them: more turns came while away
+    /// than the first read reached.
     private static let noticeRows = 12
-    private static let noticeRowsAtMost = 60
+    private static let noticePagesAtMost = 6
 
     /// A turn this Mac did not start (the board's word, another assistant's message, a background
     /// result): Hermes stores what started it as a row and tells a viewer nothing more, so the
     /// newest rows are read for it. At the turn's start, unless it plainly answers a message of
     /// yours, and at the end of a turn that was not one of yours (the row is written as the turn
-    /// begins, a moment after the start is announced). A row takes the place of the card that
-    /// came for it as a frame, live or replayed, and brings its own id and time; a row no card
-    /// came for (the gateway's board wake) goes in beside the rows it stands between in the
-    /// transcript; two rows are two cards, whatever they say (NoticeCards.swift). A later read of
-    /// the page has them under the same ids.
-    func followNotices(_ botId: String, atStart: Bool) {
+    /// begins, a moment after the start is announced). The end names the row (`row`:
+    /// persisted_turn's user_row_id), and the transcript is read further up until that row was
+    /// read: after a long time away each turn's notice is found, not only the ones among the
+    /// newest rows (the board's wake and a teammate's message start a turn that says nothing, so
+    /// no card that came as a frame asks for its row: the review's RR09).
+    ///
+    /// A page's rows are matched to the chat's items from the newest back (NoticeCards.put): a row
+    /// takes the place of the card that came for it as a frame, live or replayed, and brings its
+    /// own id and time; a row no card came for goes in beside the rows it stands between in the
+    /// transcript; two rows are two cards, whatever they say. A later read of the page has them
+    /// under the same ids.
+    func followNotices(_ botId: String, atStart: Bool, row: Int? = nil) {
         guard pagesTranscripts, loadedChats.contains(botId), let sessionId = sessions[botId] else { return }
         if atStart, awaitsOwnReply(botId) { return }
         Task {
             if atStart {
                 try? await Task.sleep(for: .milliseconds(600))
             }
-            var limit = Self.noticeRows
+            var cursor: String?
+            var above: String?
+            var read: [Int] = []
+            var pages = 0
             while true {
-                guard let page = try? await gateway.call("session.transcript", [
-                    "profile": .string(botId), "session_id": .string(sessionId), "order": "latest",
-                    "limit": .number(Double(limit)),
-                ]), sessions[botId] == sessionId, loadedChats.contains(botId) else { return }
-                let rows = transcriptItems(page)
-                for (index, card) in rows.enumerated() where card.role == .card && card.event?.startsTurn == true {
-                    // beside the rows it stands between on the page, where no frame's card stood for it
-                    NoticeCards.put(row: card, in: &chats[botId, default: []], before: Array(rows[..<index]),
-                                    after: Array(rows[(index + 1)...])) { Self.notice($0) }
+                let asked: JSONValue? = if let cursor {
+                    try? await gateway.call("session.transcript", [
+                        "profile": .string(botId), "session_id": .string(sessionId), "order": "latest",
+                        "limit": .number(Double(Self.pageSize)), "cursor": .string(cursor),
+                    ])
+                } else {
+                    try? await gateway.call("session.transcript", [
+                        "profile": .string(botId), "session_id": .string(sessionId), "order": "latest",
+                        "limit": .number(Double(Self.noticeRows)),
+                    ])
                 }
-                // a turn that is over has its row: once more, further up, for a card still without one
-                guard !atStart, limit < Self.noticeRowsAtMost, page["next_cursor"]?.string != nil,
-                      NoticeCards.awaitsRow(chats[botId] ?? [], as: { Self.notice($0) }) else { return }
-                limit = Self.noticeRowsAtMost
+                guard let page = asked, sessions[botId] == sessionId, loadedChats.contains(botId) else { return }
+                // the chat may have changed while the page was read: the place is found again by its item
+                let put = NoticeCards.put(page: transcriptItems(page), in: &chats[botId, default: []], above: above) {
+                    Self.notice($0)
+                }
+                pages += 1
+                read += (page["rows"]?.array ?? []).compactMap { $0["row_id"]?.int }
+                guard !atStart, pages <= Self.noticePagesAtMost, let older = page["next_cursor"]?.string,
+                      NoticeCards.readsFurther(for: row, read: read, pages: pages,
+                                               awaiting: NoticeCards.awaitsRow(chats[botId] ?? [], as: { Self.notice($0) }))
+                else { return }
+                cursor = older
+                above = put.top ?? above
             }
         }
     }
