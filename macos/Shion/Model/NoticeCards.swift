@@ -40,11 +40,20 @@ nonisolated enum NoticeCards {
         var event: ChatEvent?
         var text: String
         var at: Date
+        /// Whose it is (you, the assistant, a card, …), to tell a row from a live item of the
+        /// same words: only what `place` goes by, for anything that is no notice's card.
+        var role = ""
 
         var stage: Stage? { NoticeCards.stage(of: id) }
 
         func says(_ other: Held) -> Bool {
             event != nil && event == other.event && text == other.text
+        }
+
+        /// A row of the transcript and the chat's item for it: under the row's id, or (what
+        /// came live has no row's id yet) the same words from the same side.
+        func isRow(_ row: Held) -> Bool {
+            id == row.id || (!text.isEmpty && role == row.role && event == row.event && text == row.text)
         }
     }
 
@@ -93,12 +102,33 @@ nonisolated enum NoticeCards {
     /// the order things happened, and a replayed reply is dated when it was replayed, so the row's
     /// own time would put it before replies that came ahead of it. A row takes one card's place,
     /// and never another row's.
-    static func place(row card: Held, among held: [Held]) -> Place {
+    ///
+    /// A row no frame's card stood for (the gateway's board wake: its turn's start says nothing)
+    /// goes where the transcript has it, among the rows of the page it was read on: ahead of the
+    /// nearest row `after` it that the chat has (the reply it started), else behind the nearest
+    /// row `before` it. Not by its time while a neighbour is known: a row's time is the server's,
+    /// written a moment after the start is announced, and a live item's is when this Mac took its
+    /// frame, so the two do not order a notice against the replies around it (run 197 had one
+    /// above the reply before it). By time only when the chat has none of its neighbours.
+    static func place(row card: Held, among held: [Held], before: [Held] = [], after: [Held] = []) -> Place {
         if held.contains(where: { $0.id == card.id }) { return .held }
         if let index = held.firstIndex(where: { $0.stage == .begun && $0.says(card) })
             ?? held.firstIndex(where: { $0.stage == .told && $0.says(card) }) {
             return .inPlaceOf(index)
         }
+        // the same words can be in the chat more than once: the row before it is the newest of
+        // them, the row after it the first one past that
+        var behind: Int?
+        for row in before.reversed() {
+            if let index = held.lastIndex(where: { $0.isRow(row) }) { behind = index + 1; break }
+        }
+        let from = behind ?? 0
+        for row in after {
+            if let index = held[from...].firstIndex(where: { $0.isRow(row) }) { return .at(index) }
+            // said on both sides of the notice: the newest of them is the row after it
+            if from > 0, held[from - 1].isRow(row) { return .at(from - 1) }
+        }
+        if let behind { return .at(behind) }
         return .at(held.lastIndex { $0.at <= card.at }.map { $0 + 1 } ?? 0)
     }
 
@@ -126,8 +156,10 @@ nonisolated enum NoticeCards {
     }
 
     /// A row of the transcript that started a turn, read while the chat is open (`place`).
-    static func put<Item>(row card: Item, in items: inout [Item], as held: (Item) -> Held) {
-        switch place(row: held(card), among: items.map(held)) {
+    /// `before` and `after` are the rows of the page it was read on, around it.
+    static func put<Item>(row card: Item, in items: inout [Item], before: [Item] = [], after: [Item] = [],
+                          as held: (Item) -> Held) {
+        switch place(row: held(card), among: items.map(held), before: before.map(held), after: after.map(held)) {
         case .held:
             break
         case .inPlaceOf(let index):

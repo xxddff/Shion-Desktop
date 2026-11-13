@@ -145,11 +145,16 @@ final class ReconnectTests: XCTestCase {
             .filter { self.holds("收到（CI）", whole: false, in: $0) }.map { $0.frame.minY }.sorted()
         let answers = ["课程把旧发票归好了（CI）。", "知道课程收到了（CI）。", "课程又说了一遍收到（CI）。"]
             .compactMap { texts($0, whole: false, in: app).first?.frame.minY }
-        if said.count == 2, answers.count == 3 {
-            let order = [notice.frame.minY, answers[0], said[0], answers[1], said[1], answers[2]]
+        // the board's card under the reply that came before it, though only its row said it
+        // (run 197: placed by the row's time, it went above that reply)
+        let earlier = answers.first.flatMap { first in
+            texts("好（CI）。", whole: true, in: app).map { $0.frame.minY }.filter { $0 < first }.max()
+        }
+        if said.count == 2, answers.count == 3, let earlier {
+            let order = [earlier, notice.frame.minY, answers[0], said[0], answers[1], said[1], answers[2]]
             XCTAssertEqual(order, order.sorted(), "the cards and the replies they started are out of order")
         } else {
-            XCTFail("not two cards and three replies to tell the order of: \(said.count) and \(answers.count)")
+            XCTFail("not two cards, three replies and the reply before them to tell the order of: \(said.count), \(answers.count), \(earlier != nil)")
         }
 
         // 3. admitted, and the receipt lost with the connection

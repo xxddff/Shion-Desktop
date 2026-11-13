@@ -30,7 +30,8 @@ extension AppStore {
 
     /// A chat's item as NoticeCards tells notices apart: only an event's card says a notice.
     private static func notice(_ item: ChatItem) -> NoticeCards.Held {
-        NoticeCards.Held(id: item.id, event: item.role == .card ? item.event : nil, text: item.text, at: item.at)
+        NoticeCards.Held(id: item.id, event: item.role == .card ? item.event : nil, text: item.text, at: item.at,
+                         role: String(describing: item.role))
     }
 
     /// How many of the newest rows are read for what started a turn, and how many when a card
@@ -44,8 +45,9 @@ extension AppStore {
     /// yours, and at the end of a turn that was not one of yours (the row is written as the turn
     /// begins, a moment after the start is announced). A row takes the place of the card that
     /// came for it as a frame, live or replayed, and brings its own id and time; a row no card
-    /// came for goes in where it belongs in time; two rows are two cards, whatever they say
-    /// (NoticeCards.swift). A later read of the page has them under the same ids.
+    /// came for (the gateway's board wake) goes in beside the rows it stands between in the
+    /// transcript; two rows are two cards, whatever they say (NoticeCards.swift). A later read of
+    /// the page has them under the same ids.
     func followNotices(_ botId: String, atStart: Bool) {
         guard pagesTranscripts, loadedChats.contains(botId), let sessionId = sessions[botId] else { return }
         if atStart, awaitsOwnReply(botId) { return }
@@ -59,8 +61,11 @@ extension AppStore {
                     "profile": .string(botId), "session_id": .string(sessionId), "order": "latest",
                     "limit": .number(Double(limit)),
                 ]), sessions[botId] == sessionId, loadedChats.contains(botId) else { return }
-                for card in transcriptItems(page) where card.role == .card && card.event?.startsTurn == true {
-                    NoticeCards.put(row: card, in: &chats[botId, default: []]) { Self.notice($0) }
+                let rows = transcriptItems(page)
+                for (index, card) in rows.enumerated() where card.role == .card && card.event?.startsTurn == true {
+                    // beside the rows it stands between on the page, where no frame's card stood for it
+                    NoticeCards.put(row: card, in: &chats[botId, default: []], before: Array(rows[..<index]),
+                                    after: Array(rows[(index + 1)...])) { Self.notice($0) }
                 }
                 // a turn that is over has its row: once more, further up, for a card still without one
                 guard !atStart, limit < Self.noticeRowsAtMost, page["next_cursor"]?.string != nil,
