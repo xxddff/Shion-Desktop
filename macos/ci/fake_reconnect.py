@@ -496,7 +496,10 @@ def begin(turn):
         current["generation"] += 1
         admission.update(status="started", generation=current["generation"])
         turn["generation"] = current["generation"]
-    turn["user_row"] = keep(session_id, "user", turn["text"])
+    # the row keeps whose submission it was, as Hermes stores a prompt (display_metadata, captured
+    # from Hermes itself): a client reading the transcript can tell the row is its own message
+    owned = {"gateway_input_owner": "ci", **({"submission_id": admission["input_id"]} if admission.get("input_id") else {})}
+    turn["user_row"] = keep(session_id, "user", turn["text"], display_metadata=owned)
     publish_pending(session_id, turn["generation"])
     publish(session_id, "message.start", {}, turn["generation"], admission["admission_id"])
 
