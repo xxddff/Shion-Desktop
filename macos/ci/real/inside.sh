@@ -39,7 +39,7 @@ for _ in $(seq 1 60); do
 done
 [ -n "$ready" ] || { echo "the gateway did not come up"; tail -20 /out/gateway.log; exit 1; }
 
-for stage in ${STAGES:-plain peer peer2 background gap behind compact auto}; do
+for stage in ${STAGES:-plain peer peer2 background gap behind compact auto queued}; do
     echo "######## $stage"
     python /real/probe.py "$stage" "/out/capture-$stage.json" > "/out/$stage.txt" 2>&1 || { tail -20 "/out/$stage.txt"; exit 1; }
     # the frames that say little are left out of what is shown (they are in the .txt); stage behind

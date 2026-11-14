@@ -31,6 +31,11 @@ that compact a session by themselves.
                                               command runs, rewinds by the old numbers and by the new one; the
                                               pages also go beside the capture: autocompaction-send.json,
                                               autocompaction-notices.json
+  python probe.py queued <capture.json>       two prompts queued behind a running turn, then 「继续」 put into
+                                              that turn; then 「继续」 put into a turn Hermes compacted the
+                                              session at the start of; then a background result's turn: the
+                                              pages, and what each run's frames say of its admission (the
+                                              pending list); the pages also go to queued-send.json
 
 Each prints what a viewer gets, frame by frame, and writes it as JSON for the Mac's own code to be
 run over (read_notices.sh, read_behind.sh, ../logic/send, ../logic/notices)."""
@@ -748,6 +753,83 @@ elif STAGE == "auto":
         }
         v.close()
     write_pages(pages, "autocompaction")
+
+elif STAGE == "queued":
+    def kept(frames):
+        """What a turn's frames say of the runs: each session.info's pending admissions (whose run, by
+        input_id and execution_generation), each start's and end's run and what the end names."""
+        said = []
+        for f in frames:
+            kind, payload = f.get("type"), f.get("payload") or {}
+            if kind == "session.info" and "pending" in payload:
+                said.append({"type": kind, "session_id": f.get("session_id"), "execution_generation": f.get("execution_generation"),
+                             "payload": {"pending": [{key: entry.get(key) for key in ("input_id", "execution_generation", "status")}
+                                                     for entry in payload["pending"]]}})
+            elif kind in ("message.start", "message.complete"):
+                said.append({"type": kind, "session_id": f.get("session_id"), "execution_generation": f.get("execution_generation"),
+                             "payload": {key: payload.get(key) for key in ("display_kind", "display_text", "persisted_turn", "status")
+                                         if payload.get(key) is not None}})
+        for entry in said:
+            say("   ", short(entry, 420))
+        return said
+
+    def queued_behind(viewer, profile, chat, words, queued, steer):
+        """A prompt whose turn runs a command for a few seconds (mock_model.py: 慢慢做); while it runs, the
+        prompts `queued` (prompt.submit: Hermes queues them behind it), then `steer` put into it for its
+        run, as Shion's composer does with 排队 then 引导. Every turn's end waited for."""
+        mark = len(viewer.frames)
+        submissions = {words: str(uuid.uuid4()).upper()}
+        viewer.call("prompt.submit", {"profile": profile, "session_id": chat, "text": words, "submission_id": submissions[words]})
+        if not viewer.listen(60, until="tool.start", after=mark):
+            say("the command did not start in 60 s")
+            raise SystemExit(1)
+        generation = next(f.get("execution_generation") for f in reversed(viewer.frames) if f.get("type") == "tool.start")
+        for later in queued:
+            submissions[later] = str(uuid.uuid4()).upper()
+            viewer.call("prompt.submit", {"profile": profile, "session_id": chat, "text": later, "submission_id": submissions[later]})
+        answer = viewer.call("session.steer", {"profile": profile, "session_id": chat, "text": steer, "execution_generation": generation})
+        came = viewer.listen(120, until="message.complete", after=mark, count=1 + len(queued))
+        say("the turn and the ones queued behind it", "ended" if came else "DID NOT ALL END in 120 s")
+        viewer.listen(1)
+        return submissions, answer, kept(viewer.frames[mark:])
+
+    def steered_in(viewer, profile, chat, words, steer):
+        """`words` begins a turn that runs a command; `steer` put into it while the command runs. Its frames."""
+        mark = len(viewer.frames)
+        submission, answer = steered(viewer, profile, chat, words, steer)
+        return submission, answer, kept(viewer.frames[mark:])
+
+    pages = {}
+    for profile, path in (("diary", "in place"), ("errand", "rotation")):
+        say(f"######## {path} ({profile})")
+        v = Socket(profile[:2], profile=profile)
+        chat = bot_chat(v, profile)
+        say("--- two prompts queued behind a running turn, then 「继续」 put into that turn")
+        submissions, steer, frames = queued_behind(v, profile, chat, "慢慢做（排队）", ["排队的第一句（排队）", "排队的第二句（排队）"],
+                                                   "继续（排队）")
+        queued = rows_of(v, profile, chat, limit=50)
+        queued_stored = stored(profile)
+        say("--- a turn whose start compacts the session (two long replies to summarize first), 「继续」 put into it")
+        mark = len(v.frames)
+        for words in ("第一句，长长地回（排队）", "第二句，长长地回（排队）", "满了（排队）"):
+            turn(v, profile, chat, words)
+        full = kept(v.frames[mark:])
+        later, steer2, frames2 = steered_in(v, profile, chat, "慢慢做，压缩以后（排队）", "继续（排队以后）")
+        compacted = rows_of(v, profile, chat, limit=50)
+        compacted_stored = stored(profile)
+        say("--- a turn Hermes starts itself: what its frames say of its run")
+        mark = len(v.frames)
+        background, notice = noticed(v, profile, chat, "后台跑一下（排队）")
+        frames3 = kept(v.frames[mark:])
+        capture[path] = {"profile": profile, "session": chat, "submissions": submissions, "steer": steer, "frames": frames,
+                         "queued": queued, "queued_stored": queued_stored, "full": full, "later": later, "steer2": steer2,
+                         "frames2": frames2, "compacted": compacted, "compacted_stored": compacted_stored,
+                         "background": background, "frames3": frames3}
+        # what ../logic/send reads: the pages, the submissions said, and what the frames said of the runs
+        pages[path] = {"send": {"submissions": submissions, "frames": frames, "queued": queued,
+                                "later": later, "frames2": frames2, "compacted": compacted, "frames3": frames3}}
+        v.close()
+    write_pages(pages, "queued")
 
 with open(OUT, "w", encoding="utf-8") as out:
     json.dump(capture, out, ensure_ascii=False, indent=1)

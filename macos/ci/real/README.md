@@ -39,6 +39,7 @@ gateway 是经 `hold_gateway.py` 起的：Hermes 的文件一个不改，只在�
 | `behind` | 一轮的结束赶在 `session.resume` 的回答前面：建一个审核技能用的那种会话（隐藏、没有工具），发一句让模型说到一半停住的话；这一轮还在跑时再读一次会话，回答被 `hold_gateway.py` 按在读完快照之后；放模型说完，等 `message.complete` 和 `session.info` 到了，再放回答 |
 | `compact` | 一轮里模型跑一条要三秒的命令（「慢慢做」），命令跑着时像 Shion 那样把「继续」引导进去（`session.steer`）；然后压缩对话（`session.mutate` 的 `compress`）。再说一句普通的「继续」，再引导一次「继续」，再压缩一次。第三次压缩之前让一条后台命令跑完（「后台跑一下」：Hermes 拿它的结果自己起一轮），压缩以后再来一条；第四次之前停掉一轮（`session.interrupt`），压缩以后先按它压缩前的行号、再按新的行号把它收回（`session.mutate` 的 `rewind`）。每次压缩以后，还按压缩前的行号各收回一次留下来的和总结掉的一句话。默认 profile 原地压缩，`commute` 换成新的会话。每次压缩前后读最新一页，再直接读 `state.db` 里所有的行（归档的、旧会话的也在内）；检查用的页和回答另外存成 `compaction-send.json`（`../logic/send` 用）和 `compaction-notices.json`（`../logic/notices` 用） |
 | `auto` | Hermes 自己压缩：两句要长回复的话，一句普通的「继续」，一轮里引导进去一句「继续」，一条后台命令和它的结果起的一轮，一句「满了」（它的回复说上下文满了）。下一轮一开始 Hermes 就压缩（preflight）；再来一条后台结果；再一轮里命令的结果回来时上下文又满了，Hermes 在这一轮中间压缩（post_tool），命令跑着时读一次最新一页；再来第三条后台结果。按压缩前的行号收回每一句你说的、留下来的或总结掉的话，最后按新的行号收回中间压缩的那一轮。`diary` 原地压缩，`errand` 换成新的会话。每次压缩前后读最新一页和 `state.db` 里所有的行，压缩前读最新六行，压缩后拿它的游标往上读；检查用的页和回答另外存成 `autocompaction-send.json`、`autocompaction-notices.json` |
+| `queued` | 一轮在跑（「慢慢做」）时，像 Shion 那样先发两句排队的话（`prompt.submit`，Hermes 排在这一轮后面），再把「继续」引导进这一轮；再说两句要长回复的话和一句「满了」，下一轮一开始 Hermes 压缩，这一轮里再引导进一句「继续」；最后一条后台结果。`diary` 原地压缩，`errand` 换成新的会话。读每次的最新一页和库里的行，记下每次运行的帧里 `pending` 说的是哪一条提交；页另外存成 `queued-send.json` |
 
 结果在 `captures/`（不进仓库）：每个阶段一份 `capture-*.json` 和打印的 `*.txt`，还有 `gateway.log`、`mock-model.log`。
 
@@ -58,13 +59,14 @@ gateway 是经 `hold_gateway.py` 起的：Hermes 的文件一个不改，只在�
 
 这个把审核会话的 `Shion/Model/SkillReviewTalk.swift` 和 `Shion/Gateway/EventCursors.swift` 原样编进去（应用的其余部分用 `ci/logic/talk/stubs.swift` 顶替），按抓到的顺序把帧和快照喂给它，逐项检查，有不对的以非零退出。走两遍：一遍照实际发生的（旧快照之后再问一次，拿到新的）；一遍假设每次再问拿到的都和第一份一样旧（把抓到的那份旧快照重复给它），看它只靠旧快照和帧能不能把话显示对。第二个参数可以换一份 `SkillReviewTalk.swift`，比如改动之前的，看它在哪一项上不对。
 
-`compact`、`auto` 两个阶段存下的页和回答是 `../logic/send`、`../logic/notices` 的检查的数据，放过去就行：
+`compact`、`auto`、`queued` 几个阶段存下的页和回答是 `../logic/send`、`../logic/notices` 的检查的数据，放过去就行：
 
 ```bash
 cp captures/compaction-send.json ../logic/send/compaction.json
 cp captures/compaction-notices.json ../logic/notices/compaction.json
 cp captures/autocompaction-send.json ../logic/send/autocompaction.json
 cp captures/autocompaction-notices.json ../logic/notices/autocompaction.json
+cp captures/queued-send.json ../logic/send/queued.json
 ../logic/run.sh send notices
 ```
 
@@ -131,3 +133,12 @@ cp captures/autocompaction-notices.json ../logic/notices/autocompaction.json
 - `../logic/send` 也拿这几页跑应用自己的重试：中间压缩的那一轮，对话在命令跑着时读过（提示是 47（48）），停下来重试，改之前收回 47 被拒，原地压缩的写「没能重试：这条消息已经不在对话记录里了」；改之后被这样拒了也再读一页，按时间和文字找到 56（57），收回再问一次。这台 Mac 发的那句由这一轮的结束直接说是 56（57），改前改后都对。
 - `../logic/notices` 拿这几页跑应用自己读通知的代码：压缩前读过第一条结果的对话，一开始那次压缩以后第二条结果的那一轮结束、读最新几行时，16 那张卡还是一张，第二条结果有它自己的一张，在它那一轮开始的地方，别的行一行也没放进对话；中间那次压缩以后第三条结果也一样。改之前（294ee31）也是这样：副本不是通知，不会被当成卡。
 - 没做到的：一句不带提交编号的话。Shion 连的 gateway 收不下：`prompt.submit` 没有 `submission_id` 或 `input_id` 就是 `invalid_params`（`gateway/session_controls.py`，读的源码，没跑）；不写编号的行只有 Hermes 自己存的（它起的那一轮、引导进去的话）和它压缩时存的副本。别的几种自动压缩没触发：模型调用之前的 `pre_api`、提供方说太长了之后的 `overflow`、空闲之后的 `idle`；看源码它们和这里两种一样走 `_compress_context` 存副本（`agent/turn_preflight.py`、`agent/turn_context_compaction.py`，读的，没跑）。
+
+## 2026-11-14 这一次看到的：一轮后面排着提示（`queued`，Hermes `611bf53`）
+
+单跑这个阶段跑了两次，两种压缩的行号都是下面这些（跟在别的阶段后面跑时，行号接着那两个 profile 的会话往下排）。
+
+- 哪一次运行是哪一条提交，`session.info` 的 `pending` 说：每条提交按 `input_id`（提交编号）列着，等着的时候 `execution_generation` 是 `null`、`status: queued`；它的那次运行一开始（这次运行的 `message.start` 之后马上），就是那次运行的编号、`status: started`。在跑的那条排在最前，排队的跟在后面。
+- 排队的提示，行的时间是它自己那一轮开始的时候，不是发的时候：「慢慢做」第 1 行，引导进去的「继续」第 4 行，存在第 1 次运行里；排队的两句是第 6、8 行，时间都比第 4 行晚。所以对话里引导前面最后一条「开始一轮」的消息，不一定是它进的那一轮的开头。
+- 引导进去的话总比它那次运行开头那一行晚：1 → 4；下一轮一开始就压缩了的，开头那一句压缩以后才存（22（23）），时间是这一轮开始的时候，比摘要那一行还早，引导进去的那句（25（26））还是比它晚。`compact`（5 → 8、20 → 23）和 `auto`（7 → 10）的页也都是这样。
+- Hermes 自己起的一轮（后台结果）也是一条提交：`pending` 里的 `input_id` 是 `["completion","proc_…",时间]`，开始帧之后拿到这次运行的编号；页上没有哪一行写着它。
