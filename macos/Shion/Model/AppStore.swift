@@ -801,6 +801,7 @@ extension AppStore {
             return
         }
         guard let sessionId, let botId = sessionBots[sessionId] else { return }
+        FollowTrace.log("frame \(type) \(botId)")
         secretEvent(type, sessionId: sessionId, payload: payload)
         // a chat not opened yet has no rows to add to: its first page brings them
         let shown = loadedChats.contains(botId)
