@@ -186,7 +186,8 @@ final class ReconnectTests: XCTestCase {
         // 课程, each a turn whose start says nothing, then two results folded into one turn (课程's
         // answer and a command that failed). Each result has its card, neither hiding the other
         // under a count; and every one of the eight messages has its card, the transcript being
-        // read further up for the ones the newest rows do not reach
+        // read further up for the ones the newest rows do not reach: the first four are above a
+        // page of the fourth turn's tool calls alone, whose rows have no number
         say("断线：很多", in: app)
         XCTAssertTrue(waitForText("好的（CI）。", in: app, timeout: 10), "the short reply did not come")
         XCTAssertTrue(waitForText("重新连接中…", in: app, timeout: 10), "the socket did not drop")

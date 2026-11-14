@@ -718,12 +718,17 @@ MANY_WORDS = "带话（CI）第{n}条"
 MANY_REPLY = "第{n}条知道了（CI）。"
 MANY_ANSWER = "周五有空（CI）。"
 MANY_LAST = "两件事都知道了（CI）。"
+# the turn of the fourth message makes this many tool calls before its reply: the newest 12 rows are
+# the last of them and the 11 rows after it, and the 50 rows above those are the others
+MANY_CALLED, MANY_CALLS = 4, 51
 
 
 def many(turn):
     """More turns while Shion is away than the newest rows it first reads can show: eight messages
-    from 课程, each a turn whose start says nothing (only its row says what it was), then two
-    results folded into one turn, a teammate's answer and a command that failed."""
+    from 课程, each a turn whose start says nothing (only its row says what it was), the fourth's
+    with many tool calls before its reply, then two results folded into one turn, a teammate's
+    answer and a command that failed. The page Shion reads after the newest rows is the fourth
+    turn's tool calls alone, rows with no row_id: the first four messages are above it."""
     begin(turn)
     time.sleep(0.2)
     say(turn, "好的（CI）。")
@@ -733,7 +738,7 @@ def many(turn):
     session_id, now = turn["session_id"], time.time()
     for n in range(1, MANY + 1):
         unasked(session_id, f"Message from 🤖 课程 (@study): {MANY_WORDS.format(n=n)}", MANY_REPLY.format(n=n),
-                now - 10 * (MANY - n + 1))
+                now - 10 * (MANY - n + 1), calls=MANY_CALLS if n == MANY_CALLED else 0)
     unasked(session_id, folded([waited("proc_ci0008", MANY_ANSWER), BACKUP_FAILED]), MANY_LAST, now, "process_complete",
             "2 Background Processes Finished")
     turn["meanwhile"].set()
@@ -758,7 +763,7 @@ def notices(turn):
     turn["meanwhile"].set()  # all four over while Shion was away: its replay has them
 
 
-def unasked(session_id, text, reply, at, kind="internal_notification", shown=None):
+def unasked(session_id, text, reply, at, kind="internal_notification", shown=None, calls=0):
     """A turn Hermes starts by itself, with what it gives the assistant in the user's name: the row
     it is stored with, dated `at`, of the kind Hermes gives such turns; the turn's start; the
     reply and its row; the end, which names the rows and no submission.
@@ -767,7 +772,11 @@ def unasked(session_id, text, reply, at, kind="internal_notification", shown=Non
     message start a turn whose `message.start` is empty: only the row says what it was. The end of
     a background process comes with a short form to show (`shown`): the start carries it with the
     turn's text (display_kind, display_text, text; no row, no time), and the row keeps it in its
-    display_metadata."""
+    display_metadata.
+
+    `calls`: tool calls the turn makes before its reply, as rows of the transcript only (their
+    frames are left out, so the chat shows nothing of them unless a page with them is read): each
+    with its call's id and no row_id, as Hermes shows a tool's result (tui_gateway/session_history.py)."""
     with bus:
         current = fence(session_id)
         current["generation"] += 1
@@ -776,6 +785,10 @@ def unasked(session_id, text, reply, at, kind="internal_notification", shown=Non
     user_row = keep(session_id, "user", text, at, display_kind=kind, display_metadata=metadata)
     publish(session_id, "message.start",
             {"display_kind": kind, "display_text": shown, "text": text} if shown else {}, generation)
+    with state["lock"]:
+        state["transcripts"][session_id].extend(
+            {"row_kind": "message", "role": "tool", "name": "web_search", "context": f"第 {k} 次",
+             "tool_call_id": f"call-ci-{generation}-{k}", "timestamp": at + 1} for k in range(1, calls + 1))
     for start in range(0, len(reply), CHUNK):
         publish(session_id, "message.delta", {"text": reply[start:start + CHUNK]}, generation)
     answer_row = keep(session_id, "assistant", reply, at + 5)

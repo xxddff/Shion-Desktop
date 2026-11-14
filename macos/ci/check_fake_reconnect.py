@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
-"""Plays Shion's side of the stand-in's two same-words scripts (fake_reconnect.py: 引导两遍 and
-又说一遍) against the stand-in itself, and says what it expects of every answer.
+"""Plays Shion's side of three of the stand-in's scripts (fake_reconnect.py: 很多, and the two
+same-words ones, 引导两遍 and 又说一遍) against the stand-in itself, and says what it expects of
+every answer.
 
 ReconnectTests needs the scripts to do exactly this, in this order, whatever the test's typing
 takes; a Mac is not needed to see that they do. The stand-in runs here as it does in CI
 (fake_hermes.py's own server and handler), on a port of its own; this file is the client: a
 WebSocket of its own making, the requests Shion sends, and the test's words over plain HTTP.
 
+  很多       nine turns Hermes starts by itself while away, each end in the replay naming the row
+             its turn began with; read as Shion reads for them (the newest 12 rows, then 50 at a
+             time), the page after the newest rows is tool calls alone, with no row_id and a
+             cursor, and the first four messages are on the page above it
   引导两遍   the first message put into the turn is stored and not answered; at the second the
              socket goes, nothing stored; the reply ends while away and is replayed; the
              transcript has one row for the two messages
@@ -46,6 +51,7 @@ import fake_profiles  # noqa: E402
 import fake_reconnect  # noqa: E402
 
 SESSION, PROFILE = "sess-shion", "shion"
+MANY_SCRIPT = "断线：很多"
 STEER_SCRIPT, STEERED_WORDS = "断线：引导两遍", "改到五点（CI）"
 AGAIN = "断线：又说一遍"
 
@@ -218,6 +224,40 @@ def submit(client, words, submission):
                                          "submission_id": submission})
 
 
+def many(port, token):
+    print("\n很多: nine turns Hermes starts by itself while away, the fourth with many tool calls")
+    client, _, snapshot = attached(port, token)
+    expect("the chat is attached", bool(snapshot and snapshot.get("subscription_id")), str(snapshot))
+    receipt = client.answer(submit(client, MANY_SCRIPT, str(uuid.uuid4())))
+    expect("the sentence has its receipt", bool(receipt and receipt.get("admission_id")), str(receipt))
+    expect("after its short reply the socket goes", client.gone(5) is not None)
+    cursor = client.cursor()
+    code, word = post(port, fake_reconnect.CONTROL)
+    expect("the tunnel comes back once the nine turns are over", code == 200 and word.get("meanwhile") == "done",
+           f"{code} {word}")
+    back, replay, _ = attached(port, token, cursor)
+    ends = [event["payload"].get("persisted_turn") or {} for event in (replay or {}).get("events", [])
+            if event.get("type") == "message.complete"]
+    named = [end.get("user_row_id") for end in ends if not end.get("submission_id")]
+    expect("the replay has the nine turns' ends, each naming the row it began with",
+           len(named) == 9 and None not in named, str(named))
+    # as Shion reads for them (AppStore.followNotices): the newest 12 rows, then 50 at a time further up
+    pages = [back.call("session.transcript", {"profile": PROFILE, "session_id": SESSION, "order": "latest", "limit": 12})]
+    for _ in range(2):
+        pages.append(back.call("session.transcript", {"profile": PROFILE, "session_id": SESSION, "order": "latest",
+                                                      "limit": 50, "cursor": (pages[-1] or {}).get("next_cursor")}))
+    rows = [(page or {}).get("rows", []) for page in pages]
+    numbers = [{row["row_id"] for row in page if "row_id" in row} for page in rows]
+    expect("the newest rows have the last four messages and the folded results, not the first four",
+           set(named[4:]) <= numbers[0] and not set(named[:4]) & numbers[0], f"{named} {sorted(numbers[0])}")
+    expect("the next page up is tool calls alone: each with its call's id and no row_id, and a cursor",
+           len(rows[1]) == 50 and all(row.get("role") == "tool" and row.get("tool_call_id") and "row_id" not in row
+                                      for row in rows[1]) and bool((pages[1] or {}).get("next_cursor")),
+           str(rows[1][:2]))
+    expect("the first four messages are on the page above it", set(named[:4]) <= numbers[2],
+           f"{named} {sorted(numbers[2])}")
+
+
 def steered_twice(port, token):
     print("\n引导两遍: the same words put into a running turn twice as the connection goes")
     client, _, snapshot = attached(port, token)
@@ -364,6 +404,7 @@ def main():
     threading.Thread(target=server.serve_forever, daemon=True).start()
     token = fake_hermes.mint_pair()["access_token"]
     try:
+        many(port, token)
         client = steered_twice(port, token)
         client = said_again(port, token, client, page_first=True)
         client = said_again(port, token, client, page_first=False)
