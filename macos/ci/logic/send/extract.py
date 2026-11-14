@@ -9,7 +9,7 @@ root, out = Path(sys.argv[1]), Path(sys.argv[2])
 
 WANTED = {
     "macos/Shion/Model/AppStore.swift": ["func send(_ text: String, to botId: String, mode:", "func loadLatestPage(",
-                                         "func uniqued("],
+                                         "func uniqued(", "?func transcriptPage("],
     "macos/Shion/Model/AppStore+Media.swift": [
         "func canSend(", "func sendMessage(", "func submit(_ words: String, _ drafts:"],
     "macos/Shion/Model/AppStore+Reconnect.swift": [

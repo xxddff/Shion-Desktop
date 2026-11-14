@@ -327,18 +327,16 @@ extension AppStore {
     /// words, which was not there to be found the first time. The other messages in its words
     /// are asked what became of them at each look (AppStore.others): one that was on its way
     /// when this was said and was then refused is on no row, so it no longer keeps this one in
-    /// doubt; one said after this, and stored, has a row that is not this one's.
+    /// doubt; one said after this, and stored, has a row that is not this one's; a prompt is
+    /// known by the row that names it once a page has shown it (transcriptPage), its turn's end
+    /// seen or not.
     private func settleCorrections(_ botId: String, _ sessionId: String) async {
         let unconfirmed = deliveries.unconfirmed(in: botId)
         guard !unconfirmed.isEmpty else { return }
         var page: [StoredUserRow] = []
-        if pagesTranscripts, let read = try? await gateway.call("session.transcript", [
-            "profile": .string(botId), "session_id": .string(sessionId),
-            "order": "latest", "limit": .number(Double(Self.pageSize)),
-        ]) {
+        if pagesTranscripts, let read = try? await transcriptPage(botId, sessionId, limit: Self.pageSize) {
             // a row that names a submission is a prompt's, not what was put into a turn
             let named = Set(DeliveryCheck.named(in: read).values)
-            control.namedRows[sessionId, default: []].formUnion(named)
             page = transcriptItems(read).filter { $0.role == .user }
                 .map { StoredUserRow(text: $0.text, at: $0.at, row: DeliveryCheck.row(of: $0.id)) }
                 .filter { !($0.row.map(named.contains) ?? false) }
@@ -375,8 +373,9 @@ extension AppStore {
     /// chat's place (loadLatestPage): true where a row of the page is that message, so the page's
     /// copy stands for it; false where none can be, so its bubble stays under the page with what
     /// it says about getting there. A row that names the submission is it (Hermes keeps a
-    /// prompt's `submission_id` on its row), and Hermes has it; its row is known from then on.
-    /// Without one, a row of yours in the same words that is no other message's
+    /// prompt's `submission_id` on its row), and Hermes has it; such a row is known as its
+    /// prompt's from the moment the page was read (transcriptPage), the prompt followed here or
+    /// not. Without one, a row of yours in the same words that is no other message's
     /// (DeliveryCheck.stored, with the others in those words as each stands now: `others`, as
     /// `settleCorrections` looks): never a row that was there before, nor one of a message said
     /// since, which read the same and are other messages. One Hermes refused, or a turn did not
@@ -384,9 +383,6 @@ extension AppStore {
     func onPage(_ held: [ChatItem], page: JSONValue, rows: [ChatItem], botId: String) -> [String: Bool] {
         let named = DeliveryCheck.named(in: page)
         let prompts = Set(named.values)
-        if let sessionId = sessions[botId] {
-            control.namedRows[sessionId, default: []].formUnion(prompts)
-        }
         // a row that names a submission is that prompt, found by its name just below: it never
         // stands for another message because it reads the same
         let stored = rows.filter { $0.role == .user }
@@ -396,11 +392,9 @@ extension AppStore {
         var there: [String: Bool] = [:]
         for item in held where item.role == .user {
             guard let sent = deliveries.sent[item.id] else { continue }
-            if let number = named[item.id] {
+            if named[item.id] != nil {
                 there[item.id] = true
                 deliveries.arrived(item.id)
-                // which row it is, for the messages that counted it among the ones in their words
-                control.storedRows[item.id] = number
                 continue
             }
             switch sent.state {

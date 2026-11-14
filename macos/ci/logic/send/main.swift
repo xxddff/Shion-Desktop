@@ -702,6 +702,131 @@ do {
     check("later: the one said after it was refused: the row in those words confirms the one in doubt", s.deliveries.state(first) == nil)
 }
 
+// ---- the third review: R3-02 --------------------------------------------------------------------
+// A prompt Hermes admitted (its receipt came, so nothing follows it any more) whose turn's end was
+// missed, the frames not to be had: only the page says which row it is, by the submission id
+// Hermes keeps on that row. A message put into a turn in the same words, its answer lost with the
+// connection, is told apart from it by that row, and the prompt is not also counted as a message
+// whose row nobody can name.
+
+/// 「继续」 as a prompt, admitted, and 「继续」 put into a running turn, its answer lost. Said first,
+/// the prompt starts the turn the other is put into; said after, it waits behind that turn. Both
+/// turns end while away, and neither end is seen.
+func admittedAndLost(promptFirst: Bool) async -> (AppStore, Server, String, String) {
+    let s = store(.queue, running: !promptFirst)
+    s.loadedChats = [bot]
+    let server = Server(for: s)
+    server.running = false
+    func prompt() async -> String {
+        s.busyMode = .queue
+        _ = typed("继续", in: s)
+        let id = s.chats[bot]?.last?.id ?? ""
+        await until { s.deliveries.state(id) == nil && s.gateway.methods.contains("prompt.submit") }
+        return id
+    }
+    func correction() async -> String {
+        s.busyMode = .steer
+        _ = typed("继续", in: s)
+        let id = s.chats[bot]?.last?.id ?? ""
+        await until { s.deliveries.state(id) == .unconfirmed }
+        return id
+    }
+    guard promptFirst else {
+        let correction = await correction()
+        return (s, server, await prompt(), correction)
+    }
+    let prompt = await prompt()
+    // its turn starts, the session's second run: what is put into a turn now goes into this one
+    s.running = [bot]
+    s.control.fences[session]?.generation = 2
+    return (s, server, prompt, await correction())
+}
+
+/// The chat's messages of yours, by their items' ids.
+func yours(_ s: AppStore) -> [String] { (s.chats[bot] ?? []).filter { $0.role == .user }.map(\.id) }
+
+// both got there: the page has the prompt's row, which names it, and the other's own row
+for promptFirst in [true, false] {
+    let order = promptFirst ? "the prompt said first" : "the prompt said after"
+    let (s, server, prompt, correction) = await admittedAndLost(promptFirst: promptFirst)
+    check("R3-02 (\(order)) Hermes has the prompt, the one put into the turn is in doubt",
+          s.deliveries.state(prompt) == nil && s.deliveries.state(correction) == .unconfirmed)
+    let (named, own) = promptFirst ? (901, 902) : (903, 901)
+    server.rows = promptFirst
+        ? [namedRow(901, "继续", submission: prompt), row(902, "继续", steer: true), theirRow(903, "好，接着讲。")]
+        : [row(901, "继续", steer: true), theirRow(902, "从前有座山。"), namedRow(903, "继续", submission: prompt),
+           theirRow(904, "好，接着讲。")]
+    for look in 1...3 {
+        await comeBack(s, replayed: false)
+        check("R3-02 (\(order)) look \(look): the one put into the turn got there, as its own row, not the prompt's",
+              s.deliveries.state(correction) == nil && s.control.storedRows[correction] == own
+                && !(s.control.confirmedRows[session] ?? []).contains(named))
+        check("R3-02 (\(order)) look \(look): two messages, two bubbles, both the page's: \(yours(s))",
+              yours(s) == ["row-\(min(named, own))", "row-\(max(named, own))"])
+    }
+}
+
+// the frames replayed and the prompt's turn still under way, so no end has named its row: the page
+// is read only for the one put into the turn (settleCorrections), and names the prompt's row there too
+do {
+    let (s, server, prompt, correction) = await admittedAndLost(promptFirst: true)
+    server.running = true
+    server.rows = [namedRow(901, "继续", submission: prompt), row(902, "继续", steer: true)]
+    await comeBack(s, replayed: true)
+    check("R3-02 (frames replayed, the prompt's turn running) the one put into it got there, as its own row: \(ids(s))",
+          s.deliveries.state(correction) == nil && s.control.storedRows[correction] == 902
+            && ids(s) == [prompt, correction] && s.chats[bot]?.last?.midTurn == true)
+}
+
+// the one put into the turn did not get there: the prompt's row, which reads the same, is not it
+for promptFirst in [true, false] {
+    let order = promptFirst ? "the prompt said first" : "the prompt said after"
+    let (s, server, prompt, correction) = await admittedAndLost(promptFirst: promptFirst)
+    server.rows = promptFirst
+        ? [namedRow(901, "继续", submission: prompt), theirRow(903, "好，接着讲。")]
+        : [theirRow(902, "从前有座山。"), namedRow(903, "继续", submission: prompt), theirRow(904, "好，接着讲。")]
+    for look in 1...2 {
+        await comeBack(s, replayed: false)
+        check("R3-02 (\(order)) lost, look \(look): the prompt's row does not confirm it: in doubt, under the page, once: \(yours(s))",
+              s.deliveries.state(correction) == .unconfirmed && s.control.storedRows[correction] == nil
+                && yours(s) == ["row-\(promptFirst ? 901 : 903)", correction])
+    }
+}
+
+// a row that names a submission nothing here follows (the same words, said as a prompt from another
+// window) is that prompt's: it does not confirm a message put into a turn in its words either
+for replayed in [true, false] {
+    let path = replayed ? "frames replayed" : "newest page read"
+    let s = store(.steer)
+    s.loadedChats = [bot]
+    let server = Server(for: s)
+    server.running = false
+    _ = typed("继续", in: s)
+    let correction = s.chats[bot]?.last?.id ?? ""
+    await until { s.deliveries.state(correction) == .unconfirmed }
+    server.rows = [namedRow(901, "继续", submission: "SOMEONE-ELSES"), theirRow(902, "好，接着讲。")]
+    for look in 1...2 {
+        await comeBack(s, replayed: replayed)
+        check("R3-02 (\(path)) look \(look): another submission's row does not confirm one put into a turn in its words: \(ids(s))",
+              s.deliveries.state(correction) == .unconfirmed && ids(s).filter { $0 == correction }.count == 1)
+    }
+}
+
+// two put into the prompt's turn in its words and one row of theirs: it confirms one of them, the older
+do {
+    let (s, server, prompt, first) = await admittedAndLost(promptFirst: true)
+    _ = typed("继续", in: s)
+    let second = s.chats[bot]?.last?.id ?? ""
+    await until { s.deliveries.state(second) == .unconfirmed }
+    server.rows = [namedRow(901, "继续", submission: prompt), row(902, "继续", steer: true), theirRow(903, "好，接着讲。")]
+    for look in 1...2 {
+        await comeBack(s, replayed: false)
+        check("R3-02 two put into the turn, one row, look \(look): the older got there as that row, the other is in doubt: \(yours(s))",
+              s.deliveries.state(first) == nil && s.control.storedRows[first] == 902
+                && s.deliveries.state(second) == .unconfirmed && yours(s) == ["row-901", "row-902", second])
+    }
+}
+
 #if !BEFORE
 // what the transcript is looked at with, message by message (AppStore.others)
 do {

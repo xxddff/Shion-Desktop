@@ -100,17 +100,8 @@ extension AppStore {
             var read: [Int] = []
             var pages = 0
             while true {
-                let asked: JSONValue? = if let cursor {
-                    try? await gateway.call("session.transcript", [
-                        "profile": .string(botId), "session_id": .string(sessionId), "order": "latest",
-                        "limit": .number(Double(Self.pageSize)), "cursor": .string(cursor),
-                    ])
-                } else {
-                    try? await gateway.call("session.transcript", [
-                        "profile": .string(botId), "session_id": .string(sessionId), "order": "latest",
-                        "limit": .number(Double(Self.noticeRows)),
-                    ])
-                }
+                let limit = cursor == nil ? Self.noticeRows : Self.pageSize
+                let asked = try? await transcriptPage(botId, sessionId, limit: limit, cursor: cursor)
                 guard let page = asked, sessions[botId] == sessionId, loadedChats.contains(botId) else { return }
                 // the chat may have changed while the page was read: the place is found again by its item
                 let known = control.storedRows

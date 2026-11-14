@@ -16,8 +16,9 @@ final class ChatControl {
     @ObservationIgnored var stops: [String: UUID] = [:]
     /// session id → the newest run and revision seen
     @ObservationIgnored var fences: [String: Fence] = [:]
-    /// A prompt sent from here (its chat item's id, which is also its `submission_id`) → the
-    /// transcript row Hermes stored it as (`message.complete.persisted_turn`).
+    /// A prompt (its `submission_id`: one sent from here is named by its chat item's id) → the
+    /// transcript row Hermes stored it as, as its turn's end says (`message.complete.persisted_turn`)
+    /// or any page with that row on it, which names the submission (AppStore.transcriptPage).
     /// Also what came live in a turn Hermes started and is known to be a row since that turn's
     /// end: its reply's bubble, the cards its start made (AppStore.noteTurnRows).
     @ObservationIgnored var storedRows: [String: Int] = [:]
@@ -311,13 +312,13 @@ extension AppStore {
 
     /// The row the prompt was stored as: in its id when it came from the transcript (`row-<id>`),
     /// from its turn's `persisted_turn` when it was sent from here; failing both, the newest page
-    /// says, by its words.
+    /// says: by the submission id Hermes keeps on the row, else by its words.
     private func storedRow(of prompt: ChatItem, botId: String, sessionId: String) async throws -> Int {
         if prompt.id.hasPrefix("row-"), let row = Int(prompt.id.dropFirst(4)) { return row }
         if let row = control.storedRows[prompt.id] { return row }
-        let page = try await gateway.call("session.transcript", [
-            "profile": .string(botId), "session_id": .string(sessionId), "order": "latest", "limit": 20,
-        ])
+        let page = try await transcriptPage(botId, sessionId, limit: 20)
+        // the page names it where its row is on it (transcriptPage)
+        if let row = control.storedRows[prompt.id] { return row }
         let match = (page["rows"]?.array ?? []).last { row in
             row["role"]?.string == "user" && (row["text"]?.string ?? row["content"]?.string) == prompt.text
         }

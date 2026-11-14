@@ -110,13 +110,7 @@ extension AppStore {
         var found: [(mine: Bool, words: String)] = []
         var cursor: String?
         pages: for _ in 0..<8 {
-            var params: [String: JSONValue] = [
-                "profile": .string(review.profile), "session_id": .string(sessionId), "order": "latest", "limit": 100,
-            ]
-            if let cursor {
-                params["cursor"] = .string(cursor)
-            }
-            guard let page = try? await gateway.call("session.transcript", .object(params)) else { break }
+            guard let page = try? await transcriptPage(review.profile, sessionId, limit: 100, cursor: cursor) else { break }
             for row in (page["rows"]?.array ?? []).reversed() {
                 guard row["row_kind"]?.string != "compaction", let role = row["role"]?.string,
                       role == "user" || role == "assistant", (row["timestamp"]?.number ?? .infinity) <= written

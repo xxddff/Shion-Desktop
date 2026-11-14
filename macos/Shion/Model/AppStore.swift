@@ -596,10 +596,7 @@ extension AppStore {
     /// Hermes has not said it has unless a row of the page can be it (`onPage`).
     func loadLatestPage(_ botId: String) async throws {
         guard let sessionId = sessions[botId] else { return }
-        let page = try await gateway.call("session.transcript", [
-            "profile": .string(botId), "session_id": .string(sessionId),
-            "order": "latest", "limit": .number(Double(Self.pageSize)),
-        ])
+        let page = try await transcriptPage(botId, sessionId, limit: Self.pageSize)
         guard sessions[botId] == sessionId else { return }
         let rows = transcriptItems(page)
         let held = chats[botId] ?? []
@@ -635,10 +632,7 @@ extension AppStore {
         loadingOlder.insert(botId)
         defer { loadingOlder.remove(botId) }
         do {
-            let page = try await gateway.call("session.transcript", [
-                "profile": .string(botId), "session_id": .string(sessionId),
-                "order": "latest", "limit": .number(Double(Self.pageSize)), "cursor": .string(cursor),
-            ])
+            let page = try await transcriptPage(botId, sessionId, limit: Self.pageSize, cursor: cursor)
             guard sessions[botId] == sessionId, olderPages[botId] == cursor else { return }
             let rows = transcriptItems(page)
             // `reset`: the server started over from the newest page (a rotated lineage). Otherwise
@@ -654,6 +648,31 @@ extension AppStore {
     func retryOlder(_ botId: String) async {
         olderErrors[botId] = nil
         await loadOlder(botId)
+    }
+
+    /// A page of a Bot Chat's transcript (`session.transcript`, latest first): the newest `limit`
+    /// rows, or the `limit` rows before `cursor`. Every page of a chat is read here, so whatever
+    /// it is read for, a row on it that names a submission (Hermes keeps a prompt's
+    /// `submission_id` on its row: DeliveryCheck.named) is that prompt's from then on
+    /// (ChatControl.storedRows, namedRows), the prompt followed here or not. One whose receipt
+    /// came is followed no more, and with its turn's end missed only a page says which row it is.
+    /// Not known, it was counted twice by a message in the same words looked for on the
+    /// transcript: its row left out as a prompt's, and the prompt still counted as one that may
+    /// have a row nobody can name (AppStore.others), which kept that message in doubt with its
+    /// own row on the page.
+    func transcriptPage(_ botId: String, _ sessionId: String, limit: Int, cursor: String? = nil) async throws -> JSONValue {
+        var params: [String: JSONValue] = [
+            "profile": .string(botId), "session_id": .string(sessionId),
+            "order": "latest", "limit": .number(Double(limit)),
+        ]
+        if let cursor {
+            params["cursor"] = .string(cursor)
+        }
+        let page = try await gateway.call("session.transcript", .object(params))
+        let named = DeliveryCheck.named(in: page)
+        control.storedRows.merge(named) { _, row in row }
+        control.namedRows[sessionId, default: []].formUnion(named.values)
+        return page
     }
 
     /// A transcript page's rows, oldest first. A compaction row stands where older messages
