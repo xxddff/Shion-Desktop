@@ -205,6 +205,16 @@ final class ReconnectTests: XCTestCase {
                       "the command that failed does not say which it was and how it ended")
         XCTAssertFalse(hasText("2 Background Processes Finished", in: app), "the two results show as a count")
         XCTAssertFalse(hasText("bot_mode_dm", in: app), "the command that waited for the answer shows in the chat")
+        // the cards were read from their rows after the reply they led to was there, and put
+        // before it: the chat, followed at its end, stays at its end, the newest reply in view and
+        // not pushed under the composer by what came in above it
+        let shown = element("transcript", in: app)
+        let last = waitUntil(timeout: 5) {
+            guard let top = self.places("两件事都知道了（CI）。", in: app).last else { return false }
+            return top >= shown.frame.minY && top + 14 <= shown.frame.maxY
+        }
+        XCTAssertTrue(last, "the newest reply is not in view once the cards came in above it: at "
+                      + "\(places("两件事都知道了（CI）。", in: app)), the chat shows \(shown.frame)")
         // the find bar counts the lines of the whole chat, not only the rows in the window
         app.typeKey("f", modifierFlags: .command)
         let finding = element("find-field", in: app)

@@ -11,8 +11,6 @@ for bundle in "$@"; do
   fi
 done
 cp build/fake_hermes-*.log build/shots/ 2>/dev/null || true
-# TEMPORARY: what the transcript's following did (Shion/Views/FollowTrace.swift)
-cp /tmp/shion-follow-trace.log build/shots/ 2>/dev/null || true
 python3 - "$@" <<'PY'
 import json, os, re, shutil, sys
 out = 'build/shots'
