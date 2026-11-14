@@ -21,4 +21,4 @@ grep -q "var startsTurn" "$work/event.swift"
     "$here/main.swift" "$here/stubs.swift" "$work/extracted.swift" "$work/event.swift" \
     "$model/NoticeCards.swift" "$model/Notices.swift" "$model/Delivery.swift" \
     "$root/macos/Shion/Gateway/JSONValue.swift"
-"$work/check" "$here/compaction.json"
+"$work/check" "$here/compaction.json" "$here/autocompaction.json"

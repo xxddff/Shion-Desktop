@@ -840,5 +840,71 @@ for path in ["in place", "rotation"] {
     check(cards(after) == ["row-48", "row-54"], "compacted. (\(path)) the chat read after the compaction: the same two cards: \(cards(after))")
 }
 
+// Hermes compacting the session by itself (autocompaction.json: ../../real, stage auto, in place and
+// into a new session), at a turn's start and in a turn after a tool's result. Its copy of a
+// background result's row names no kind and no display_text: it is Hermes's text for the model at
+// the result's time, no notice for a chat at all. In place its copies of replies are timed at the
+// compaction, later than the rows of yours after them on the page, so NoticeCards.put cannot tell
+// them; in a new session they keep their time. A result whose row was kept (row 16, then the
+// second result's row) and the next result's turn: the chat that read the result before has its
+// card still, once; the next is a card of its own, where its turn began; nothing else of the page
+// comes in.
+
+let auto = try JSONValue.parse(String(contentsOfFile: CommandLine.arguments[2], encoding: .utf8))
+
+/// The chat `chat`, then the turn a result began as it came (`turn`: its start's card, its reply),
+/// followed at its end over `rows`, paged as Hermes pages them.
+func followed(_ chat: [ChatItem], turn: JSONValue?, rows: [JSONValue]) async -> AppStore {
+    var chat = chat
+    let ended = turn?["persisted_turn"]
+    let replied = ["live-reply": ended?["final_assistant_row_id"]?.int ?? 0]
+    let start = turn?["start"]
+    for card in Notices.read(start?["text"]?.string ?? "", kind: start?["display_kind"]?.string,
+                             display: start?["display_text"]?.string).enumerated().map({ index, notice in
+        ChatItem(id: index == 0 ? NoticeCards.id(.begun) : "card-\(index)", role: .card, at: Date(), text: notice.text,
+                 event: notice.event)
+    }) {
+        NoticeCards.begin(card, in: &chat) { AppStore.notice($0, rows: replied) }
+    }
+    chat.append(ChatItem(id: "live-reply", role: .assistant, at: Date(), text: "后台的事有结果了（mock）。"))
+    var known = replied
+    for card in chat where NoticeCards.stage(of: card.id) == .begun { known[card.id] = ended?["user_row_id"]?.int }
+    let s = store(chat, rows: known, answer: pages(rows))
+    _ = await follow(s, row: ended?["user_row_id"]?.int)
+    return s
+}
+
+for path in ["in place", "rotation"] {
+    let data = auto[path]
+    func rows(_ page: String) -> [JSONValue] { data?[page]?["rows"]?.array ?? [] }
+    func numbered(_ number: Int, _ page: String) -> JSONValue? { rows(page).first { $0["row_id"]?.int == number } }
+    let result = numbered(16, "before"), reply = numbered(17, "before")
+    let keptAt = rows("after3").firstIndex { $0["role"] == "user" && $0["timestamp"] == result?["timestamp"] }
+    let kept = keptAt.map { rows("after3")[$0] }
+    // the reply's copy is the row after the result's
+    let replyKept = keptAt.flatMap { $0 + 1 < rows("after3").count ? rows("after3")[$0 + 1] : nil }
+    let second = data?["second"]?["persisted_turn"]?["user_row_id"]?.int ?? 0
+    let third = data?["third"]?["persisted_turn"]?["user_row_id"]?.int ?? 0
+    check(result?["display_kind"] == "process_complete" && kept != nil && kept?["row_id"] != result?["row_id"]
+            && kept?["display_kind"] == nil && kept?["display_metadata"] == nil
+            && kept?["text"]?.string?.hasPrefix("[IMPORTANT: Background process") == true
+            && (path == "rotation") == (replyKept?["timestamp"] == reply?["timestamp"]),
+          "auto. (\(path)) Hermes's pages: the result's row 16 is row \(kept?["row_id"]?.int ?? 0) once compacted, at its time, with no kind and no display_text; its reply's copy is \(path == "rotation" ? "at its time" : "timed at the compaction")")
+    // at the start of the turn after it: the chat that read the result before
+    let before = AppStore().transcriptItems(["rows": .array(rows("before"))])
+    let s = await followed(before, turn: data?["second"], rows: rows("after3"))
+    check(cards(s) == ["row-16", "row-\(second)"],
+          "auto. (\(path)) compacted at a turn's start since the chat read it: the result is its card still, once, and the next result's its own: \(cards(s))")
+    check(order(s) == before.map(\.id).joined(separator: " ") + " row-\(second) live-reply",
+          "auto. (\(path)) …and nothing else of the page comes in, the next result's card where its turn began: …\(order(s).suffix(60))")
+    // in the turn whose command's result came into a full context: the chat that read the page before
+    let read = AppStore().transcriptItems(["rows": .array(rows("after3"))])
+    let t = await followed(read, turn: data?["third"], rows: rows("after4"))
+    check(cards(t) == ["row-\(second)", "row-\(third)"],
+          "auto. (\(path)) compacted in a turn since the chat read it: the second result is its card still, once, and the third result's its own: \(cards(t))")
+    check(order(t) == read.map(\.id).joined(separator: " ") + " row-\(third) live-reply",
+          "auto. (\(path)) …and nothing else of the page comes in: …\(order(t).suffix(60))")
+}
+
 print(failures == 0 ? "all passed" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)
