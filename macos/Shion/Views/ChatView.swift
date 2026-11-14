@@ -35,7 +35,7 @@ struct ChatView: View {
         // before the rows are laid out: older rows coming in above (the row at the top of what
         // shows is noted, from the layout before them), or a new hit of the find bar
         let _ = place.note(first: items.first?.id, focus: found.focus, following: follow.on)
-        let _ = follow.note(last: lines.last?.id)
+        let _ = follow.note(last: lines.last?.id, count: lines.count)
         let _ = FollowTrace.log("body \(tag(lines)) replying=\(store.replying.contains(botId)) on=\(follow.on)")
         Group {
             // the transcript is made once there is something in it: it starts at its newest
@@ -113,12 +113,24 @@ struct ChatView: View {
                                 // what shows did move. A transcript just made reports where it
                                 // is before that, from its top, nothing having moved: taken for
                                 // the reader's, that ended the following as a chat opened, and a
-                                // reply arriving in a chat just opened was not followed down
-                                if follow.placed, abs(new.below - old.below) > 0.5 {
-                                    follow.on = new.below <= 40
-                                    did = "on=\(follow.on) (same height)"
-                                } else {
+                                // reply arriving in a chat just opened was not followed down.
+                                // Nor is a move away from the end the reader's while a line that
+                                // just came is being laid out: the list puts the line before it
+                                // back where it was (its bottom margin gone, its lower edge
+                                // stays), the content's height still what it guessed for the new
+                                // one. Taken for the reader's, that ended the following with the
+                                // new line below what shows (runs 208, 209 and 212: a reply left
+                                // under the composer)
+                                if !follow.placed || abs(new.below - old.below) <= 0.5 {
                                     did = "not the reader's (placed=\(follow.placed))"
+                                } else if new.below <= 40 {
+                                    follow.on = true
+                                    did = "on=true (same height)"
+                                } else if Date() < follow.settling {
+                                    did = "not the reader's (the lines are settling)"
+                                } else {
+                                    follow.on = false
+                                    did = "on=false (same height)"
                                 }
                             } else if follow.on, Date() < follow.until, new.below > 1, let last = lines.last {
                                 did = "again to \(last.id.suffix(6))"
@@ -215,6 +227,10 @@ struct ChatView: View {
                             proxy.frame(in: .scrollView)
                         } action: { frame in
                             place.laidOut(line.id, at: frame)
+                            // the newest line is where it belongs: the rows have settled
+                            if index == lines.count - 1, frame.maxY <= place.viewport + 1 {
+                                follow.settling = .distantPast
+                            }
                             if index >= lines.count - 3 {
                                 FollowTrace.log("row \(line.id.suffix(6)) index \(index)/\(lines.count) y \(FollowTrace.n(frame.minY))..\(FollowTrace.n(frame.maxY)) viewport \(FollowTrace.n(place.viewport)) on=\(follow.on) folded=\(Date() < follow.folded)")
                             }
@@ -309,9 +325,9 @@ struct ChatView: View {
     /// is still followed, is gone to again. A scroll asked for while the rows are being laid out
     /// does not always get there. As a line comes, the list first keeps the line before it where
     /// it was, at the bottom of what shows, the new one under it; the scrolls asked for in that
-    /// update then bring the new one up, and when they did not (runs 208 and 209: a reply that
-    /// came whole as its turn ended stayed under the composer) nothing else changed after it, so
-    /// nothing looked again. Asked from outside any update, it does.
+    /// update then bring the new one up. In run 212 they did not (the reply stayed where the list
+    /// had put it), and where nothing else changes afterwards nothing would look again. Asked
+    /// from outside any update, it does.
     private func lookAgain() {
         follow.looks += 1
         let look = follow.looks
@@ -381,9 +397,20 @@ final class Follow {
     /// How many such looks were asked for: one asked for since takes the place of those before.
     var looks = 0
 
+    /// How many lines there were then.
+    var count = 0
+    /// The lines changed while the end was followed (one came, a turn's calls folded into one),
+    /// and the newest has not been seen laid out in what shows since: until then, half a second
+    /// or so at most, the list is moving its rows, and a move away from the end is its own.
+    var settling = Date.distantPast
+
     /// Called as the transcript is made, before its rows are laid out.
-    func note(last: String?) {
+    func note(last: String?, count: Int) {
+        if on, last != self.last || count != self.count {
+            settling = Date().addingTimeInterval(0.6)
+        }
         self.last = last
+        self.count = count
     }
     /// Put at its newest message since it was made: until then no older page is asked for.
     var placed = false
