@@ -42,8 +42,9 @@ import XCTest
 ///    stays under the page with 等连上后确认, then 没发出去 with 重发, which sends it, once;
 /// 11. half way through a reply, and once back Hermes will not attach the chat again (its store
 ///    busy, the socket kept) until StandIn.attach: the chat keeps the reply it had, says what
-///    failed with Hermes's reason and 再试一次, and is not left replying; attached again, by a try
-///    of its own or by 再试一次, the reply is whole and what is said is answered.
+///    failed with Hermes's reason and 再试一次 where both can be read and pressed, the rest of the
+///    window where it was, and is not left replying; its own tries used up, 再试一次 attaches it
+///    again, the reply is whole and what is said is answered.
 /// A picture at each step (reconnect-*.png).
 final class ReconnectTests: XCTestCase {
     private let server = "http://127.0.0.1:8765"
@@ -427,43 +428,96 @@ final class ReconnectTests: XCTestCase {
         // (storage_unavailable, as Hermes answers when its store is busy; the socket kept) until
         // StandIn.attach. The frames replayed as Shion is back say a turn runs; not attached, the
         // chat keeps the reply it had, says what failed with Hermes's reason and 再试一次, and is
-        // not left replying. Once Hermes would, it is attached again, by a try of its own or by
-        // 再试一次, and the reply is whole
+        // not left replying. The line, 再试一次 and the composer are in what the window shows, and
+        // the window's own parts are where they were before the step (run 220: with the line, the
+        // window's content stood 132 points higher, the sidebar's first rows and the chat's tabs
+        // above the window, the line and the composer below it; the test asked only whether they
+        // were there). Once the chat's own tries are used up, the line naming no time for the
+        // next, Hermes would, and 再试一次, pressed once, attaches it again: the reply is whole and
+        // what is said is answered
         XCTAssertTrue(waitUntil(timeout: 20) { !self.element("stop", in: app).exists }, "the turn before is still replying")
+        let window = app.windows.firstMatch
+        let refused = element("rejoin-failure", in: app)
+        let tryAgain = element("rejoin-retry", in: app)
+        // what is measured, by name: the window's own parts, which the line must not move, then the
+        // line's (the tab bar by its 工作记录, as WorkTests finds it)
+        let fixed = ["window", "今天", "工作记录"]
+        let names = fixed + ["line", "再试一次", "composer"]
+        let parts: [String: XCUIElement] = [
+            "window": window,
+            "今天": element("nav-today", in: app),
+            "工作记录": app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "工作记录")).firstMatch,
+            "line": refused,
+            "再试一次": tryAgain,
+            "composer": composer,
+        ]
+        let before = frames(of: parts)
         say("断线：接不上", in: app)
         XCTAssertTrue(waitForText("第3拍。", in: app, timeout: 10), "the reply did not start")
         XCTAssertTrue(waitForText("重新连接中…", in: app, timeout: 10), "the socket did not drop")
         StandIn.tunnelUp("11. back, and not attached again")
         XCTAssertTrue(waitUntil(timeout: 40) { !self.hasText("重新连接中…", in: app) }, "the connection did not come back")
-        let refused = element("rejoin-failure", in: app)
         let saysSo = refused.waitForExistence(timeout: 20)
-        keep(app.windows.firstMatch.screenshot(), "reconnect-19-not-attached")
+        let came = Date()
+        keep(window.screenshot(), "reconnect-19-not-attached")
         XCTAssertTrue(saysSo, "a chat Hermes would not attach again does not say so")
+        // in what the window shows (under its toolbar, above its bottom edge and the Dock): the line
+        // over the composer, 再试一次 on it, and the composer; the window, its sidebar's first row
+        // and the chat's tabs where they were. A moment to settle as the line comes in
+        var shown = CGRect.null
+        var during: [String: CGRect] = [:]
+        let usable = waitUntil(timeout: 5) {
+            shown = self.showing(window)
+            during = self.frames(of: parts)
+            guard let line = during["line"], let button = during["再试一次"], let field = during["composer"] else { return false }
+            let area = shown.insetBy(dx: -1, dy: -1)
+            return area.contains(line) && area.contains(button) && area.contains(field) && line.maxY <= field.minY
+                && fixed.allSatisfy { self.same(during[$0], before[$0]) }
+        }
+        // the numbers, whatever comes of them (reconnect-19-frames.txt), and beside them whether XCUI
+        // finds the three hittable: kept, not asserted; the frames are what is held to
+        var measured = names.map { "\($0): \(self.described(before[$0])) before, \(self.described(during[$0])) with the line" }
+        measured.append("shown: \(shown)")
+        measured.append("hittable: the line \(refused.exists && refused.isHittable), 再试一次 \(tryAgain.exists && tryAgain.isHittable), "
+                        + "the composer \(composer.exists && composer.isHittable) (enabled: \(composer.exists && composer.isEnabled))")
+        measured.append("the line says: \(words(in: refused))")
+        note(measured.joined(separator: "\n"), "reconnect-19-frames")
+        XCTAssertTrue(usable, "the line, 再试一次 or the composer is not where it can be used, or the window's own parts moved "
+                      + "with it:\n" + measured.joined(separator: "\n"))
         XCTAssertTrue(holds("没能重新接上这个对话", whole: false, in: refused) && holds("storage_unavailable", whole: false, in: refused),
                       "it does not say what could not be done, in Hermes's words")
         XCTAssertTrue(waitUntil(timeout: 5) { !self.element("stop", in: app).exists }, "the chat is still shown as replying")
         XCTAssertTrue(holds(["第1拍。", "第15拍。"], in: app), "the chat lost the reply it had")
-        let tryAgain = element("rejoin-retry", in: app)
         XCTAssertTrue(tryAgain.exists, "no 再试一次 beside it")
-        XCTAssertTrue(waitUntil(timeout: 10) { tryAgain.isEnabled }, "再试一次 cannot be pressed while the chat was replying before")
-        StandIn.attach("11. Hermes attaches the chat again")
-        // the next try gets it: one of its own while the line says when, else 再试一次 (with none of
-        // its own to come, nothing takes the line away under the click)
-        let back = waitUntil(timeout: 40) {
-            guard refused.exists else { return true }
-            if !self.holds(" 再试", whole: false, in: refused), tryAgain.exists, tryAgain.isEnabled {
-                tryAgain.click()
-            }
-            return false
+        // the chat's own tries used up (four, 1, 2, 4 and 8 s after each refusal: Rejoin.swift): the
+        // line names no time for the next, and 再试一次 can be pressed. Only now may Hermes attach
+        // the chat, so that 再试一次, pressed once, is what attaches it again
+        let usedUp = waitUntil(timeout: 30) {
+            !refused.exists || (!self.holds(" 再试", whole: false, in: refused) && tryAgain.isEnabled)
         }
-        keep(app.windows.firstMatch.screenshot(), "reconnect-20-attached-again")
-        XCTAssertTrue(back, "the chat was not attached again once Hermes would")
+        let tried = Date().timeIntervalSince(came)
+        let saidThen = words(in: refused)
+        XCTAssertTrue(usedUp, "\(Int(tried)) s after the line came, the chat's own tries are not used up or 再试一次 cannot be "
+                      + "pressed: the line says \(saidThen); 再试一次 enabled: \(tryAgain.exists && tryAgain.isEnabled)")
+        XCTAssertTrue(refused.exists, "the line went before 再试一次 was pressed: the chat was attached again by a try of its own")
+        StandIn.attach("11. Hermes attaches the chat again")
+        let pressed = Date()
+        if tryAgain.exists {
+            tryAgain.click()
+        }
+        let back = waitUntil(timeout: 15) { !refused.exists }
+        let took = Date().timeIntervalSince(pressed)
+        note("the chat's own tries used up \(String(format: "%.1f", tried)) s after the line came; it said then: \(saidThen)\n"
+             + "再试一次 pressed once: " + (back ? "attached again \(String(format: "%.1f", took)) s later" : "not attached 15 s later"),
+             "reconnect-20-tried-again")
+        keep(window.screenshot(), "reconnect-20-attached-again")
+        XCTAssertTrue(back, "再试一次 did not attach the chat again once Hermes would")
         XCTAssertTrue(waitForText("第30拍。", in: app, timeout: 20), "the rest of the reply did not come")
         once("第1拍。", whole: false, "the reply is not in one bubble", "reconnect-count-11", in: app)
         XCTAssertTrue(waitUntil(timeout: 20) { !self.element("stop", in: app).exists }, "a bubble is still replying")
         say("接上了吗（CI）", in: app)
         XCTAssertTrue(waitForText("收到：接上了吗（CI）", in: app, timeout: 15), "what was said once attached again got no answer")
-        keep(app.windows.firstMatch.screenshot(), "reconnect-21-attached-said")
+        keep(window.screenshot(), "reconnect-21-attached-said")
         app.terminate()
     }
 
@@ -643,6 +697,49 @@ final class ReconnectTests: XCTestCase {
         let shown = element("transcript", in: app).frame
         guard let top = places(text, in: app).last else { return false }
         return top >= shown.minY && top + 14 <= shown.maxY
+    }
+
+    /// The part of `window` that shows what it holds, in screen points with the origin top left
+    /// (XCUI's): under its toolbar, above its bottom edge and the runner's Dock, as
+    /// ScrollIntoView.swift reckons it.
+    @MainActor
+    private func showing(_ window: XCUIElement) -> CGRect {
+        let frame = window.frame
+        let toolbar = window.toolbars.firstMatch
+        let top = toolbar.exists ? toolbar.frame.maxY : frame.minY
+        let dock: CGFloat = NSScreen.main.map { $0.frame.maxY - $0.visibleFrame.minY } ?? .greatestFiniteMagnitude
+        return CGRect(x: frame.minX, y: top, width: frame.width, height: min(frame.maxY, dock) - top)
+    }
+
+    /// Where each of `parts` is on the screen, by name, in screen points with the origin top left
+    /// (XCUI's); none for one that is not there.
+    @MainActor
+    private func frames(of parts: [String: XCUIElement]) -> [String: CGRect] {
+        var found: [String: CGRect] = [:]
+        for (name, element) in parts where element.exists {
+            found[name] = element.frame
+        }
+        return found
+    }
+
+    /// Both there, and within two points of each other.
+    private func same(_ one: CGRect?, _ other: CGRect?) -> Bool {
+        guard let one, let other else { return false }
+        return abs(one.minX - other.minX) <= 2 && abs(one.minY - other.minY) <= 2
+            && abs(one.width - other.width) <= 2 && abs(one.height - other.height) <= 2
+    }
+
+    private func described(_ frame: CGRect?) -> String {
+        frame.map { "\($0)" } ?? "not there"
+    }
+
+    /// What the texts inside `root` say, in order, or that it is not there.
+    @MainActor
+    private func words(in root: XCUIElement) -> String {
+        guard root.exists else { return "not there" }
+        return root.staticTexts.allElementsBoundByIndex.filter { $0.exists }
+            .map { $0.label.isEmpty ? ($0.value as? String ?? "") : $0.label }
+            .joined(separator: " | ")
     }
 
     /// How many lines the find bar says hold what is looked for: the 8 of "3/8".
