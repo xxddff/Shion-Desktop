@@ -1032,23 +1032,30 @@ func retried(_ s: AppStore) -> String {
 var servers: [Server] = []
 
 /// 詩音's chat with the turn stopped: `rows` read from the transcript, then `prompt` (sent from here,
-/// nil when it is the last of the rows) and the line the stop left; the server giving the page
-/// after the compaction (with `later` after Hermes's rows) and the answers Hermes gave then.
-func stoppedChat(_ path: String, rows: [JSONValue], prompt: ChatItem?, later: [JSONValue] = []) -> AppStore {
+/// nil when it is the last of the rows) and the line the stop left; the server giving `page` and
+/// answering a rewind as Hermes answered it, by the row it names (`answers`).
+func stoppedChat(rows: [JSONValue], prompt: ChatItem?, page: [JSONValue], answers: [Int: JSONValue]) -> AppStore {
     let s = store(.queue, running: false)
     s.loadedChats = [bot]
     let server = Server(for: s)
     servers.append(server)
     server.running = false
-    server.rows = captured(path, "after4") + later
-    for name in ["kept", "summarized", "rewound"] {
-        if let rewind = compaction[path]?["rewinds4"]?[name], let row = rewind["row"]?.int {
-            server.rewinds[row] = rewind["answer"]
-        }
-    }
+    server.rows = page
+    server.rewinds = answers
     s.chats[bot] = s.transcriptItems(["rows": .array(rows)]) + (prompt.map { [$0] } ?? [])
         + [ChatItem(id: "stopped", role: .system, at: Date(), text: "已停止", stopped: true)]
     return s
+}
+
+/// The same after the fourth compaction of the stage compact (with `later` after Hermes's rows).
+func stoppedChat(_ path: String, rows: [JSONValue], prompt: ChatItem?, later: [JSONValue] = []) -> AppStore {
+    var answers: [Int: JSONValue] = [:]
+    for name in ["kept", "summarized", "rewound"] {
+        if let rewind = compaction[path]?["rewinds4"]?[name], let row = rewind["row"]?.int {
+            answers[row] = rewind["answer"]
+        }
+    }
+    return stoppedChat(rows: rows, prompt: prompt, page: captured(path, "after4") + later, answers: answers)
 }
 
 for path in paths {
@@ -1202,6 +1209,38 @@ for path in paths {
                   inDoubt(again, in: r))
         }
     }
+}
+
+// 重试 of a turn Hermes compacted in itself: read from the transcript while the turn ran, the prompt
+// is the row it had then (in place a rewind to it is refused as no longer in the session's history,
+// in a new session as compacted); its turn's end names its copy, which keeps the prompt's name
+for path in paths {
+    let (during, after2) = (autoPage(path, "during"), autoPage(path, "after2"))
+    let prompt = during.last { $0["text"] == "慢慢做，满了（自动）" }
+    let old = prompt?["row_id"]?.int ?? 0, now = autoEnd(path, "慢慢做，满了（自动）") ?? 0
+    let submission = prompt?["display_metadata"]?["submission_id"]?.string ?? ""
+    var answers: [Int: JSONValue] = [:]
+    answers[old] = auto[path]?["rewinds"]?[String(old)]
+    if auto[path]?["rewound"]?["row"]?.int == now {
+        answers[now] = auto[path]?["rewound"]?["answer"]
+    }
+    let refusal = answers[old]?["error"]?["data"]?["detail"]?.string ?? "no refusal"
+    check("auto 重试 (\(path)) Hermes's pages: the prompt, row \(old) as the turn ran, is row \(now) once compacted in the turn, at its time, named; its turn's end names \(now); a rewind to \(old) is refused (\(refusal)), one to \(now) taken",
+          numbered(now, in: after2)?["display_metadata"]?["submission_id"]?.string == submission && !submission.isEmpty
+            && numbered(now, in: after2)?["timestamp"] == prompt?["timestamp"] && numbered(old, in: after2) == nil
+            && answers[old]?["error"] != nil && answers[now]?["target_message"]?["id"]?.int == now)
+    let read = stoppedChat(rows: during, prompt: nil, page: after2, answers: answers)
+    read.retryReply(bot)
+    await until { !asked(read).isEmpty || notRetried(read) != nil }
+    check("auto 重试 (\(path)) read from the transcript as row \(old), compacted in its turn: taken back as row \(now), at its time in its words, and asked again: \(retried(read))",
+          rewound(read) == [old, now] && asked(read) == ["慢慢做，满了（自动）"] && notRetried(read) == nil)
+    let sent = stoppedChat(rows: rows(during, before: old), prompt: ChatItem(id: submission, role: .user, at: Date(), text: "慢慢做，满了（自动）"),
+                           page: after2, answers: answers)
+    sent.control.storedRows[submission] = now
+    sent.retryReply(bot)
+    await until { !asked(sent).isEmpty || notRetried(sent) != nil }
+    check("auto 重试 (\(path)) sent from here: its turn's end named the copy, taken back as it: \(retried(sent))",
+          rewound(sent) == [now] && asked(sent) == ["慢慢做，满了（自动）"] && notRetried(sent) == nil)
 }
 
 #if !BEFORE

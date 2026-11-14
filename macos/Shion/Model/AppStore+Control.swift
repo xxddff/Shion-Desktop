@@ -287,8 +287,9 @@ extension AppStore {
 
     /// Asks the last prompt again, as Hermes's `/retry` does: the prompt's row and everything after
     /// it are taken back (`session.mutate` rewind, fenced by the session's revision and run), then
-    /// the same words go in as a new turn. Refused as compacted, the prompt is taken back by the
-    /// row it has now, if a compaction kept it (`rowNow`).
+    /// the same words go in as a new turn. Refused because its row is not one of the session's
+    /// (`invalid_params`), the prompt is taken back by the row it has now, if a compaction kept it
+    /// (`rowNow`).
     func retryReply(_ botId: String) {
         guard let replyId = retryTarget(botId), let sessionId = sessions[botId],
               let items = chats[botId], let reply = items.firstIndex(where: { $0.id == replyId }),
@@ -303,8 +304,7 @@ extension AppStore {
                 let receipt: JSONValue
                 do {
                     receipt = try await rewind(to: row, botId: botId, sessionId: sessionId)
-                } catch ControlError.refused(let reason, let detail?)
-                    where reason == "invalid_params" && detail.hasPrefix("compacted:") {
+                } catch ControlError.refused(let reason, let detail?) where reason == "invalid_params" {
                     guard let now = try await rowNow(of: prompt, was: row, botId: botId, sessionId: sessionId) else {
                         throw ControlError.refused(reason, detail: detail)
                     }
@@ -342,10 +342,12 @@ extension AppStore {
     /// The row a prompt has now that Hermes would not take it back by `was`, its row before a
     /// compaction. A compaction stores the messages it keeps again under new numbers (in place, or
     /// in the session it moves to), and Hermes refuses the old number of one it kept as it refuses
-    /// one it summarized (`compacted:`). The newest page says which: the row that names the
-    /// prompt's submission (one sent from here: the copy keeps it, transcriptPage reads it), else,
-    /// for a prompt read from the transcript, the row with its time and words
-    /// (StoredUserRow.Identity). Nil: no other row is it, it was summarized.
+    /// one it summarized (`compacted:`), or, once it compacted the session by itself in place, as
+    /// one taken back (no longer in the session's history: the old row is marked so). The newest
+    /// page says which: the row that names the prompt's submission (one sent from here: the copy
+    /// of the turn's own prompt keeps it, transcriptPage reads it), else, for a prompt read from
+    /// the transcript, the row with its time and words (StoredUserRow.Identity). Nil: no other row
+    /// is it; it was summarized, or taken back.
     private func rowNow(of prompt: ChatItem, was row: Int, botId: String, sessionId: String) async throws -> Int? {
         // a whole page: the prompt is above every row its turn left, and a turn stopped in its
         // tools leaves many
