@@ -1,7 +1,8 @@
 import Foundation
 
 // The Bot Chat's attach and rejoin (cut from the app's own files by extract.py) against a session
-// whose frames can overtake the answer to `session.resume`: the main chat's side of RR07.
+// whose frames can overtake the answer to `session.resume`: the main chat's side of RR07. And a
+// `session.resume` Hermes refuses as the chat is attached again: the main chat's side of R3-03.
 
 var failures = 0
 func check(_ ok: Bool, _ what: String) {
@@ -26,9 +27,13 @@ final class Server {
     var openRequests: [String]?
     /// What happens between a snapshot being read and its answer going out, one per resume.
     var beforeResumeAnswers: [() -> Void] = []
+    /// What the next resumes answer in place of a snapshot, one each: Hermes's refusal, before
+    /// anything is attached.
+    var refusals: [Error] = []
 
     func handle(_ method: String, _ params: JSONValue) async throws -> JSONValue {
         guard method == "session.resume" else { return .null }
+        if !refusals.isEmpty { throw refusals.removeFirst() }
         resumes += 1
         var snapshot: [String: JSONValue] = [
             "session_id": .string(session), "running": .bool(running), "messages_omitted": true,
@@ -298,6 +303,156 @@ do {
           "one from before the resume that the snapshot leaves out is over")
 }
 #endif
+
+// ---- R3-03: the chat attached again, and refused ----------------------------------------------------
+// The socket comes back (or this one's subscription was ended, the socket kept), and the first
+// session.resume is refused before anything is attached, the socket staying up: 5001
+// storage_unavailable, as Hermes answers a call whose store was busy. Then the server is fine again.
+
+/// Waits for what the store does by itself, a little at a time: three seconds at most.
+func until(_ condition: () -> Bool) async {
+    for _ in 0..<150 where !condition() {
+        try? await Task.sleep(for: .milliseconds(20))
+    }
+}
+
+let storeBusy = GatewayError.rpc(code: 5001, message: "storage_unavailable", reason: "storage_unavailable")
+let sessionGone = GatewayError.rpc(code: 4001, message: "not_found", reason: "not_found")
+
+/// Every `session.resume` asked, answered or not.
+func resumes(_ store: AppStore) -> Int { store.gateway.calls.filter { $0 == "session.resume" }.count }
+
+/// A new socket: nothing attached on it, and its own number (Gateway.connection).
+func newSocket(_ store: AppStore) {
+    store.gateway.attached = []
+    store.gateway.connection += 1
+}
+
+/// Whether what is said in the chat now goes without waiting for an attach (`waitForChat`).
+func goesAtOnce(_ store: AppStore) async -> Bool {
+    let start = Date()
+    await store.waitForChat(bot)
+    return Date().timeIntervalSince(start) < 0.5
+}
+
+do {
+    print("R3-03 back on a new socket, the first session.resume refused; the turn ended meanwhile")
+    let (store, server) = answering()
+    check(store.working[bot] == true && store.replying[bot] == true && store.streaming[bot] != nil, "a turn under way as the socket goes")
+    newSocket(store)
+    server.running = false
+    store.gateway.replayAnswer = false
+    server.refusals = [storeBusy]
+    await store.rejoin(bot, session)
+    let refused = store.unattached[bot]
+    check(refused?.why.contains("storage_unavailable") == true,
+          "the chat says it could not be attached again, in Hermes's words: \(String(describing: refused?.why))")
+    check(refused?.next != nil && refused?.trying == false, "…and is tried again by itself")
+    check(store.working[bot] == false && store.replying[bot] == false,
+          "not left as replying on the word of the frames before the drop: working \(String(describing: store.working[bot])), replying \(String(describing: store.replying[bot]))")
+    check(store.chats[bot]?.map(\.text) == ["讲长一点", "第一段。"], "the chat keeps what it showed")
+    check(!store.gateway.attached.contains(session) && !store.canResend(bot), "not attached: 重发 waits")
+    // the server is fine again: the try by itself, a second later
+    await until { store.gateway.attached.contains(session) }
+    check(store.gateway.attached.contains(session) && store.unattached[bot] == nil && resumes(store) == 2,
+          "attached again by itself, nothing said wrong any more: \(resumes(store)) resume(s)")
+    check(store.working[bot] == false && store.replying[bot] == false && store.streaming[bot] == nil,
+          "not replying, as the session says")
+    check(store.pagesRead == 1, "the newest page read for what it missed")
+    check(store.canResend(bot), "重发 can go")
+    var quick = false
+    if store.gateway.attached.contains(session) {
+        quick = await goesAtOnce(store)
+    }
+    check(quick, "what is said now goes at once")
+}
+
+do {
+    print("R3-03 再试一次 at once, the chat replying from before the drop; the turn still runs")
+    let (store, server) = answering()
+    let reply = store.streaming[bot]
+    newSocket(store)
+    store.gateway.replayAnswer = false
+    server.refusals = [storeBusy]
+    await store.rejoin(bot, session)
+    check(store.unattached[bot] != nil && store.replying[bot] == false, "said, and not replying")
+    // 再试一次 over the composer (ChatComposer: AppStore.rejoin), before the try by itself
+    await store.rejoin(bot, session)
+    check(store.gateway.attached.contains(session) && store.unattached[bot] == nil, "再试一次 attached it")
+    check(store.working[bot] == true && store.replying[bot] == true, "replying again, on the session's word")
+    check(store.streaming[bot] == reply && reply != nil && store.chats[bot]?.last?.text == "第一段。\n\n…\n\n",
+          "the reply goes on in its bubble: \(String(describing: store.chats[bot]?.last?.text))")
+    let asked = resumes(store)
+    try? await Task.sleep(for: .milliseconds(1300))
+    check(resumes(store) == asked, "the try by itself that waited is not made: \(resumes(store) - asked) more")
+    ends(store, server)
+    check(store.working[bot] == false && store.replying[bot] == false && store.streaming[bot] == nil, "and the turn ends there")
+}
+
+do {
+    print("R3-03 refused for good: the session is gone")
+    let (store, server) = answering()
+    newSocket(store)
+    server.refusals = [sessionGone]
+    await store.rejoin(bot, session)
+    let refused = store.unattached[bot]
+    check(refused?.why == "服务器上已经没有它了（not_found）" && refused?.next == nil,
+          "said, and not tried again by itself: \(String(describing: refused?.why)), next \(String(describing: refused?.next))")
+    check(store.working[bot] == false && store.replying[bot] == false, "not replying")
+    // (asked only of code that says so: other code would wait the half minute)
+    var quick = false
+    if refused != nil {
+        quick = await goesAtOnce(store)
+    }
+    check(quick, "what is said meanwhile does not wait half a minute for an attach that is not coming")
+    try? await Task.sleep(for: .milliseconds(1300))
+    check(resumes(store) == 1, "nothing tried by itself: \(resumes(store)) resume(s)")
+    await store.rejoin(bot, session)
+    check(store.gateway.attached.contains(session) && store.unattached[bot] == nil && store.working[bot] == true,
+          "再试一次 tries all the same, and attaches it once the session is there")
+}
+
+do {
+    print("R3-03 the subscription ended on this socket, the socket kept: the same")
+    let (store, server) = answering()
+    // as noteDelivery does with a session.replay_gap: the subscription is over, the socket the same
+    store.gateway.attached.remove(session)
+    server.refusals = [storeBusy]
+    await store.rejoin(bot, session)
+    check(store.unattached[bot]?.next != nil && store.working[bot] == false && store.replying[bot] == false,
+          "said, tried again by itself, not replying")
+    await until { store.gateway.attached.contains(session) }
+    check(store.gateway.attached.contains(session) && store.unattached[bot] == nil && store.working[bot] == true
+          && store.replying[bot] == true, "attached again by itself, replying again on the session's word")
+}
+
+do {
+    print("R3-03 the socket goes again while a try waits: that try is not made on the next socket")
+    let (store, server) = answering()
+    newSocket(store)
+    server.refusals = [storeBusy]
+    await store.rejoin(bot, session)
+    newSocket(store)
+    try? await Task.sleep(for: .milliseconds(1300))
+    check(resumes(store) == 1 && !store.gateway.attached.contains(session),
+          "the next socket's own comeBack attaches it, not the last one's try: \(resumes(store)) resume(s)")
+}
+
+do {
+    print("R3-03 how often it is tried again by itself (Rejoin)")
+    check(Rejoin.delay(after: 1, storeBusy) == 1 && Rejoin.delay(after: 2, storeBusy) == 2
+          && Rejoin.delay(after: 4, storeBusy) == 8 && Rejoin.delay(after: 5, storeBusy) == nil,
+          "a refusal that can go away: tried again 1, 2, 4 and 8 s after each, then no more")
+    check(Rejoin.delay(after: 1, GatewayError.timeout("session.resume")) == 1, "no answer in time: tried again too")
+    check(Rejoin.delay(after: 1, sessionGone) == nil
+          && Rejoin.delay(after: 1, GatewayError.rpc(code: 4001, message: "permission_denied", reason: "permission_denied")) == nil,
+          "not after a refusal that trying again does not change")
+    check(Rejoin.words(GatewayError.rpc(code: 4001, message: "runtime_retired", reason: "runtime_retired")) == "runtime_retired",
+          "a reason Shion has no words for: Hermes's own")
+    check(Rejoin.line("这个对话", Rejoin.words(storeBusy), next: nil) == "没能重新接上这个对话：服务器的存储暂时用不了（storage_unavailable）",
+          "the line says what could not be done and why")
+    check(Rejoin.line("这个对话", "x", next: Date()).hasSuffix(" 再试"), "…and when it is tried again by itself")
+}
 
 print(failures == 0 ? "all checks passed" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)

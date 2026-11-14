@@ -20,5 +20,5 @@ python3 "$here/extract.py" "$tree" "$work/extracted.swift" $old
 "${SWIFTC:-swiftc}" -swift-version 6 -default-isolation MainActor ${old:+-D OLD} -o "$work/chat" \
     "$here/main.swift" "$here/stubs.swift" "$work/extracted.swift" \
     "$repo/macos/Shion/Gateway/JSONValue.swift" "$repo/macos/Shion/Gateway/EventCursors.swift" \
-    "$repo/macos/Shion/Model/SecretRequest.swift"
+    "$repo/macos/Shion/Model/SecretRequest.swift" "$repo/macos/Shion/Model/Rejoin.swift"
 "$work/chat"

@@ -1,10 +1,11 @@
 import AppKit
 import SwiftUI
 
-/// A chat's composer with what goes with it: the message being answered, the pictures and files
-/// about to go (ComposerBar), and, while the assistant is in a turn, how what is sent now reaches
-/// it. What is typed lives in the store (AppStore+Compose.swift), so the transcript above is not
-/// drawn again for every key, and the draft is there again after another page.
+/// A chat's composer with what goes with it: why the chat could not be attached again, the message
+/// being answered, the pictures and files about to go (ComposerBar), and, while the assistant is in
+/// a turn, how what is sent now reaches it. What is typed lives in the store
+/// (AppStore+Compose.swift), so the transcript above is not drawn again for every key, and the
+/// draft is there again after another page.
 struct ChatComposer: View {
     @Environment(AppStore.self) private var store
     let botId: String
@@ -17,6 +18,9 @@ struct ChatComposer: View {
         let bot = store.bot(botId)
         let running = store.turnRunning(botId) && !store.readOnly
         VStack(alignment: .leading, spacing: 8) {
+            if let note = store.rejoinNote(botId) {
+                RejoinNote(botId: botId, note: note)
+            }
             if let target = store.replyTarget(for: botId) {
                 ReplyChip(target: target, name: bot?.name ?? "") {
                     store.cancelReply(in: botId)
@@ -41,6 +45,37 @@ struct ChatComposer: View {
 
     private var busyMode: Binding<BusyMode> {
         Binding { store.busyMode } set: { store.busyMode = $0 }
+    }
+}
+
+/// Over the composer of a chat this socket could not attach again (AppStore.rejoin): what failed,
+/// why, and when it is tried again by itself; 再试一次 tries now. The chat above keeps what it had.
+struct RejoinNote: View {
+    @Environment(AppStore.self) private var store
+    let botId: String
+    let note: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(note)
+                .font(.t12)
+                .foregroundStyle(Palette.alert)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 8)
+            Button("再试一次") {
+                guard let sessionId = store.botChatSession(botId) else { return }
+                Task { await store.rejoin(botId, sessionId) }
+            }
+            .controlSize(.small)
+            // one try at a time
+            .disabled(store.unattached[botId]?.trying == true)
+            .accessibilityIdentifier("rejoin-retry")
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .glassEffect(.regular, in: .rect(cornerRadius: 14))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("rejoin-failure")
     }
 }
 

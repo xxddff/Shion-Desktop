@@ -1,8 +1,8 @@
 import Foundation
 
 // SkillReviewTalk (the app's own file) against a review session's server as far as the talk can
-// tell: issue #2's R11 (a message whose receipt is lost or refused), R12 (再试一次) and R13 (a
-// subscription ended on a live socket).
+// tell: issue #2's R11 (a message whose receipt is lost or refused), R12 (再试一次), R13 (a
+// subscription ended on a live socket) and R3-03 (the session attached again, and refused).
 
 var failures = 0
 func check(_ ok: Bool, _ what: String) {
@@ -33,6 +33,9 @@ final class Server {
     /// Run while a prompt.submit is on its way: what you do meanwhile.
     var meanwhile: (() -> Void)?
     var resumeFails = false
+    /// What the next `session.resume`s answer in place of a snapshot, one each: Hermes's refusal,
+    /// before anything is attached.
+    var refusals: [Error] = []
     var createFails = false
     /// The session's stream: its frames are numbered (`seq`, in `epoch`) and a snapshot says where
     /// it was read, as Hermes does. Off: a server that numbers nothing.
@@ -80,6 +83,7 @@ final class Server {
             return ["session_id": "review-sr1"]
         case "session.resume":
             if resumeFails { throw GatewayError.timeout(method) }
+            if !refusals.isEmpty { throw refusals.removeFirst() }
             resumes += 1
             // the session as it is read now; its answer goes out a moment later
             var snapshot: [String: JSONValue] = [
@@ -811,6 +815,130 @@ do {
     server.begin()
     await talk.open(in: store)
     check(texts(talk, .user).filter { $0 == "再讲一段" }.count == 1, "and is its row once the turn has begun")
+}
+
+// ---- R3-03: the session attached again, and refused -------------------------------------------------
+// The connection comes back (or this socket's subscription was ended, the socket kept), and the
+// first session.resume is refused before anything is attached, the socket staying up: 5001
+// storage_unavailable, as Hermes answers a call whose store was busy. Then the server is fine again.
+
+/// Waits for what the talk does by itself, a little at a time: three seconds at most.
+func until(_ condition: () -> Bool) async {
+    for _ in 0..<150 where !condition() {
+        try? await Task.sleep(for: .milliseconds(20))
+    }
+}
+
+let storeBusy = GatewayError.rpc(code: 5001, message: "storage_unavailable", reason: "storage_unavailable")
+let sessionGone = GatewayError.rpc(code: 4001, message: "not_found", reason: "not_found")
+
+/// Every `session.resume` asked, answered or not.
+func resumes(_ store: AppStore) -> Int { store.gateway.calls.filter { $0.method == "session.resume" }.count }
+
+/// The connection is back on a new socket: nothing is attached on it (Gateway's teardown).
+func newSocket(_ store: AppStore) { store.gateway.attached = [] }
+
+do {
+    print("R3-03 back on a new socket, the first session.resume refused; the turn ended meanwhile")
+    let (talk, store, server, _) = await answering()
+    store.reviewing = talk
+    check(talk.busy, "answering as the connection goes")
+    newSocket(store)
+    // the turn ends on the server while the talk is away; its frames are not to be had
+    _ = server.add("assistant", "第一段。第二段。")
+    server.running = false
+    store.gateway.replayAnswer = false
+    server.refusals = [storeBusy]
+    let before = resumes(store)
+    // what the sheet does when the connection is back
+    await talk.rejoin(in: store)
+    check(talk.failure?.contains("没能重新接上这个会话") == true && talk.failure?.contains("storage_unavailable") == true,
+          "it says the session could not be attached again, in Hermes's words: \(String(describing: talk.failure))")
+    check(!talk.busy, "not left answering on the word of the frames before the drop")
+    check(!store.gateway.attached.contains("review-sr1") && !talk.ready, "not attached, and nothing can be said in it meanwhile")
+    talk.draft = "还在吗"
+    await talk.send(in: store)
+    check(talk.draft == "还在吗" && server.users("还在吗") == 0, "what is typed meanwhile stays typed: '\(talk.draft)'")
+    // the server is fine again: tried by itself a moment later
+    await until { store.gateway.attached.contains("review-sr1") }
+    check(store.gateway.attached.contains("review-sr1") && resumes(store) == before + 2,
+          "attached again by itself, at the second try: \(resumes(store) - before) resume(s)")
+    check(talk.failure == nil && talk.ready, "nothing said wrong any more: \(String(describing: talk.failure))")
+    check(!talk.busy && texts(talk, .assistant).last == "第一段。第二段。" && talk.items.allSatisfy { !$0.streaming },
+          "the turn's end as the session has it, nothing answering: \(texts(talk, .assistant))")
+    await talk.send(in: store)
+    check(server.users("还在吗") == 1 && talk.draft.isEmpty, "what was typed goes now")
+}
+
+do {
+    print("R3-03 再试一次 at once, the talk answering from before the drop and the turn still running")
+    let (talk, store, server, _) = await answering()
+    store.reviewing = talk
+    newSocket(store)
+    store.gateway.replayAnswer = false
+    server.refusals = [storeBusy]
+    await talk.rejoin(in: store)
+    check(talk.failure?.contains("没能重新接上这个会话") == true && !talk.busy, "said, and not answering: \(String(describing: talk.failure))")
+    let before = resumes(store)
+    await talk.retry(in: store)
+    check(store.gateway.attached.contains("review-sr1") && resumes(store) == before + 1,
+          "再试一次 attached it, whatever was under way before: \(resumes(store) - before) resume(s)")
+    check(talk.failure == nil && !talk.retrying, "nothing said wrong any more: \(String(describing: talk.failure))")
+    check(talk.busy && talk.items.last?.streaming == true && talk.items.last?.text == "第一段。\n\n…\n\n",
+          "answering, as the session says, the reply going on in its bubble: \(String(describing: talk.items.last?.text))")
+    try? await Task.sleep(for: .milliseconds(1300))
+    check(resumes(store) == before + 1, "the try by itself that waited is not made: \(resumes(store) - before) resume(s)")
+    _ = server.add("assistant", "第一段。第二段。")
+    server.running = false
+    frame(talk, store, server, "message.delta", ["text": "第二段。"])
+    frame(talk, store, server, "message.complete", ["text": "第一段。第二段。", "status": "complete"])
+    check(!talk.busy && talk.ready && texts(talk, .assistant).last == "第一段。第二段。", "the reply ends whole, and the talk can be written in")
+}
+
+do {
+    print("R3-03 refused for good: the session is gone")
+    let (talk, store, server, _) = await answering()
+    store.reviewing = talk
+    newSocket(store)
+    store.gateway.replayAnswer = false
+    server.refusals = [sessionGone]
+    await talk.rejoin(in: store)
+    check(talk.failure == "没能重新接上这个会话：服务器上已经没有它了（not_found）",
+          "it says so, and not that it is tried again by itself: \(String(describing: talk.failure))")
+    let before = resumes(store)
+    try? await Task.sleep(for: .milliseconds(1300))
+    check(resumes(store) == before && !talk.ready && !talk.busy, "nothing tried by itself, nothing can be said: \(resumes(store) - before)")
+    await talk.retry(in: store)
+    check(resumes(store) == before + 1 && store.gateway.attached.contains("review-sr1") && talk.failure == nil,
+          "再试一次 tries all the same, and attaches it once the session is there")
+}
+
+do {
+    print("R3-03 the subscription ended on this socket, the socket kept, and the session.resume after it refused")
+    let (talk, store, server, _) = await answering()
+    store.reviewing = talk
+    check(talk.take("session.replay_gap", sessionId: "review-sr1", ["latest_seq": .number(Double(server.seq))]), "the gap is this talk's")
+    store.gateway.replayAnswer = false
+    server.refusals = [storeBusy]
+    await talk.rejoin(in: store)
+    check(talk.failure?.contains("没能重新接上这个会话") == true && !talk.busy && !talk.ready,
+          "said the same way, not answering, nothing to be said meanwhile: \(String(describing: talk.failure))")
+    await until { store.gateway.attached.contains("review-sr1") }
+    check(store.gateway.attached.contains("review-sr1") && talk.failure == nil && talk.busy && talk.items.last?.streaming == true,
+          "attached again by itself; the turn still runs, as the session says")
+}
+
+do {
+    print("R3-03 the sheet closed while a try waits: it is not made")
+    let (talk, store, server, _) = await answering()
+    store.reviewing = talk
+    newSocket(store)
+    server.refusals = [storeBusy]
+    await talk.rejoin(in: store)
+    let before = resumes(store)
+    store.reviewing = nil
+    try? await Task.sleep(for: .milliseconds(1300))
+    check(resumes(store) == before, "no session.resume for a talk nobody looks at: \(resumes(store) - before)")
 }
 
 // ---- SessionWords ---------------------------------------------------------------------------------

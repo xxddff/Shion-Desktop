@@ -1,7 +1,7 @@
 import Foundation
 
 // Stand-ins for what SkillReviewTalk.swift uses of the app, for a check away from a Mac. The talk
-// itself, SkillReview.swift, Delivery.swift and JSONValue.swift are the app's own files.
+// itself, SkillReview.swift, Delivery.swift, Rejoin.swift and JSONValue.swift are the app's own files.
 
 enum ChatRole { case user, assistant, system, card, tool }
 
@@ -75,6 +75,8 @@ final class Gateway {
 
 final class AppStore {
     let gateway = Gateway()
+    /// The talk whose sheet is open (RootView's `.sheet(item:)`).
+    var reviewing: SkillReviewTalk?
     var serverCapabilities: Set<String> = ["event-replay-v1"]
     /// The app's own SessionWords (Gateway/EventCursors.swift), noted as Gateway.onFrame does.
     var words = SessionWords()

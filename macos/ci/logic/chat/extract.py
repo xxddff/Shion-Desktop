@@ -1,7 +1,9 @@
 """Cuts the Bot Chat's attach and rejoin out of the app's files, verbatim (less `private`), into
 one `extension AppStore`, so they compile and run against stand-ins away from a Mac. Usage:
     python3 extract.py <repository root> <out file> [old]
-`old`: a tree from before `resumed` and `runs` existed (they are then not looked for)."""
+`old`: a tree from before `resumed` and `runs` existed (they are then not looked for). A method
+marked `?` is cut where the tree has it: `notRejoined` is not in a tree from before a chat this
+socket could not attach again said so (7da4620 and older), whose rejoin does not call it."""
 import sys
 from pathlib import Path
 
@@ -11,7 +13,8 @@ old = len(sys.argv) > 3
 WANTED = {
     "macos/Shion/Model/AppStore.swift": ["func resumeParams(", "func attach(_ botId: String, snapshot:"]
     + ([] if old else ["func resumed(", "func runs("]),
-    "macos/Shion/Model/AppStore+Reconnect.swift": ["func rejoin(", "func keepReply(", "func settleAsks("],
+    "macos/Shion/Model/AppStore+Reconnect.swift": ["func rejoin(", "?func notRejoined(", "func keepReply(", "func settleAsks(",
+                                                   "func waitForChat(", "func canResend("],
     "macos/Shion/Model/AppStore+Secrets.swift": ["func resumeSecrets("],
 }
 
@@ -29,8 +32,11 @@ count = 0
 for path, wanted in WANTED.items():
     lines = (root / path).read_text().split("\n")
     for signature in wanted:
+        optional, signature = signature.startswith("?"), signature.removeprefix("?")
         found = [i for i, line in enumerate(lines)
                  if line.startswith("    ") and line.strip().removeprefix("private ").startswith(signature)]
+        if optional and not found:
+            continue
         if len(found) != 1:
             raise SystemExit(f"{path}: {signature!r} found {len(found)} times")
         body = cut(lines, found[0])

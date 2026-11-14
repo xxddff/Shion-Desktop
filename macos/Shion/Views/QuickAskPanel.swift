@@ -264,9 +264,10 @@ struct QuickAskView: View {
         .accessibilityIdentifier("quick-answer")
     }
 
-    /// Why no answer is coming, or where the connection is, while the sentence waits.
+    /// Why no answer is coming, or where the connection is, while the sentence waits: 总秘书's chat
+    /// would not open, or could not be attached again (AppStore.rejoinNote).
     private func status(answered: Bool) -> (text: String, color: Color)? {
-        if let error = store.chatErrors[store.chiefId] {
+        if let error = store.chatErrors[store.chiefId] ?? store.rejoinNote(store.chiefId) {
             return (error, Palette.alert)
         }
         guard quick.asked != nil, !answered else { return nil }

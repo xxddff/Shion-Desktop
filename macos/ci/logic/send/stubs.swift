@@ -131,6 +131,10 @@ final class AppStore {
 
     // what rejoin and loadLatestPage lean on
     var serverCapabilities: Set<String> = ["event-replay-v1", "session-transcript-v1"]
+    /// The chats this socket could not attach again (AppStore.swift): none here, where every
+    /// resume is answered. What a refusal does is checked in ../chat, with the production method.
+    var unattached: [String: Rejoin.Refused] = [:]
+    func notRejoined(_ botId: String, _ sessionId: String, _ error: Error, refused: Int) {}
     var streaming: [String: String] = [:]
     var attachMarks: [String: Int] = [:]
     var loadedChats: Set<String> = []

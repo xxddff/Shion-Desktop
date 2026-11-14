@@ -84,8 +84,8 @@ struct SkillReviewCard: View {
 /// The talk about one skill: its card, what was said, and a composer. The first message is what
 /// the assistant was given to review with, folded away. A message of yours stays where you said
 /// it: one Hermes did not take says so under it, with 重发 (SkillReviewTalk.resend); a turn that
-/// failed, or a session that would not open, says so over the composer, with 再试一次
-/// (SkillReviewTalk.retry).
+/// failed, or a session that would not open or be attached again, says so over the composer,
+/// with 再试一次 (SkillReviewTalk.retry).
 struct SkillReviewSheet: View {
     @Environment(AppStore.self) private var store
     @Environment(\.dismiss) private var dismiss
@@ -157,10 +157,11 @@ struct SkillReviewSheet: View {
         }
         .padding(20)
         .frame(minWidth: 620, idealWidth: 720, minHeight: 520, idealHeight: 680)
-        // the connection came back: the session's rows again, and its events on the new socket
+        // the connection came back: what the session missed, and its events on the new socket; or
+        // why it could not be attached again (SkillReviewTalk.rejoin)
         .task(id: store.gateway.phase == .online) {
-            guard store.gateway.phase == .online, !talk.opening else { return }
-            try? await talk.read(in: store)
+            guard store.gateway.phase == .online else { return }
+            await talk.rejoin(in: store)
         }
         // a container of its own: without it the name lands on everything inside, over their own
         .accessibilityElement(children: .contain)
@@ -202,9 +203,9 @@ struct SkillReviewSheet: View {
     }
 
     /// Under a message of yours Hermes has not said it has, as a Bot Chat says it (DeliveryMark):
-    /// not known yet (no answer came: the session is asked, at once or when the connection is
-    /// back), or 没发出去 with 重发, which sends the same message again under its id. Nothing
-    /// under one on its way or there.
+    /// not known yet (no answer came: the session is asked, at once or once the connection is
+    /// back and the session attached on it), or 没发出去 with 重发, which sends the same message
+    /// again under its id. Nothing under one on its way or there.
     @ViewBuilder
     private func delivery(of item: ChatItem) -> some View {
         switch talk.sent[item.id] {
@@ -223,13 +224,13 @@ struct SkillReviewSheet: View {
                     Label("重发", systemImage: "arrow.clockwise")
                 }
                 .buttonStyle(.plain)
-                .disabled(store.readOnly || talk.busy || talk.opening || talk.retrying)
+                .disabled(store.readOnly || !talk.ready || talk.busy || talk.opening || talk.retrying)
                 .accessibilityIdentifier("review-resend")
             }
             .font(.t12)
             .foregroundStyle(.secondary)
         case .unsure?, .unconfirmed?:
-            Label(store.gateway.phase == .online ? "正在向服务器确认有没有送到" : "等连上后确认", systemImage: "clock")
+            Label(store.gateway.phase == .online && talk.ready ? "正在向服务器确认有没有送到" : "等连上后确认", systemImage: "clock")
                 .font(.t12)
                 .foregroundStyle(.secondary)
                 .accessibilityIdentifier("review-unsure")

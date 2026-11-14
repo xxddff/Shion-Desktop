@@ -18,11 +18,15 @@ final class SkillReviewTalk: Identifiable {
     /// The assistant is answering.
     var busy = false
     var opening = true
-    /// What went wrong last, until something is tried again: the session could not be made or
-    /// read, or Hermes ended the turn with an error. 再试一次 goes with it (`retry`).
+    /// What went wrong last, until something is tried again: the session could not be made, read
+    /// or attached again, or Hermes ended the turn with an error. 再试一次 goes with it (`retry`).
     var failure: String?
     /// 再试一次 is on its way.
     var retrying = false
+    /// The session is not attached on this socket, and could not be attached again (`rejoin`):
+    /// `failure` says so. Its frames do not come as they are published, and nothing can be said in
+    /// it (`ready`); 再试一次 attaches it, whatever was under way before.
+    private(set) var unattached = false
     /// The messages of yours Hermes has not said it has, by their item's id (also their
     /// submission id): on their way, unsure because no answer came, or not sent (Delivery).
     private(set) var sent: [String: Delivery] = [:]
@@ -36,11 +40,14 @@ final class SkillReviewTalk: Identifiable {
     /// that has the row.
     @ObservationIgnored private var stored: [String: Int] = [:]
     @ObservationIgnored private var rejoining = false
+    /// The next try of `rejoin` by itself, while one waits.
+    @ObservationIgnored private var rejoinLater: Task<Void, Never>?
 
     var id: String { review.id }
-    /// The session is there to be talked in. Not while it could not be made or put on the card:
-    /// nothing can be said then, and what is typed stays typed (`send`).
-    var ready: Bool { session != nil }
+    /// The session is there to be talked in. Not while it could not be made or put on the card,
+    /// nor attached again on this socket: nothing can be said then, and what is typed stays typed
+    /// (`send`).
+    var ready: Bool { session != nil && !unattached }
     /// The first message's id: what the assistant was given to review with (SkillReviewMaterial).
     var materialId: String { "shion-review-\(review.id)-material" }
 
@@ -115,6 +122,14 @@ final class SkillReviewTalk: Identifiable {
         while again < SessionWords.rereads, store.words.outdate(snapshot) {
             again += 1
             snapshot = try await store.gateway.call("session.resume", params)
+        }
+        // attached: that it could not be is behind it, though not a turn's failure that a frame
+        // brought in the meantime (`take`)
+        if unattached {
+            unattached = false
+            if !turnFailed {
+                failure = nil
+            }
         }
         // still older than a frame taken: its rows stand, and so does what the frames brought since
         let outdated = store.words.outdate(snapshot)
@@ -308,11 +323,18 @@ final class SkillReviewTalk: Identifiable {
 
     // MARK: trying again
 
-    /// 再试一次, by what went wrong: a session not made or not read is opened again; a message that
-    /// did not go out goes again, under its id; a turn Hermes ended with an error is asked again
-    /// (`askAgain`). Until the new try starts, what went wrong stays said.
+    /// 再试一次, by what went wrong: a session not attached again on this socket is attached, a
+    /// turn that ran before the drop not in the way; a session not made or not read is opened
+    /// again; a message that did not go out goes again, under its id; a turn Hermes ended with an
+    /// error is asked again (`askAgain`). Until the new try starts, what went wrong stays said.
     func retry(in store: AppStore) async {
-        guard !opening, !retrying, !busy else { return }
+        guard !opening, !retrying else { return }
+        if unattached {
+            retrying = true
+            defer { retrying = false }
+            return await rejoin(in: store)
+        }
+        guard !busy else { return }
         guard session != nil else { return await open(in: store) }
         if let unsent = items.last(where: { sent[$0.id]?.resendable == true }) {
             return await resend(unsent.id, in: store)
@@ -428,16 +450,20 @@ final class SkillReviewTalk: Identifiable {
         return true
     }
 
-    /// Hermes ended this session's subscription on a socket that is still up (`session.replay_gap`:
-    /// it fell behind), so nothing more of it would come: what it missed is replayed where the
-    /// server keeps it, as for a Bot Chat (AppStore.rejoin), and the session is read and attached
-    /// again. Whether a turn runs is the session's word, so the talk is not left answering forever.
-    func rejoin(in store: AppStore) async {
-        guard let session, !opening, !rejoining, store.gateway.phase == .online,
-              store.gateway.attached.contains(session)
-        else { return }
+    /// The session attached again on a socket that does not have it, so that its events come: a new
+    /// one (the connection came back: SkillReviewSheet), or this one once Hermes ended the
+    /// session's subscription on it (`session.replay_gap`: it fell behind). What it missed is
+    /// replayed where the server keeps it, as for a Bot Chat (AppStore.rejoin), and the session is
+    /// read and attached again. Whether a turn runs is the session's word, so the talk is not left
+    /// answering forever. `tries`: how many tries in a row were refused before this one
+    /// (`notAttached`).
+    func rejoin(in store: AppStore, tries: Int = 0) async {
+        guard let session, !opening, !rejoining, store.gateway.phase == .online else { return }
         rejoining = true
         defer { rejoining = false }
+        // tried now: the try that waited is not needed
+        rejoinLater?.cancel()
+        rejoinLater = nil
         store.gateway.attached.remove(session)
         var caughtUp = false
         if store.serverCapabilities.contains("event-replay-v1") {
@@ -446,10 +472,30 @@ final class SkillReviewTalk: Identifiable {
         do {
             try await read(in: store, caughtUp: caughtUp)
         } catch {
-            // not attached: nothing would come. Said, with 再试一次, which reads it again
-            busy = false
-            failure = "这个会话的后续没有接上：\(error.localizedDescription)"
-            turnFailed = false
+            notAttached(by: error, refused: tries + 1, in: store)
+        }
+    }
+
+    /// Hermes would not attach the session again: its frames do not come as they are published, and
+    /// nothing can be said in it (`ready`). Whether a turn runs is not known, so the talk is not
+    /// left answering on the word of the frames before. Said over the composer, with 再试一次;
+    /// tried again by itself after a moment, a few times while the sheet is open, unless trying
+    /// again would change nothing (Rejoin). Not when the socket itself went: the next one attaches
+    /// it (SkillReviewSheet).
+    private func notAttached(by error: Error, refused: Int, in store: AppStore) {
+        guard store.gateway.phase == .online else { return }
+        busy = false
+        unattached = true
+        turnFailed = false
+        let delay = Rejoin.delay(after: refused, error)
+        failure = Rejoin.line("这个会话", Rejoin.words(error), next: delay.map { Date().addingTimeInterval($0) })
+        guard let delay else { return }
+        rejoinLater = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            // tried meanwhile, or the sheet closed
+            guard !Task.isCancelled, let self, self.unattached, store.reviewing === self else { return }
+            self.rejoinLater = nil
+            await self.rejoin(in: store, tries: refused)
         }
     }
 

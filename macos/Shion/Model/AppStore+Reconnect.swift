@@ -6,6 +6,8 @@ import Foundation
 /// - what each attached Bot Chat missed is replayed from its cursor (Gateway+Replay.swift), so a reply
 ///   under way goes on in its bubble and one that ended meanwhile shows how it ended; when the frames
 ///   cannot be had, the chat's newest page stands in, and no bubble is left still replying;
+/// - a chat Hermes will not attach again keeps what it shows, says so over its composer with
+///   再试一次, and is tried again by itself a few times (`notRejoined`, Rejoin.swift);
 /// - what went out just before the connection went is checked: Hermes has it, or it shows 没发出去
 ///   with 重发, which sends it again under the same submission id (Delivery.swift);
 /// - what you said while not connected waited under the chat, with the ⌥Space window's sentences
@@ -105,11 +107,12 @@ extension AppStore {
 
     /// Hermes takes a prompt, or an answer to an approval, only on a connection that has the session
     /// attached: on a new socket they wait until the chat is attached again (`comeBack`), half a
-    /// minute at most.
+    /// minute at most. Not once Hermes refused to attach it and it is not tried again (`rejoin`):
+    /// nothing is coming to wait for. What goes then is refused, and says so under it.
     func waitForChat(_ botId: String) async {
         let deadline = Date().addingTimeInterval(30)
         while gateway.phase == .online, let sessionId = sessions[botId], !gateway.attached.contains(sessionId),
-              Date() < deadline {
+              unattached[botId].map({ $0.trying || $0.next != nil }) ?? true, Date() < deadline {
             try? await Task.sleep(for: .milliseconds(100))
         }
     }
@@ -147,9 +150,12 @@ extension AppStore {
         }
     }
 
-    /// 重发 can go now: connected, and the chat attached on this socket.
+    /// 重发 can go now: connected, and the chat attached on this socket. Whether Hermes refused to
+    /// attach it is asked too, so that the button comes on as it is attached after all (`rejoin`):
+    /// what the socket has attached is not watched.
     func canResend(_ botId: String) -> Bool {
-        guard live, gateway.phase == .online, !readOnly, let sessionId = sessions[botId] else { return false }
+        guard live, gateway.phase == .online, !readOnly, let sessionId = sessions[botId], unattached[botId] == nil
+        else { return false }
         return gateway.attached.contains(sessionId)
     }
 
@@ -198,6 +204,8 @@ extension AppStore {
     /// attached again (QuickAsk.sendWaiting, `waitForChat`).
     func comeBack() async {
         let socket = gateway.connection
+        // a new socket: every chat is attached afresh, whatever the last one could not attach
+        unattached = [:]
         let order = sessions.keys.sorted { rank($0) == rank($1) ? $0 < $1 : rank($0) < rank($1) }
         for botId in order {
             guard gateway.connection == socket, live, gateway.phase == .online else { return }
@@ -222,16 +230,25 @@ extension AppStore {
     /// (`session.resume`, which first sends what came between the two). A reply under way goes on
     /// in its bubble. When the frames cannot be had (a server without replay, or one that no longer
     /// keeps them), the newest page stands in for them: a reply that ended meanwhile is on it, one
-    /// still under way keeps its bubble, with an ellipsis where the lost part was.
-    func rejoin(_ botId: String, _ sessionId: String) async {
+    /// still under way keeps its bubble, with an ellipsis where the lost part was. Refused, the chat
+    /// says so and is tried again (`notRejoined`), one try at a time: `tries` is how many in a row
+    /// were refused before this one; 再试一次 (ChatComposer) starts over.
+    func rejoin(_ botId: String, _ sessionId: String, tries: Int = 0) async {
+        guard unattached[botId]?.trying != true else { return }
+        unattached[botId]?.trying = true
         var caughtUp = false
         if serverCapabilities.contains("event-replay-v1") && serverCapabilities.contains("session-transcript-v1") {
             caughtUp = await gateway.replay(sessionId, profile: botId)
         }
-        guard sessions[botId] == sessionId,
-              let snapshot = try? await resumed(botId, sessionId),
-              sessions[botId] == sessionId
-        else { return }
+        guard sessions[botId] == sessionId else { return }
+        let snapshot: JSONValue
+        do {
+            snapshot = try await resumed(botId, sessionId)
+        } catch {
+            return notRejoined(botId, sessionId, error, refused: tries + 1)
+        }
+        guard sessions[botId] == sessionId else { return }
+        unattached[botId] = nil
         let reply = streaming[botId]
         // the session's run, revision, busy state and asks, as on any attach
         attach(botId, snapshot: snapshot)
@@ -254,6 +271,39 @@ extension AppStore {
         }
         reconcile(botId, caughtUp: caughtUp, snapshot: snapshot)
         await settleCorrections(botId, sessionId)
+    }
+
+    /// Hermes would not attach the chat again (`rejoin`, refused `refused` times in a row). The chat
+    /// keeps what it shows (its rows, a reply that was arriving, what you said and where that
+    /// stands) and says so over the composer, with 再试一次 (`rejoinNote`). The session's frames do
+    /// not come as they are published meanwhile, so a turn is no longer shown as running on the
+    /// word of the ones before: the session's own word comes with the attach. It is tried again by
+    /// itself after a moment, a few times (Rejoin), unless trying again would change nothing. Not
+    /// when the socket itself went: the next one attaches every chat again (`comeBack`).
+    func notRejoined(_ botId: String, _ sessionId: String, _ error: Error, refused: Int) {
+        guard gateway.phase == .online, sessions[botId] == sessionId else { return }
+        let delay = Rejoin.delay(after: refused, error)
+        let next = delay.map { Date().addingTimeInterval($0) }
+        unattached[botId] = Rejoin.Refused(why: Rejoin.words(error), next: next)
+        setRunning(botId, false)
+        setReplying(botId, false)
+        guard let delay else { return }
+        let socket = gateway.connection
+        Task {
+            try? await Task.sleep(for: .seconds(delay))
+            // tried meanwhile (再试一次), attached, let go of, or another socket: not this try's to make
+            guard gateway.connection == socket, gateway.phase == .online, sessions[botId] == sessionId,
+                  let waiting = unattached[botId], waiting.next == next, !waiting.trying
+            else { return }
+            await rejoin(botId, sessionId, tries: refused)
+        }
+    }
+
+    /// What is said over the composer of a chat this socket could not attach again (`rejoin`): what
+    /// failed and why, and when it is tried again by itself.
+    func rejoinNote(_ botId: String) -> String? {
+        guard live, gateway.phase == .online, let refused = unattached[botId] else { return nil }
+        return Rejoin.line("这个对话", refused.why, next: refused.next)
     }
 
     /// No replay: what came while away is not in the chat until the page is read. A reply still

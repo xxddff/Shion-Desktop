@@ -1,12 +1,21 @@
 import Foundation
 
 // Stand-ins for what the Bot Chat's attach and rejoin lean on, so the app's own methods (cut out
-// by extract.py) compile and run away from a Mac. JSONValue.swift, EventCursors.swift and
-// SecretRequest.swift are the app's own.
+// by extract.py) compile and run away from a Mac. JSONValue.swift, EventCursors.swift,
+// SecretRequest.swift and Rejoin.swift are the app's own.
 
-nonisolated enum GatewayError: Error {
+nonisolated enum GatewayError: LocalizedError {
     case offline
     case timeout(String)
+    case rpc(code: Int, message: String, reason: String?)
+
+    var errorDescription: String? {
+        switch self {
+        case .offline: return "没有连上服务器"
+        case .timeout(let what): return "等 \(what) 超时了"
+        case .rpc(_, let message, let reason): return reason ?? message
+        }
+    }
 }
 
 enum ChatRole { case user, assistant, system, card, tool }
@@ -36,6 +45,8 @@ final class Notifier {
 }
 
 final class Gateway {
+    enum Phase: Equatable { case offline, online }
+    var phase = Phase.online
     var attached: Set<String> = []
     var calls: [String] = []
     var answer: (String, JSONValue) async throws -> JSONValue = { _, _ in .null }
@@ -59,6 +70,10 @@ final class AppStore {
     let gateway = Gateway()
     var serverCapabilities: Set<String> = ["event-replay-v1", "session-transcript-v1"]
     var pagesTranscripts = true
+    var live = true
+    var readOnly = false
+    /// The Bot Chats this socket could not attach again, and why (AppStore.swift).
+    var unattached: [String: Rejoin.Refused] = [:]
     var words = SessionWords()
     var resumeAsked: [String: Date] = [:]
     var sessions: [String: String] = [:]

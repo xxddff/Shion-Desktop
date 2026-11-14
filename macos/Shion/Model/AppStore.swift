@@ -54,6 +54,10 @@ final class AppStore {
     /// Bot ids whose Bot Chat is being opened, and why one could not be.
     private(set) var openingChats: Set<String> = []
     private(set) var chatErrors: [String: String] = [:]
+    /// Bot ids whose Bot Chat this socket could not attach again (the connection came back, or the
+    /// chat's subscription was ended), and why: the chat keeps what it shows and says so over its
+    /// composer, with 再试一次 (AppStore+Reconnect.swift `rejoin`).
+    var unattached: [String: Rejoin.Refused] = [:]
     /// bot id → the cursor of its next older transcript page; absent once the oldest is shown
     private(set) var olderPages: [String: String] = [:]
     /// bot ids whose older page is on its way, and why one did not come
@@ -373,6 +377,7 @@ extension AppStore {
         olderErrors[botId] = nil
         chats[botId] = nil
         replying.remove(botId)
+        unattached[botId] = nil
         deliveries.forget(botId)
         for ask in asks where ask.botId == botId {
             Notifier.shared.withdraw(ask.id)
@@ -483,6 +488,7 @@ extension AppStore {
         attachMarks = [:]
         loadedChats = []
         replying = []
+        unattached = [:]
         Notifier.shared.withdrawAll()
         endSecrets()
     }
@@ -984,7 +990,7 @@ extension AppStore {
         return preferred
     }
 
-    private func setReplying(_ botId: String, _ on: Bool) {
+    func setReplying(_ botId: String, _ on: Bool) {
         guard replying.contains(botId) != on else { return }
         if on {
             replying.insert(botId)
@@ -997,7 +1003,7 @@ extension AppStore {
         append(ChatItem(id: UUID().uuidString, role: .system, at: Date(), text: text), to: botId)
     }
 
-    private func setRunning(_ botId: String, _ running: Bool) {
+    func setRunning(_ botId: String, _ running: Bool) {
         guard let index = bots.firstIndex(where: { $0.id == botId }) else { return }
         bots[index].status = running ? .working : .idle
         bots[index].statusNote = running ? "在回复" : ""

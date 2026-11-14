@@ -5,9 +5,10 @@
 #
 # The methods are the production ones: cut from the store's files as they are (extract.py), and
 # compiled with AppStore+Compose.swift, Deliveries.swift, Delivery.swift, Compose.swift,
-# NoticeCards.swift and JSONValue.swift whole, against stand-ins for the rest of the app
-# (stubs.swift). main.swift runs them against a server it scripts and says what it expects, line
-# by line. Exits non-zero when a check fails or the sources no longer compile with the stand-ins.
+# NoticeCards.swift, Rejoin.swift, JSONValue.swift and EventCursors.swift whole, against stand-ins
+# for the rest of the app (stubs.swift). main.swift runs them against a server it scripts and says
+# what it expects, line by line. Exits non-zero when a check fails or the sources no longer compile
+# with the stand-ins.
 #
 #   ./run.sh                    the checks, against the sources this file sits among
 #   SWIFTC=/path/to/swiftc      another compiler than `swiftc`
@@ -31,5 +32,6 @@ python3 "$here/extract.py" "$root" "$work/extracted.swift"
 "${SWIFTC:-swiftc}" -swift-version 6 -default-isolation MainActor ${SHION_BEFORE:+-D BEFORE} -o "$work/checks" \
     "$here/main.swift" "$here/stubs.swift" "$work/extracted.swift" "$work/event.swift" \
     "$model/AppStore+Compose.swift" "$model/Deliveries.swift" "$model/Delivery.swift" "$model/Compose.swift" \
-    "$model/NoticeCards.swift" "$root/macos/Shion/Gateway/JSONValue.swift"
+    "$model/NoticeCards.swift" "$model/Rejoin.swift" "$root/macos/Shion/Gateway/JSONValue.swift" \
+    "$root/macos/Shion/Gateway/EventCursors.swift"
 "$work/checks"
