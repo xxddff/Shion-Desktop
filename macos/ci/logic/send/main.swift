@@ -283,15 +283,20 @@ final class Server {
     var running = true
     var correction: () throws -> JSONValue = { throw GatewayError.offline }
     var prompt: () throws -> JSONValue = { ["status": "queued"] }
+    /// What a rewind (session.mutate) answers, by the row it names: a receipt, or a refusal's error object
+    var rewinds: [Int: JSONValue] = [:]
 
     init(for s: AppStore) {
-        s.gateway.answer = { [unowned self] method, _ in
+        s.gateway.answer = { [unowned self] method, params in
             switch method {
             case "session.transcript": return ["rows": .array(self.rows)]
             case "session.resume":
                 return ["session_id": .string(session), "running": .bool(self.running), "messages_omitted": .bool(true)]
             case "session.steer", "session.redirect": return try self.correction()
             case "prompt.submit": return try self.prompt()
+            case "session.mutate":
+                return self.rewinds[params["payload"]?["target_message_id"]?.int ?? 0]
+                    ?? ["error": ["code": 4001, "message": "not scripted"]]
             default: return [:]
             }
         }
@@ -996,6 +1001,109 @@ for path in paths {
     await comeBack(s, replayed: false)
     check("R4-01 (\(path)) a prompt's receipt lost, and compacted since: row 27 names it, and stands for it, once: \(ids(s))",
           s.deliveries.state(prompt) == nil && s.control.storedRows[prompt] == 27 && ids(s).contains("row-27") && !ids(s).contains(prompt))
+}
+
+// ---- 重试 once the session is compacted ---------------------------------------------------------
+// 重试 takes the prompt's row and what came after it back (session.mutate rewind), then asks the
+// same words again. The pages' fourth round: a turn stopped in its command, its prompt 「慢慢做」
+// stored as row 56 (its end says so: `stopped`, its persisted_turn), then the session compacted. The
+// compaction kept the prompt as row 66, at the same time, naming its submission still; the newest
+// prompt it summarized, 「后台跑一下」 (row 50), is on the page under its own number. Hermes refused a
+// rewind to 56 as it refused one to 50 (`rewinds4`), and took the prompt back as row 66.
+
+/// The rows 重试 asked Hermes to take back, in order.
+func rewound(_ s: AppStore) -> [Int] {
+    s.gateway.calls.filter { $0.method == "session.mutate" }.compactMap { $0.params["payload"]?["target_message_id"]?.int }
+}
+
+/// The words that went in as new turns.
+func asked(_ s: AppStore) -> [String] {
+    s.gateway.calls.filter { $0.method == "prompt.submit" }.compactMap { $0.params["text"]?.string }
+}
+
+/// The line a retry that did not go through leaves.
+func notRetried(_ s: AppStore) -> String? { s.chats[bot]?.last { $0.text.hasPrefix("没能重试") }?.text }
+
+func retried(_ s: AppStore) -> String {
+    "rewound \(rewound(s)), asked \(asked(s)), \(notRetried(s) ?? "nothing said")"
+}
+
+/// The servers of the chats below, for as long as the checks run (the gateway answers through them unowned).
+var servers: [Server] = []
+
+/// 詩音's chat with the turn stopped: `rows` read from the transcript, then `prompt` (sent from here,
+/// nil when it is the last of the rows) and the line the stop left; the server giving the page
+/// after the compaction (with `later` after Hermes's rows) and the answers Hermes gave then.
+func stoppedChat(_ path: String, rows: [JSONValue], prompt: ChatItem?, later: [JSONValue] = []) -> AppStore {
+    let s = store(.queue, running: false)
+    s.loadedChats = [bot]
+    let server = Server(for: s)
+    servers.append(server)
+    server.running = false
+    server.rows = captured(path, "after4") + later
+    for name in ["kept", "summarized", "rewound"] {
+        if let rewind = compaction[path]?["rewinds4"]?[name], let row = rewind["row"]?.int {
+            server.rewinds[row] = rewind["answer"]
+        }
+    }
+    s.chats[bot] = s.transcriptItems(["rows": .array(rows)]) + (prompt.map { [$0] } ?? [])
+        + [ChatItem(id: "stopped", role: .system, at: Date(), text: "已停止", stopped: true)]
+    return s
+}
+
+for path in paths {
+    let (before4, after4) = (captured(path, "before4"), captured(path, "after4"))
+    let end = compaction[path]?["stopped"]
+    let submission = end?["submission_id"]?.string ?? ""
+    let answers = compaction[path]?["rewinds4"]
+    let refusal = answers?["kept"]?["answer"]?["error"]?["data"]
+    check("重试 (\(path)) Hermes's pages: the stopped turn's prompt, row 56 as its end says, is row 66 once compacted, at its time, naming its submission; row 50, summarized, keeps its number",
+          end?["user_row_id"]?.int == 56 && numbered(56, in: after4) == nil
+            && numbered(66, in: after4)?["display_metadata"]?["submission_id"]?.string == submission
+            && numbered(66, in: after4)?["timestamp"] == numbered(56, in: before4)?["timestamp"]
+            && numbered(50, in: after4)?["timestamp"] == numbered(50, in: before4)?["timestamp"])
+    check("重试 (\(path)) …and Hermes refused a rewind to 56 as one to 50, and took 66 back: \(refusal?["detail"]?.string ?? "no refusal")",
+          answers?["kept"]?["row"]?.int == 56 && answers?["summarized"]?["row"]?.int == 50 && answers?["rewound"]?["row"]?.int == 66
+            && refusal?["detail"]?.string?.hasPrefix("compacted:") == true && refusal == answers?["summarized"]?["answer"]?["error"]?["data"]
+            && answers?["rewound"]?["answer"]?["target_message"]?["id"]?.int == 66)
+
+    // sent from here: its row is the one its turn's end named
+    let sent = stoppedChat(path, rows: rows(before4, before: 56), prompt: ChatItem(id: submission, role: .user, at: Date(), text: "慢慢做（探测）"))
+    sent.control.storedRows[submission] = 56
+    sent.retryReply(bot)
+    await until { !asked(sent).isEmpty || notRetried(sent) != nil }
+    check("重试 (\(path)) sent from here, row 56 by its turn's end, compacted since: taken back as row 66, which names it, and asked again: \(retried(sent))",
+          rewound(sent) == [56, 66] && asked(sent) == ["慢慢做（探测）"] && notRetried(sent) == nil)
+
+    // read from the transcript (the chat read again while the turn ran), the stop's line come live:
+    // row 66 by its time and words
+    let read = stoppedChat(path, rows: before4, prompt: nil)
+    read.retryReply(bot)
+    await until { !asked(read).isEmpty || notRetried(read) != nil }
+    check("重试 (\(path)) read from the transcript as row 56, compacted since: taken back as row 66, at its time in its words, and asked again: \(retried(read))",
+          rewound(read) == [56, 66] && asked(read) == ["慢慢做（探测）"] && notRetried(read) == nil)
+    // not by its words alone: a row after it in them (「慢慢做」 put into the turn again) is another message
+    let steer: JSONValue = ["row_id": 70, "role": "user", "text": "慢慢做（探测）", "display_kind": "steer",
+                            "timestamp": .number((numbered(66, in: after4)?["timestamp"]?.number ?? 0) + 1)]
+    let twice = stoppedChat(path, rows: before4, prompt: nil, later: [steer])
+    twice.retryReply(bot)
+    await until { !asked(twice).isEmpty || notRetried(twice) != nil }
+    check("重试 (\(path)) …and a row in its words after it, at another time, is not it: \(retried(twice))",
+          rewound(twice) == [56, 66] && asked(twice) == ["慢慢做（探测）"] && notRetried(twice) == nil)
+
+    // the prompt the compaction summarized cannot be taken back, and the chat says so, as before
+    let named = numbered(50, in: before4)?["display_metadata"]?["submission_id"]?.string ?? ""
+    let gone = stoppedChat(path, rows: rows(before4, before: 50), prompt: ChatItem(id: named, role: .user, at: Date(), text: "后台跑一下（探测）"))
+    gone.control.storedRows[named] = 50
+    gone.retryReply(bot)
+    await until { !asked(gone).isEmpty || notRetried(gone) != nil }
+    let goneRead = stoppedChat(path, rows: rows(before4, before: 50) + [numbered(50, in: before4) ?? .null], prompt: nil)
+    goneRead.retryReply(bot)
+    await until { !asked(goneRead).isEmpty || notRetried(goneRead) != nil }
+    check("重试 (\(path)) the prompt summarized, sent from here or read as row 50: not taken back, nothing asked again, the refusal said: \(retried(gone)); \(retried(goneRead))",
+          [gone, goneRead].allSatisfy { s in
+              rewound(s) == [50] && asked(s).isEmpty && notRetried(s) == "没能重试：这条消息已经压缩进摘要里了"
+          })
 }
 
 #if !BEFORE

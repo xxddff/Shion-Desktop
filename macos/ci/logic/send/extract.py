@@ -1,6 +1,7 @@
-"""Cuts the store's sending and rejoining methods out of the production files, verbatim (less
-`private`), into one `extension AppStore`, so they compile and run against stand-ins (stubs.swift)
-away from the app. A method that moved or was renamed stops the run: say where it is now. Usage:
+"""Cuts the store's sending, rejoining and retrying methods out of the production files, verbatim
+(less `private`), into one `extension AppStore`, so they compile and run against stand-ins
+(stubs.swift) away from the app. A method that moved or was renamed stops the run: say where it is
+now. Usage:
     python3 extract.py <repository root> <out file>"""
 import sys
 from pathlib import Path
@@ -11,7 +12,10 @@ WANTED = {
     "macos/Shion/Model/AppStore.swift": ["func send(_ text: String, to botId: String, mode:", "func loadLatestPage(",
                                          "func uniqued(", "?func transcriptPage("],
     "macos/Shion/Model/AppStore+Media.swift": [
-        "func canSend(", "func sendMessage(", "func submit(_ words: String, _ drafts:"],
+        "func canSend(", "func sendMessage(", "func submit(_ words: String, _ drafts:", "static func retryable("],
+    "macos/Shion/Model/AppStore+Control.swift": [
+        "func controlNote(", "func retryTarget(", "static func startsTurn(", "static func endsTurn(", "func retryReply(",
+        "func storedRow(", "?func rowNow(", "func rewind(to row:"],
     "macos/Shion/Model/AppStore+Reconnect.swift": [
         "func say(", "func submit(_ text: String, id:", "func waitForChat(", "func requeue(", "func resend(",
         "func canResend(", "func rejoin(", "func keepReply(", "func reconcile(", "func settleCorrections(",

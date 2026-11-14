@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
-# The store's sending and rejoining, checked away from the app (Linux, or a Mac's own swiftc): what
-# becomes of a message whose receipt the connection took, of one put into a running turn, of one
-# said while the chat is being attached again, and what a page read in the chat's place keeps.
+# The store's sending, rejoining and retrying, checked away from the app (Linux, or a Mac's own
+# swiftc): what becomes of a message whose receipt the connection took, of one put into a running
+# turn, of one said while the chat is being attached again, what a page read in the chat's place
+# keeps, and which row 重试 takes back once the session is compacted.
 #
 # The methods are the production ones: cut from the store's files as they are (extract.py), and
 # compiled with AppStore+Compose.swift, Deliveries.swift, Delivery.swift, Compose.swift,
-# NoticeCards.swift, Rejoin.swift, JSONValue.swift and EventCursors.swift whole, against stand-ins
-# for the rest of the app (stubs.swift). main.swift runs them against a server it scripts and says
-# what it expects, line by line; where the server's pages are Hermes's own (read before and after a
-# compaction: compaction.json, from ../../real, stage compact), it serves them as they came. Exits
-# non-zero when a check fails or the sources no longer compile with the stand-ins.
+# NoticeCards.swift, Rejoin.swift, TurnFailure.swift, JSONValue.swift and EventCursors.swift whole,
+# against stand-ins for the rest of the app (stubs.swift). main.swift runs them against a server it
+# scripts and says what it expects, line by line; where the server's pages and answers are Hermes's
+# own (read before and after a compaction: compaction.json, from ../../real, stage compact), it
+# serves them as they came. Exits non-zero when a check fails or the sources no longer compile with
+# the stand-ins.
 #
 #   ./run.sh                    the checks, against the sources this file sits among
 #   SWIFTC=/path/to/swiftc      another compiler than `swiftc`
@@ -29,11 +31,13 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
 python3 "$here/extract.py" "$root" "$work/extracted.swift"
-# ChatEvent alone out of Models.swift, which needs SwiftUI for its other types
+# ChatEvent alone out of Models.swift, which needs SwiftUI for its other types; ControlError alone
+# out of AppStore+Control.swift, whose ChatControl the stand-ins have
 { echo "import Foundation"; awk '/^nonisolated enum ChatEvent/,/^}/' "$model/Models.swift"; } > "$work/event.swift"
+{ echo "import Foundation"; awk '/^nonisolated enum ControlError/,/^}/' "$model/AppStore+Control.swift"; } > "$work/control.swift"
 "${SWIFTC:-swiftc}" -swift-version 6 -default-isolation MainActor ${SHION_BEFORE:+-D BEFORE} -o "$work/checks" \
-    "$here/main.swift" "$here/stubs.swift" "$work/extracted.swift" "$work/event.swift" \
+    "$here/main.swift" "$here/stubs.swift" "$work/extracted.swift" "$work/event.swift" "$work/control.swift" \
     "$model/AppStore+Compose.swift" "$model/Deliveries.swift" "$model/Delivery.swift" "$model/Compose.swift" \
-    "$model/NoticeCards.swift" "$model/Rejoin.swift" "$root/macos/Shion/Gateway/JSONValue.swift" \
-    "$root/macos/Shion/Gateway/EventCursors.swift"
+    "$model/NoticeCards.swift" "$model/Rejoin.swift" "$model/TurnFailure.swift" \
+    "$root/macos/Shion/Gateway/JSONValue.swift" "$root/macos/Shion/Gateway/EventCursors.swift"
 "$work/checks" "$here/compaction.json"

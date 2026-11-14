@@ -1,9 +1,9 @@
 import Foundation
 import Observation
 
-// Stand-ins for what the store's sending methods lean on, so the production methods (cut out by
-// extract.py, and AppStore+Compose.swift whole) compile and run away from the app, on Linux or a
-// Mac. Only what they touch.
+// Stand-ins for what the store's sending and retrying methods lean on, so the production methods
+// (cut out by extract.py, and AppStore+Compose.swift whole) compile and run away from the app, on
+// Linux or a Mac. Only what they touch.
 
 struct LaunchOptions { var snapshot = false; static let current = LaunchOptions() }
 
@@ -29,6 +29,8 @@ struct ChatItem: Identifiable, Hashable {
     var midTurn = false
     var streaming = false
     var event: ChatEvent? = nil
+    var stopped = false
+    var failure: TurnFailure? = nil
 }
 
 struct Draft: Identifiable, Equatable {
@@ -76,6 +78,7 @@ final class MediaStub {
 
 final class ChatControl {
     struct Fence { var generation: Int?; var revision: Int? }
+    var retrying: Set<String> = []
     var fences: [String: Fence] = [:]
     var storedRows: [String: Int] = [:]
     #if BEFORE
@@ -85,6 +88,14 @@ final class ChatControl {
     var confirmedRows: [String: Set<StoredUserRow.Identity>] = [:]
     #endif
     var namedRows: [String: Set<Int>] = [:]
+
+    /// As the production one: never backwards, but for a refusal's fresh fences.
+    func note(_ sessionId: String, generation: Int?, revision: Int?, replacing: Bool = false) {
+        var fence = fences[sessionId] ?? Fence()
+        if let generation { fence.generation = replacing ? generation : max(generation, fence.generation ?? generation) }
+        if let revision { fence.revision = replacing ? revision : max(revision, fence.revision ?? revision) }
+        fences[sessionId] = fence
+    }
 }
 
 /// Records every call, and answers as the test scripts it.
@@ -96,9 +107,11 @@ final class Gateway {
     var answer: (String, JSONValue) throws -> JSONValue = { _, _ in ["status": "queued"] }
 
     @discardableResult
-    func call(_ method: String, _ params: JSONValue = [:]) async throws -> JSONValue {
+    func call(_ method: String, _ params: JSONValue = [:], keepRefusal: Bool = false) async throws -> JSONValue {
         calls.append((method, params))
         let reply = try answer(method, params)
+        // Hermes's refusal (its error object), as the production one hands it to a caller that reads it
+        if keepRefusal, let error = reply["error"] { return ["refusal": error] }
         // a session is attached on this socket once its resume is answered
         if method == "session.resume", let session = params["session_id"]?.string { attached.insert(session) }
         return reply
