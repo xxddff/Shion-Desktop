@@ -57,16 +57,24 @@ struct RejoinNote: View {
 
     var body: some View {
         HStack(spacing: 8) {
+            // two lines at most, the whole of it on hover. The chat's page is laid out no shorter
+            // than it measures at no width at all, where a text as tall as its words (fixedSize)
+            // stands a character to a line: with Hermes's reason that was taller than the screen,
+            // and the window, which could not grow past it, showed the middle of its content, the
+            // line and the composer below its bottom edge (run 220)
             Text(note)
                 .font(.t12)
                 .foregroundStyle(Palette.alert)
-                .fixedSize(horizontal: false, vertical: true)
+                .lineLimit(2)
+                .help(note)
             Spacer(minLength: 8)
             Button("再试一次") {
                 guard let sessionId = store.botChatSession(botId) else { return }
                 Task { await store.rejoin(botId, sessionId) }
             }
             .controlSize(.small)
+            // whole, however long the reason beside it
+            .fixedSize()
             // one try at a time
             .disabled(store.unattached[botId]?.trying == true)
             .accessibilityIdentifier("rejoin-retry")
