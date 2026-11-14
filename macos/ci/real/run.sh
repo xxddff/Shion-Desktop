@@ -12,8 +12,9 @@
 #   ./read_notices.sh captures/capture-peer.json captures/capture-peer2.json captures/capture-background.json
 #   ./read_behind.sh captures/capture-behind.json
 # and the pages read before and after a compaction (stage compact) are what the logic checks of
-# sending run over:
-#   cp captures/compaction.json ../logic/send/
+# sending and of notices run over:
+#   cp captures/compaction-send.json ../logic/send/compaction.json
+#   cp captures/compaction-notices.json ../logic/notices/compaction.json
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 image="${HERMES_TEST_IMAGE:-shion-hermes-test}"

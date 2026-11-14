@@ -37,7 +37,7 @@ gateway 是经 `hold_gateway.py` 起的：Hermes 的文件一个不改，只在�
 | `background` | 后台跑一条命令，结束时 Hermes 自己起一轮 |
 | `gap` | 一个不读数据的观看者，等一段几兆字节的回复把它落下 4 MB 以上，Hermes 结束它的订阅（`session.replay_gap`），再看它怎么接回来 |
 | `behind` | 一轮的结束赶在 `session.resume` 的回答前面：建一个审核技能用的那种会话（隐藏、没有工具），发一句让模型说到一半停住的话；这一轮还在跑时再读一次会话，回答被 `hold_gateway.py` 按在读完快照之后；放模型说完，等 `message.complete` 和 `session.info` 到了，再放回答 |
-| `compact` | 一轮里模型跑一条要三秒的命令（「慢慢做」），命令跑着时像 Shion 那样把「继续」引导进去（`session.steer`）；然后压缩对话（`session.mutate` 的 `compress`）。再说一句普通的「继续」，再引导一次「继续」，再压缩一次。默认 profile 原地压缩，`commute` 换成新的会话。每次压缩前后读最新一页，再直接读 `state.db` 里所有的行（归档的、旧会话的也在内）；那四页另外存成 `compaction.json`，是 `../logic/send` 的检查用的 |
+| `compact` | 一轮里模型跑一条要三秒的命令（「慢慢做」），命令跑着时像 Shion 那样把「继续」引导进去（`session.steer`）；然后压缩对话（`session.mutate` 的 `compress`）。再说一句普通的「继续」，再引导一次「继续」，再压缩一次。第三次压缩之前让一条后台命令跑完（「后台跑一下」：Hermes 拿它的结果自己起一轮），压缩以后再来一条；第四次之前停掉一轮（`session.interrupt`），压缩以后先按它压缩前的行号、再按新的行号把它收回（`session.mutate` 的 `rewind`）。每次压缩以后，还按压缩前的行号各收回一次留下来的和总结掉的一句话。默认 profile 原地压缩，`commute` 换成新的会话。每次压缩前后读最新一页，再直接读 `state.db` 里所有的行（归档的、旧会话的也在内）；检查用的页和回答另外存成 `compaction-send.json`（`../logic/send` 用）和 `compaction-notices.json`（`../logic/notices` 用） |
 
 结果在 `captures/`（不进仓库）：每个阶段一份 `capture-*.json` 和打印的 `*.txt`，还有 `gateway.log`、`mock-model.log`。
 
@@ -57,11 +57,12 @@ gateway 是经 `hold_gateway.py` 起的：Hermes 的文件一个不改，只在�
 
 这个把审核会话的 `Shion/Model/SkillReviewTalk.swift` 和 `Shion/Gateway/EventCursors.swift` 原样编进去（应用的其余部分用 `ci/logic/talk/stubs.swift` 顶替），按抓到的顺序把帧和快照喂给它，逐项检查，有不对的以非零退出。走两遍：一遍照实际发生的（旧快照之后再问一次，拿到新的）；一遍假设每次再问拿到的都和第一份一样旧（把抓到的那份旧快照重复给它），看它只靠旧快照和帧能不能把话显示对。第二个参数可以换一份 `SkillReviewTalk.swift`，比如改动之前的，看它在哪一项上不对。
 
-`compact` 阶段存下的那几页（`captures/compaction.json`）是 `../logic/send` 的检查的数据，放过去就行：
+`compact` 阶段存下的页和回答是 `../logic/send`、`../logic/notices` 的检查的数据，放过去就行：
 
 ```bash
-cp captures/compaction.json ../logic/send/
-../logic/run.sh send
+cp captures/compaction-send.json ../logic/send/compaction.json
+cp captures/compaction-notices.json ../logic/notices/compaction.json
+../logic/run.sh send notices
 ```
 
 那里把应用自己发送和重新接上的方法原样编进去，替身服务器照抓到的样子给出压缩前后的页，看一句引导进去、回答丢了的话，压缩以后会不会被认成送到了。
@@ -96,3 +97,14 @@ cp captures/compaction.json ../logic/send/
 - 行号不会重复用：`messages.id` 是 `AUTOINCREMENT`，`sqlite_sequence` 从 9 到 17 到 33，新行号总比以前发过的都大，换成新会话时也接着排。记下的旧行号不会变成另一条消息的，只可能不在页上了。
 - 所以跨压缩认得出一行的，是它的时间和文字：Hermes 自己显示时，也是按角色、内容和时间把一条消息压缩出的几份合成一行（`hermes_state_messages.py` 的 `_dedupe_display_generations`）。
 - `../logic/send` 拿这几页跑应用自己的代码：改之前，压缩以后，那句没送到的「继续」被第 16 行（旧的那句）确认成送到了，补全了事件的标成送进了这一轮，重读了对话的气泡被换掉；同样的话说两遍、一行确认了一句之后，压缩过的那一行又确认了另一句。改之后这些都还是「不确定有没有送到」，真送到了的照样由它自己的那一行确认。
+
+## 2026-11-14 这一次看到的：压缩以后的通知和收回（`compact` 的第三、四次压缩，Hermes `611bf53`）
+
+跑了三次，两种压缩每次的行号都是下面这些（往上读的那一步是后两次加的）。
+
+- 后台结果那一行（`display_kind: process_complete`）和别的消息一样：留下来的换了行号（38 → 48，它引出的回复 39 → 49），`timestamp`、`text`、`display_kind`、`display_metadata`（`display_text`）一个字不差。压缩以后再来的结果是新的一行（54），它那一轮的开始帧和结束帧（`persisted_turn.user_row_id: 54`）和压缩前的一样。
+- 压缩前读了最新的六行（34 到 39），压缩以后拿那一页的 `next_cursor` 往上读：`reset` 是 `false`，读到的是 34 那条消息（现在是 44）上面的几行，那六行一行也不在里面。游标跟着消息走，不跟行号。
+- 引导进去的「继续」被第三次压缩拿去带摘要时（32 → 42），页上这一行的文字是 Hermes 给模型的原文（`[OUT-OF-BAND USER MESSAGE — …`），不再是 `display_kind: steer`；摘要那一行（`row_kind: compaction`）和它同一个行号。第四次的摘要没有借别的行，自己一行，时间是压缩的时候，排在页的最后。
+- 收回（`session.mutate` 的 `rewind`）：按压缩前的行号收回一句留下来的话（3 → 12、20 → 29、56 → 66），回的和收回一句总结掉的（5、50）一模一样：`invalid_params`，`field: target_message_id`，`detail: "compacted: target user message was summarized when the session was compressed"`，什么都没收回。两种压缩、三次都是这样。原地压缩把留下来的旧行和总结掉的一样标成 `active=0, compacted=1`；换成新会话时旧行留在旧会话里，算压缩前的祖先。从拒绝里分不出这两种。
+- 按新的行号（66）照常收回：`rewound_count: 4`，`target_message` 是那句话，`content` 是原话，`display_metadata` 里还是那个 `submission_id`。原地压缩的，收回以后页上又出现了原来那一行（56）和它的工具调用，在摘要之上：留下来的那份收回了，归档的原行就不再被它挡着；换成新会话的没有。
+- 停掉的那一轮：结束帧 `status: interrupted`，`persisted_turn` 是 `{row_ids: [56, 57, 58, 59], complete: false, user_row_id: 56, submission_id: …}`；页上 56 后面只有一行工具调用，收尾的占位是隐藏的。压缩以后它是 66，提交编号和时间不变。

@@ -15,12 +15,17 @@ Runs inside the container (inside.sh), beside a gateway that serves three Bot Mo
   python probe.py compact <capture.json>      「继续」 put into a turn while its command runs (stored as a
                                               row of its own), then the session compacted (session.mutate
                                               compress), twice: in place, and into a new session (通勤's
-                                              config says compression.in_place false). The newest page and
-                                              the store's rows before and after each; the pages also go to
-                                              compaction.json beside the capture, for ../logic/send
+                                              config says compression.in_place false). Then a background
+                                              result's turn, compacted, and another one after; then a turn
+                                              stopped, compacted, and its prompt taken back (session.mutate
+                                              rewind) by its old number and by its new one. The newest page
+                                              and the store's rows before and after each compaction, and
+                                              what a rewind answers after it; the pages also go beside the
+                                              capture: compaction-send.json for ../logic/send,
+                                              compaction-notices.json for ../logic/notices
 
 Each prints what a viewer gets, frame by frame, and writes it as JSON for the Mac's own code to be
-run over (read_notices.sh, read_behind.sh, ../logic/send)."""
+run over (read_notices.sh, read_behind.sh, ../logic/send, ../logic/notices)."""
 import json
 import os
 import socket
@@ -429,23 +434,81 @@ elif STAGE == "compact":
         viewer.listen(1)
         return submission, answer
 
-    def compress(viewer, profile, chat):
-        """session.mutate compress, fenced by the session's revision and run as a resume gives them; the
-        frames it published."""
+    def mutate(viewer, profile, chat, operation, payload):
+        """session.mutate, fenced by the session's revision and run as a resume gives them (and once more
+        with the fresh ones a conflict names), as Shion's AppStore.rewind asks."""
         snapshot = viewer.call("session.resume", {"profile": profile, "session_id": chat, "omit_messages": True}, quiet=True)
         revision, generation = snapshot.get("revision"), snapshot.get("execution_generation")
-        mark = len(viewer.frames)
         answer = {}
         for _ in range(2):
             answer = viewer.call("session.mutate", {"profile": profile, "session_id": chat, "request_id": str(uuid.uuid4()),
                                                     "expected_revision": revision, "expected_generation": generation,
-                                                    "operation": "compress", "payload": {}}, timeout=180)
+                                                    "operation": operation, "payload": payload}, timeout=180)
             refused = ((answer.get("error") or {}).get("data") or {})
             if refused.get("reason") not in ("revision_conflict", "stale_generation"):
                 break
             revision, generation = refused.get("revision", revision), refused.get("execution_generation", generation)
+        return answer
+
+    def compress(viewer, profile, chat):
+        """session.mutate compress; the frames it published."""
+        mark = len(viewer.frames)
+        answer = mutate(viewer, profile, chat, "compress", {})
         viewer.listen(3)
         return answer, [f for f in viewer.frames[mark:] if f.get("type") != "message.delta"]
+
+    def rewound(viewer, profile, chat, before, after):
+        """What session.mutate rewind answers for a prompt of yours the compaction kept, named by the
+        number it had before (its time and words are a row of the page after under another number),
+        and for one it summarized (under the same number on both pages). Refused, nothing is taken back."""
+        later = {(row.get("timestamp"), row.get("text")): row.get("row_id")
+                 for row in after.get("rows") or [] if row.get("role") == "user"}
+        prompts = [row for row in before.get("rows") or []
+                   if row.get("role") == "user" and (row.get("display_metadata") or {}).get("submission_id")]
+        kept = [row for row in prompts if later.get((row.get("timestamp"), row.get("text"))) not in (None, row.get("row_id"))]
+        summarized = [row for row in prompts if later.get((row.get("timestamp"), row.get("text"))) == row.get("row_id")]
+        answers = {}
+        for name, rows in (("kept", kept), ("summarized", summarized)):
+            if not rows:
+                continue
+            row = rows[-1]
+            now = later.get((row.get("timestamp"), row.get("text")))
+            answer = mutate(viewer, profile, chat, "rewind", {"target_message_id": row["row_id"]})
+            say(f"   rewind to {row['row_id']} ({row.get('text')}, {name}"
+                + (f", its old number, now {now}" if name == "kept" else "") + "):", short(answer, 400))
+            answers[name] = {"row": row["row_id"], "now": now, "answer": answer}
+        return answers
+
+    def noticed(viewer, profile, chat):
+        """A command left running in the background (mock_model.py: 后台跑一下), and the turn Hermes starts
+        by itself with its result: a row it gives the assistant in your name. The frames of that turn."""
+        mark = len(viewer.frames)
+        submission = str(uuid.uuid4()).upper()
+        viewer.call("prompt.submit", {"profile": profile, "session_id": chat, "text": "后台跑一下（探测）", "submission_id": submission})
+        came = viewer.listen(90, until="message.complete", after=mark, count=2)
+        say("the turn and the one its result started", "ended" if came else "DID NOT BOTH END in 90 s")
+        viewer.listen(1)
+        ends = [n for n, f in enumerate(viewer.frames) if n >= mark and f.get("type") == "message.complete"]
+        starts = [n for n, f in enumerate(viewer.frames) if n >= mark and f.get("type") == "message.start"]
+        theirs = [f for f in viewer.frames[(starts[-1] if starts else mark):(ends[-1] + 1 if ends else None)]
+                  if f.get("type") in ("message.start", "message.complete")]
+        return submission, theirs
+
+    def stopped(viewer, profile, chat, words):
+        """A prompt whose turn is stopped (session.interrupt for the run its frames carry) while its
+        command runs, as Shion's 停止 does."""
+        mark = len(viewer.frames)
+        submission = str(uuid.uuid4()).upper()
+        viewer.call("prompt.submit", {"profile": profile, "session_id": chat, "text": words, "submission_id": submission})
+        if not viewer.listen(60, until="tool.start", after=mark):
+            say("the command did not start in 60 s")
+            raise SystemExit(1)
+        generation = next(f.get("execution_generation") for f in reversed(viewer.frames) if f.get("type") == "tool.start")
+        viewer.call("session.interrupt", {"profile": profile, "session_id": chat, "execution_generation": generation})
+        say("the turn", "ended" if viewer.listen(90, until="message.complete", after=mark) else "DID NOT END in 90 s")
+        viewer.listen(1)
+        end = next((f for f in reversed(viewer.frames) if f.get("type") == "message.complete"), {})
+        return submission, end
 
     pages = {}
     for profile, path in (("default", "in place"), ("commute", "rotation")):
@@ -463,6 +526,7 @@ elif STAGE == "compact":
         after = rows_of(v, profile, chat, limit=50)
         after_stored = stored(profile)
         moved(before, after)
+        rewinds = rewound(v, profile, chat, before, after)
         say("--- a prompt in the steer's words, the same words put into a turn again, and compacted once more")
         again = turn(v, profile, chat, "继续")
         second, steer2 = steered(v, profile, chat, "慢慢做（探测）", "继续")
@@ -471,25 +535,75 @@ elif STAGE == "compact":
         after2 = rows_of(v, profile, chat, limit=50)
         after2_stored = stored(profile)
         moved(before2, after2)
-        capture[path] = {"profile": profile, "session": chat, "prompts": [*prompts, first, again, second],
+        rewinds2 = rewound(v, profile, chat, before2, after2)
+        say("--- a command's result, the turn Hermes starts with it, compacted, and a second one after that")
+        third, notice = noticed(v, profile, chat)
+        before3 = rows_of(v, profile, chat, limit=50)
+        # the newest six rows, whose cursor is used once the session is compacted, as a chat scrolled
+        # up then reads the page above what it shows (AppStore.loadOlder)
+        newest6 = rows_of(v, profile, chat, limit=6, quiet=True)
+        compacted3, frames3 = compress(v, profile, chat)
+        after3 = rows_of(v, profile, chat, limit=50)
+        moved(before3, after3)
+        above6 = v.call("session.transcript", {"profile": profile, "session_id": chat, "order": "latest", "limit": 6,
+                                               "cursor": newest6.get("next_cursor")}, quiet=True)
+        say("--- the newest six rows before the compaction:", [r.get("row_id") for r in newest6.get("rows") or []],
+            "| the six above them, read with their cursor after it: reset", above6.get("reset"),
+            [r.get("row_id") for r in above6.get("rows") or []])
+        fourth, notice2 = noticed(v, profile, chat)
+        after3b = rows_of(v, profile, chat, limit=50)
+        moved(after3, after3b)
+        say("--- a turn stopped, compacted, and its prompt taken back (session.mutate rewind)")
+        fifth, end = stopped(v, profile, chat, "慢慢做（探测）")
+        before4 = rows_of(v, profile, chat, limit=50)
+        compacted4, frames4 = compress(v, profile, chat)
+        after4 = rows_of(v, profile, chat, limit=50)
+        after4_stored = stored(profile)
+        moved(before4, after4)
+        rewinds4 = rewound(v, profile, chat, before4, after4)
+        kept = rewinds4.get("kept") or {}
+        taken = mutate(v, profile, chat, "rewind", {"target_message_id": kept["now"]}) if kept.get("now") else {}
+        say(f"   rewind to {kept.get('now')} (its new number):", short(taken, 600))
+        rewinding = rows_of(v, profile, chat, limit=50)
+        capture[path] = {"profile": profile, "session": chat, "prompts": [*prompts, first, again, second, third, fourth, fifth],
                          "steers": [steer, steer2], "before": before, "before_stored": before_stored,
                          "compacted": compacted, "frames": frames, "after": after, "after_stored": after_stored,
                          "before2": before2, "compacted2": compacted2, "frames2": frames2, "after2": after2,
-                         "after2_stored": after2_stored}
-        pages[path] = {"before": before, "after": after, "before2": before2, "after2": after2}
+                         "after2_stored": after2_stored, "rewinds": rewinds, "rewinds2": rewinds2,
+                         "notice": notice, "before3": before3, "newest6": newest6, "compacted3": compacted3,
+                         "frames3": frames3, "after3": after3, "above6": above6, "notice2": notice2, "after3b": after3b,
+                         "stopped": end, "before4": before4, "compacted4": compacted4, "frames4": frames4, "after4": after4,
+                         "after4_stored": after4_stored, "rewinds4": rewinds4, "rewound": taken, "rewinding": rewinding}
+        # what ../logic/send and ../logic/notices read: the pages, what Hermes answered the rewinds
+        # after the last compaction (each with the row it named), and the start of the turn the
+        # second result began
+        start = next((f.get("payload") or {} for f in notice2 if f.get("type") == "message.start"), {})
+        ending = next((f.get("payload") or {} for f in notice2 if f.get("type") == "message.complete"), {})
+        pages[path] = {
+            "send": {"before": before, "after": after, "before2": before2, "after2": after2, "before4": before4, "after4": after4,
+                     "rewinds4": {**rewinds4, "rewound": {"row": kept.get("now"), "answer": taken}},
+                     "stopped": (end.get("payload") or {}).get("persisted_turn")},
+            "notices": {"before3": before3, "after3": after3, "after3b": after3b,
+                        "start": {key: start.get(key) for key in ("text", "display_kind", "display_text")},
+                        "persisted_turn": ending.get("persisted_turn")},
+        }
         v.close()
 
-    def page_text(page):
-        """A page as it came, a compaction's summary cut short, a row to a line."""
-        rows = [{**row, "text": row["text"][:40] + "…"} if row.get("row_kind") == "compaction" else row
-                for row in page.get("rows") or []]
-        head = json.dumps({key: value for key, value in page.items() if key != "rows"}, ensure_ascii=False)
-        return head[:-1] + ', "rows": [\n' + ",\n".join("   " + json.dumps(row, ensure_ascii=False) for row in rows) + "]}"
-    # what ../logic/send reads
-    paths = [f" {json.dumps(path)}: {{\n" + ",\n".join(f"  {json.dumps(name)}: {page_text(page)}" for name, page in named.items())
-             + "}" for path, named in pages.items()]
-    with open(os.path.join(os.path.dirname(OUT), "compaction.json"), "w", encoding="utf-8") as out:
-        out.write("{\n" + ",\n".join(paths) + "\n}\n")
+    def text(value, indent):
+        """`value` as JSON, a page's rows one to a line and a compaction's summary cut short."""
+        if isinstance(value, dict) and isinstance(value.get("rows"), list):
+            rows = [{**row, "text": row["text"][:40] + "…"} if row.get("row_kind") == "compaction" else row
+                    for row in value["rows"]]
+            head = json.dumps({key: item for key, item in value.items() if key != "rows"}, ensure_ascii=False)
+            return head[:-1] + ', "rows": [\n' + ",\n".join(" " * (indent + 1) + json.dumps(row, ensure_ascii=False)
+                                                            for row in rows) + "]}"
+        return json.dumps(value, ensure_ascii=False)
+    for group in ("send", "notices"):
+        paths = [f" {json.dumps(path)}: {{\n" + ",\n".join(f"  {json.dumps(name)}: {text(value, 2)}"
+                                                           for name, value in parts[group].items()) + "}"
+                 for path, parts in pages.items()]
+        with open(os.path.join(os.path.dirname(OUT), f"compaction-{group}.json"), "w", encoding="utf-8") as out:
+            out.write("{\n" + ",\n".join(paths) + "\n}\n")
 
 with open(OUT, "w", encoding="utf-8") as out:
     json.dump(capture, out, ensure_ascii=False, indent=1)
