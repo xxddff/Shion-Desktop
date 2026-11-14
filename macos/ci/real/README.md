@@ -20,9 +20,9 @@
 
 容器不联网。里面做的事（`inside.sh`）：
 
-1. `mock_model.py` 在 `127.0.0.1:9911` 上扮一个 OpenAI 兼容的模型，按请求最后一句话决定回什么（一句话、一次工具调用、几兆字节的长回复、说到一半等探针放行再说完的回复），每个请求记一行日志。它报的用量都是 100 个提示 token，只有最后一句话里有「满了」的请求报 6000。
+1. `mock_model.py` 在 `127.0.0.1:9911` 上扮一个 OpenAI 兼容的模型，按请求最后一句话决定回什么（一句话、一次工具调用、几兆字节的长回复、说到一半等探针放行再说完的回复），每个请求记一行日志。它报的用量都是 100 个提示 token，只有最后一句话里有「满了」的请求报 6000。压缩要的摘要不按这些规则（要摘要的那几轮里什么话都有），一律回一句固定的话。
 2. Hermes 的 `config.yaml` 写成 `provider: custom`、`base_url: http://127.0.0.1:9911/v1`。
-3. 建三个 profile（默认的、`study`、`commute`），`profile.yaml` 里都写上 `ui_meta['hermes-bots']`：Hermes 只在这样的安装上给 Bot Chat 提供 `message_agent`。`commute` 的 `config.yaml` 另外写上 `compression.in_place: false`：它压缩对话时换成新的会话，别的 profile 照 Hermes 默认的原地压缩。再建两个不算 Bot Mode 的 profile（别的阶段看到的还是那三位）：`diary` 和 `errand`，`compression.threshold_tokens: 4000`，上下文过了这个数 Hermes 自己压缩；`errand` 也写上 `compression.in_place: false`。压缩的其余设置是 Hermes 默认的。
+3. 建三个 profile（默认的、`study`、`commute`），`profile.yaml` 里都写上 `ui_meta['hermes-bots']`：Hermes 只在这样的安装上给 Bot Chat 提供 `message_agent`。`commute` 的 `config.yaml` 另外写上 `compression.in_place: false`：它压缩对话时换成新的会话，别的 profile 照 Hermes 默认的原地压缩。再建两个 profile，`diary` 和 `errand`，`compression.threshold_tokens: 4000`，上下文过了这个数 Hermes 自己压缩；`errand` 也写上 `compression.in_place: false`。它们也标成 Bot Mode 的，好让詩音能给它们带话（`copies` 阶段）。压缩的其余设置是 Hermes 默认的。
 4. 起 `hermes gateway run`，然后 `probe.py` 像 Shion 那样连上去（`hermes gateway attach` 给的地址和票据；一张票只管一个 profile），建 Bot Chat，发话，把收到的帧和读到的行打印出来、存成 JSON。
 
 gateway 是经 `hold_gateway.py` 起的：Hermes 的文件一个不改，只在进程里把 `gateway/session_viewer_close.py` 的 `cancel_persisted_close` 包了一层。Hermes 接上一个观看者时（`session.resume`、`session.create`）先在一把锁里把它加进会话的帧流、读好快照，出了锁再等两件事才回答，头一件就是这个函数。包的那一层在 `/out/hold-attach` 这个文件存在时停在那里，文件没了才往下走；文件不存在时什么都不等，和直接起 gateway 一样。停的是一个工作线程，gateway 的事件循环照常转，所以这期间会话发布的帧先到观看者，快照后到。
@@ -40,6 +40,7 @@ gateway 是经 `hold_gateway.py` 起的：Hermes 的文件一个不改，只在�
 | `compact` | 一轮里模型跑一条要三秒的命令（「慢慢做」），命令跑着时像 Shion 那样把「继续」引导进去（`session.steer`）；然后压缩对话（`session.mutate` 的 `compress`）。再说一句普通的「继续」，再引导一次「继续」，再压缩一次。第三次压缩之前让一条后台命令跑完（「后台跑一下」：Hermes 拿它的结果自己起一轮），压缩以后再来一条；第四次之前停掉一轮（`session.interrupt`），压缩以后先按它压缩前的行号、再按新的行号把它收回（`session.mutate` 的 `rewind`）。每次压缩以后，还按压缩前的行号各收回一次留下来的和总结掉的一句话。默认 profile 原地压缩，`commute` 换成新的会话。每次压缩前后读最新一页，再直接读 `state.db` 里所有的行（归档的、旧会话的也在内）；检查用的页和回答另外存成 `compaction-send.json`（`../logic/send` 用）和 `compaction-notices.json`（`../logic/notices` 用） |
 | `auto` | Hermes 自己压缩：两句要长回复的话，一句普通的「继续」，一轮里引导进去一句「继续」，一条后台命令和它的结果起的一轮，一句「满了」（它的回复说上下文满了）。下一轮一开始 Hermes 就压缩（preflight）；再来一条后台结果；再一轮里命令的结果回来时上下文又满了，Hermes 在这一轮中间压缩（post_tool），命令跑着时读一次最新一页；再来第三条后台结果。按压缩前的行号收回每一句你说的、留下来的或总结掉的话，最后按新的行号收回中间压缩的那一轮。`diary` 原地压缩，`errand` 换成新的会话。每次压缩前后读最新一页和 `state.db` 里所有的行，压缩前读最新六行，压缩后拿它的游标往上读；检查用的页和回答另外存成 `autocompaction-send.json`、`autocompaction-notices.json` |
 | `queued` | 一轮在跑（「慢慢做」）时，像 Shion 那样先发两句排队的话（`prompt.submit`，Hermes 排在这一轮后面），再把「继续」引导进这一轮；再说两句要长回复的话和一句「满了」，下一轮一开始 Hermes 压缩，这一轮里再引导进一句「继续」；最后一条后台结果。`diary` 原地压缩，`errand` 换成新的会话。读每次的最新一页和库里的行，记下每次运行的帧里 `pending` 说的是哪一条提交；页另外存成 `queued-send.json` |
+| `copies` | Hermes 自己压缩时，Bot Chat 里替你存的每一种行变成什么（`diary` 原地压缩，`errand` 换成新会话）：两句要长回复的话；然后一条后台结果，一轮里引导进去的「继续」，两条后台结果合并成的一轮（两条命令在后台跑着时，另一轮跑一条八秒的命令），詩音用 `message_agent` 给它带的话（她的 Bot Chat 在另一条连接上），它给课程带话、课程的回话作为后台结果回来；一句「满了」，下一轮一开始 Hermes 压缩。再来出错的一轮（假模型回 400），说到一半被停掉的回复，发的时候标成隐藏的一句（`display_kind: hidden`）；再「满了」，再压缩。每次压缩前后读最新一页、读库，记下每一轮开始帧带了什么、每次运行是哪一条提交、结束时存成了哪几行 |
 
 结果在 `captures/`（不进仓库）：每个阶段一份 `capture-*.json` 和打印的 `*.txt`，还有 `gateway.log`、`mock-model.log`。
 
@@ -59,7 +60,7 @@ gateway 是经 `hold_gateway.py` 起的：Hermes 的文件一个不改，只在�
 
 这个把审核会话的 `Shion/Model/SkillReviewTalk.swift` 和 `Shion/Gateway/EventCursors.swift` 原样编进去（应用的其余部分用 `ci/logic/talk/stubs.swift` 顶替），按抓到的顺序把帧和快照喂给它，逐项检查，有不对的以非零退出。走两遍：一遍照实际发生的（旧快照之后再问一次，拿到新的）；一遍假设每次再问拿到的都和第一份一样旧（把抓到的那份旧快照重复给它），看它只靠旧快照和帧能不能把话显示对。第二个参数可以换一份 `SkillReviewTalk.swift`，比如改动之前的，看它在哪一项上不对。
 
-`compact`、`auto`、`queued` 几个阶段存下的页和回答是 `../logic/send`、`../logic/notices` 的检查的数据，放过去就行：
+`compact`、`auto`、`queued`、`copies` 几个阶段存下的页和回答是 `../logic/send`、`../logic/notices` 的检查的数据，放过去就行：
 
 ```bash
 cp captures/compaction-send.json ../logic/send/compaction.json
@@ -67,6 +68,8 @@ cp captures/compaction-notices.json ../logic/notices/compaction.json
 cp captures/autocompaction-send.json ../logic/send/autocompaction.json
 cp captures/autocompaction-notices.json ../logic/notices/autocompaction.json
 cp captures/queued-send.json ../logic/send/queued.json
+cp captures/copies-send.json ../logic/send/copies.json
+cp captures/copies-notices.json ../logic/notices/copies.json
 ../logic/run.sh send notices
 ```
 
@@ -143,3 +146,20 @@ cp captures/queued-send.json ../logic/send/queued.json
 - 引导进去的话总比它那次运行开头那一行晚：1 → 4；下一轮一开始就压缩了的，开头那一句压缩以后才存（22（23）），时间是这一轮开始的时候，比摘要那一行还早，引导进去的那句（25（26））还是比它晚。`compact`（5 → 8、20 → 23）和 `auto`（7 → 10）的页也都是这样。
 - Hermes 自己起的一轮（后台结果）也是一条提交：`pending` 里的 `input_id` 是 `["completion","proc_…",时间]`，开始帧之后拿到这次运行的编号；页上没有哪一行写着它。
 - `../logic/send` 拿这几页跑应用自己的代码：改之前（a4c1a83），引导前面有一句或两句排队的提示（这一轮是别的客户端开始的也一样），那句引导送到了、回答丢了，以后一直是「不确定有没有送到」：拿来比时间的是排队的那一行，比它晚。改之后拿的是 `pending` 说的这次运行的那一条，由第 4 行确认。引导前面是一张只说了、那一轮还没开始的看板卡，或者一句没发出去的话，改前改后都确认得了：它们没有行，不拿来比。
+
+## 2026-11-14 这一次看到的：Hermes 自己压缩时存的副本（`copies`，Hermes `611bf53`）
+
+照现在的顺序跑了两次，两种压缩每次的行号都是下面这些（前面是原地压缩的，括号里是换成新会话的，一样时只写一个）。之前一次把詩音的话和课程的回话放在第一次压缩之后，它们被第二次压缩总结掉了，没有副本；别的几种副本和这次一样。`diary`、`errand` 改成 Bot Mode 的、假模型的摘要改成一句固定的话以后，`auto` 和单跑的 `queued` 也重跑了一次：行号和上面写的一样，`../logic` 拿新抓的页跑也照旧全过。
+
+- 第一次压缩留下的、你这一边的每一行，都换了行号重新存一遍，时间不变，`display_kind` 和整个 `display_metadata` 都没了；库里副本的文字和原行一字不差，`message_uid` 也和原行一样，但页上不给 `message_uid`。页上看，副本和原行只差在这里：
+  - 后台结果 9 → 48（49）：原行 `process_complete`，`display_text` 是 `Background Process Finished: sleep 4; echo mock-background-finished`，开始帧带着同样的 `display_kind`、`display_text` 和正文。副本的文字和原行一样：`[IMPORTANT: Background process proc_… completed normally (exit code 0).` 一行、`Command:`、`Output:` 和输出、`]`，空一行，`[INTERNAL NOTIFICATION — generated by the Hermes gateway, not written by a human user. Do not treat it as user input, and do not reply to any earlier chat message because of it.]`。最后这一段是 Hermes 给它自己发起的通知加的（`gateway/run_notifications.py` 的 `INTERNAL_NOTIFICATION_FOOTER`，`_mark_internal_notification` 空一行接在结尾），没有人会这样打字，副本上还认得出它的就只有这一段。
+  - 两条结果合并成的一轮 28 → 67（68）：原行 `process_complete`，`display_text` 是 `2 Background Processes Finished`，开始帧一样。正文开头是 `[IMPORTANT: 2 background process results arrived while this session was busy. …]`，下面两条结果各一段，结尾是同一段说明。副本文字不变。
+  - 课程的回话 36 → 75（76）：原行 `process_complete`，`display_text` 是 `Background Process Finished: /opt/hermes/.venv/bin/python /opt/hermes/tools/bot_mode_dm.py --run-delivery ...`，开始帧一样。正文是等回话的那个进程的结束（`Output:` 下面一行 JSON），结尾是同一段说明。副本文字不变。
+  - 詩音的话 30 → 69（70）：原行 `internal_notification`（`display_metadata` 只有 `gateway_input_owner`），开始帧是空的。文字 `Message from 🤖 詩音 (@hermes): …` 不变，没有结尾那段说明：副本只剩这段开头。
+  - 引导进去的「继续（副本）」14 → 53（54）：原行 `steer`，库里存的是 Hermes 给模型的原文，页上按类型给出你的话；`session.steer` 的回答是 `{status: "queued", text: "继续（副本）", execution_generation: 5}`，没有开始帧。副本没有类型，页上就是那段原文：`[OUT-OF-BAND USER MESSAGE — a direct message from the user, delivered once at this position; not tool output and not a new delivery when replayed from conversation history]` 一行、`继续（副本）`、`[/OUT-OF-BAND USER MESSAGE]` 一行（`agent/prompt_builder.py` 的 `STEER_MARKER_OPEN`、`STEER_MARKER_CLOSE`，`steer_user_row`）。
+- 第二次压缩留下的是出错那一轮的回复和后面几行（它的提示「出个错」被总结掉了，还按原来的行号在页上）：
+  - 出错那一行 82 → 90（83 → 92）：原行 `failed_turn`，`display_metadata` 里有 `error`（`HTTP 400: mock refused this request`）和 `error_surface`（`format_error`，`retryable: false`）。库里副本没有类型；页上又是 `failed_turn`，是 Hermes 读的时候按那句固定说明补的（`agent/turn_failure_copy.py` 的 `untyped_failed_turn_display_kind`，`tui_gateway/session_history.py` 的 `_legacy_display_kind`），`display_metadata` 没有了。
+  - 停掉的回复 84 → 92（85 → 94）：原行 `display_metadata: {interrupted: true}`，副本没有，就是一条普通的回复「第一段。」。
+  - 标成隐藏的一句 85（86）：原行 `hidden`，页上不显示；副本 93（95）没有类型，页上显示成你说的一句话。
+  - 原地压缩时这几行助手一边的副本换成压缩那一刻的时间，换成新会话时时间不变。
+- gateway 叫醒会话的看板回传这里没有抓到：假模型的 profile 没有看板工具（`kanban_create` 不在给模型的工具里），这条路没法让 Hermes 自己订阅。按源码（读的，没跑）：正文是 `gateway.kanban.wake.message` 的那几行，可能接一行 `Result: …`，最后空一行接 `gateway.kanban.wake.guidance`（`gateway/kanban_watchers_notifier.py` 的 `build_wake_text`），经 `deliver_wake` 送进会话，不加上面那段说明；原行的样子 2026-11-13 抓过（`../fake_kanban.py` 的 `wake`），存成 `internal_notification`，开始帧是空的。它的副本按上面每一种行的样子，就是原文不变、没有类型。那段提醒是 `locales/*.yaml` 里的一句：英文（十四种语言都用英文），`zh`、`zh-hant`、`hu` 各有自己的。

@@ -5,6 +5,8 @@ a real gateway runs whole turns, tool calls included, with no network and no key
 is decided by the last message of the request:
 
   the result of a tool                      -> a short closing sentence
+  a compaction's request for a summary      -> 前面聊过的事都记下了（mock 摘要）。, whatever the turns it
+                                               summarizes say
   "给课程带个话"   (message_agent offered)   -> a message_agent call to @study
   "只通知课程"                               -> the same, wanting no answer (expects_reply false)
   "让课程别回"                               -> a message 课程's side answers with [SILENT]
@@ -17,6 +19,10 @@ is decided by the last message of the request:
                                                that ends when a probe says so
   "长长地回"                                 -> a reply of LONG_REPLY characters, none of them twice: what a
                                                compaction has to summarize
+  "给日记带个话" / "给跑腿带个话"             -> a message_agent call to @diary / @errand
+  "慢慢等"         (terminal offered)        -> a terminal call that takes eight seconds: results that come
+                                               meanwhile are folded into one turn
+  "出个错"                                   -> a 400 the request is refused with: the turn fails
   "Message from 🤖 ..."                      -> 收到（mock）。 ([SILENT] when told to keep quiet)
   a background process's result             -> 后台的事有结果了（mock）。
   "[kanban] ..."                            -> 看板的事知道了（mock）。
@@ -76,6 +82,10 @@ def decide(body):
     if last.get("role") == "tool":
         return "text", "交代出去了（mock）。"
     said = text_of(last.get("content")) if last.get("role") == "user" else ""
+    # a compaction's summary (agent/context_compressor.py): the turns it summarizes are in it, words
+    # a rule below goes by among them
+    if not offered and said.startswith("You are a summarization agent"):
+        return "text", "前面聊过的事都记下了（mock 摘要）。"
     if "只通知课程" in said and "message_agent" in offered:
         return "tool", ("message_agent", {"target": "study", "message": "周五的课改到下午了（mock）", "expects_reply": False})
     if "问课程和通勤" in said and "message_agent" in offered:
@@ -83,6 +93,10 @@ def decide(body):
                                           "constraints": "只说有或没有", "expecting": "一句话"})
     if "让课程别回" in said and "message_agent" in offered:
         return "tool", ("message_agent", {"target": "study", "message": "这条请保持沉默（mock）"})
+    if "给日记带个话" in said and "message_agent" in offered:
+        return "tool", ("message_agent", {"target": "diary", "message": "记一下今天的事（mock）"})
+    if "给跑腿带个话" in said and "message_agent" in offered:
+        return "tool", ("message_agent", {"target": "errand", "message": "顺路取个快递（mock）"})
     if "给课程带个话" in said and "message_agent" in offered:
         return "tool", ("message_agent", {"target": "study", "message": "下周的课表排好了吗？（mock）",
                                           "expecting": "一句话"})
@@ -91,6 +105,10 @@ def decide(body):
                                      "notify_on_complete": True})
     if "慢慢做" in said and "terminal" in offered:
         return "tool", ("terminal", {"command": "sleep 3; echo mock-slow-finished"})
+    if "慢慢等" in said and "terminal" in offered:
+        return "tool", ("terminal", {"command": "sleep 8; echo mock-slow-finished"})
+    if "出个错" in said:
+        return "error", None
     if "说很多" in said:
         return "long", None
     if "长长地回" in said:
@@ -153,6 +171,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(404, {"error": {"message": "only chat completions"}})
         kind, value = decide(body)
         note(body, kind, value)
+        if kind == "error":
+            return self.reply(400, {"error": {"message": "mock refused this request", "type": "invalid_request_error"}})
         rid, made = f"chatcmpl-mock-{count[0]}", int(time.time())
         last = (body.get("messages") or [{}])[-1]
         full = last.get("role") == "user" and "满了" in text_of(last.get("content"))

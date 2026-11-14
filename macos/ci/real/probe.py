@@ -1,6 +1,6 @@
 """The turns only a model can start, against Hermes itself with a stand-in model (mock_model.py).
-Runs inside the container (inside.sh), beside a gateway that serves three Bot Mode profiles and two
-that compact a session by themselves.
+Runs inside the container (inside.sh), beside a gateway that serves five Bot Mode profiles, two of
+which (diary, errand) compact a session by themselves.
 
   python probe.py plain <capture.json>        one ordinary turn in a Bot Chat
   python probe.py peer <capture.json>         詩音 messages 课程 (message_agent): 课程's Bot Chat gets a turn
@@ -36,6 +36,16 @@ that compact a session by themselves.
                                               session at the start of; then a background result's turn: the
                                               pages, and what each run's frames say of its admission (the
                                               pending list); the pages also go to queued-send.json
+  python probe.py copies <capture.json>       what Hermes's own compaction stores again of each row a Bot
+                                              Chat gets in your name (diary in place, errand into a new
+                                              session): a background result, 「继续」 put into a turn, two
+                                              results folded into one turn, 詩音's message (from her own Bot
+                                              Chat, on a connection of hers), a message to 课程 and its answer;
+                                              compacted; then a turn that failed, a reply stopped as it
+                                              streamed, a prompt sent hidden; compacted again. The newest page
+                                              and the store before and after each compaction, what each turn's
+                                              start said and what each run began and ended with; the pages
+                                              also go to copies-notices.json and copies-send.json
 
 Each prints what a viewer gets, frame by frame, and writes it as JSON for the Mac's own code to be
 run over (read_notices.sh, read_behind.sh, ../logic/send, ../logic/notices)."""
@@ -830,6 +840,131 @@ elif STAGE == "queued":
                                 "later": later, "frames2": frames2, "compacted": compacted, "frames3": frames3}}
         v.close()
     write_pages(pages, "queued")
+
+elif STAGE == "copies":
+    def starts(viewer, mark):
+        """What each turn's start said since `mark` (message.start: the card a turn Hermes began has)."""
+        said = [{key: (f.get("payload") or {}).get(key) for key in ("text", "display_kind", "display_text")}
+                for f in viewer.frames[mark:] if f.get("type") == "message.start"]
+        for start in said:
+            say("   start", short(start, 300))
+        return said
+
+    def ends(viewer, mark, count, seconds=120, also=None):
+        """Waits for `count` turns' ends since `mark`, reading `also` meanwhile: a connection left
+        unread stops answering pings once what it holds is full, and is closed."""
+        deadline = time.monotonic() + seconds
+        def came():
+            return sum(1 for f in viewer.frames[mark:] if f.get("type") == "message.complete") >= count
+        while time.monotonic() < deadline and not came():
+            viewer.read(0.2)
+            if also:
+                also.read(0.05)
+        say(f"   {count} turn(s)", "ended" if came() else f"DID NOT ALL END in {seconds} s")
+        viewer.listen(1)
+
+    def submit(viewer, profile, chat, words, **more):
+        submission = str(uuid.uuid4()).upper()
+        viewer.call("prompt.submit", {"profile": profile, "session_id": chat, "text": words,
+                                      "submission_id": submission, **more})
+        return submission
+
+    def runs(viewer, mark):
+        """What each run since `mark` began and ended with: the admission session.info says it runs
+        (pending: input_id, once its execution_generation is the run's), and the rows its end names."""
+        said, begun = [], {}
+        for f in viewer.frames[mark:]:
+            payload = f.get("payload") or {}
+            if f.get("type") == "session.info":
+                for entry in payload.get("pending") or []:
+                    if entry.get("execution_generation") is not None:
+                        begun.setdefault(entry["execution_generation"], entry.get("input_id"))
+            elif f.get("type") == "message.complete":
+                said.append({"execution_generation": f.get("execution_generation"),
+                             "input_id": begun.get(f.get("execution_generation")),
+                             "persisted_turn": payload.get("persisted_turn"), "status": payload.get("status")})
+        for run in said:
+            say("   run", short(run, 300))
+        return said
+
+    go = os.path.join(os.path.dirname(OUT), "model-go")
+    pages = {}
+    for profile, path, message in (("diary", "in place", "给日记带个话（副本）"), ("errand", "rotation", "给跑腿带个话（副本）")):
+        say(f"######## {path} ({profile})")
+        v = Socket(profile[:2], profile=profile)
+        chat = bot_chat(v, profile)
+        # two long replies for a compaction to summarize, ahead of what it keeps
+        for words in ("第一句，长长地回（副本）", "第二句，长长地回（副本）"):
+            turn(v, profile, chat, words)
+        say("--- a background result, a steer, two results folded into one turn, 詩音's message, a message to "
+            "课程 and its answer")
+        mark = len(v.frames)
+        noticed(v, profile, chat, "后台跑一下（副本）")
+        slow, steer = steered(v, profile, chat, "慢慢做（副本）", "继续（副本）")
+        # two commands left running, then one that runs for eight seconds: both results come while it
+        # does, and Hermes folds them into one turn after it
+        fold = len(v.frames)
+        for words in ("后台跑一下，第一条（副本）", "后台跑一下，第二条（副本）", "慢慢等（副本）"):
+            submit(v, profile, chat, words)
+        ends(v, fold, 4)
+        # 詩音 (the default profile) messages it: her turn, then the one its answer starts in her chat
+        # (her connection read meanwhile)
+        told = len(v.frames)
+        sender = Socket("sh", quiet=True)
+        hers = bot_chat(sender, "default")
+        hers_mark = len(sender.frames)
+        submit(sender, "default", hers, message)
+        ends(v, told, 1, also=sender)
+        ends(sender, hers_mark, 2, also=v)
+        sender.close()
+        asked = len(v.frames)
+        submit(v, profile, chat, "给课程带个话（副本）")
+        ends(v, asked, 2)
+        starts1 = starts(v, mark)
+        turn(v, profile, chat, "满了（副本）")
+        runs1 = runs(v, mark)
+        before1 = rows_of(v, profile, chat, limit=50)
+        mark = len(v.frames)
+        turn(v, profile, chat, "第三句（副本）")
+        say("--- the newest page after the turn at whose start Hermes compacted the session")
+        after1 = rows_of(v, profile, chat, limit=50)
+        after1_stored = stored(profile)
+        moved(before1, after1)
+        say("--- a turn that failed, a reply stopped as it streamed, a hidden prompt")
+        mark = len(v.frames)
+        turn(v, profile, chat, "出个错（副本）")
+        if os.path.exists(go):
+            os.remove(go)
+        stopping = len(v.frames)
+        submit(v, profile, chat, "慢慢说（副本）")
+        v.listen(60, until="message.delta", after=stopping)
+        generation = next(f.get("execution_generation") for f in reversed(v.frames) if f.get("type") == "message.delta")
+        v.call("session.interrupt", {"profile": profile, "session_id": chat, "execution_generation": generation})
+        ends(v, stopping, 1)
+        with open(go, "w"):
+            pass
+        hidden = len(v.frames)
+        submit(v, profile, chat, "隐藏的一句（副本）", display_kind="hidden")
+        ends(v, hidden, 1)
+        starts2 = starts(v, mark)
+        turn(v, profile, chat, "满了（副本），又一次")
+        runs2 = runs(v, mark)
+        before2 = rows_of(v, profile, chat, limit=50)
+        turn(v, profile, chat, "第四句（副本）")
+        after2 = rows_of(v, profile, chat, limit=50)
+        after2_stored = stored(profile)
+        moved(before2, after2)
+        capture[path] = {"profile": profile, "session": chat, "starts1": starts1, "runs1": runs1, "before1": before1,
+                         "after1": after1, "after1_stored": after1_stored, "starts2": starts2, "runs2": runs2,
+                         "before2": before2, "after2": after2, "after2_stored": after2_stored,
+                         "steer": {"prompt": slow, "answer": steer}}
+        # what ../logic/notices and ../logic/send read: the pages before and after each compaction, what
+        # the turns' starts said, and what each run began and ended with
+        pages[path] = {"notices": {"starts1": starts1, "before1": before1, "after1": after1,
+                                   "starts2": starts2, "before2": before2, "after2": after2},
+                       "send": {"steered": slow, "runs1": runs1, "before1": before1, "after1": after1}}
+        v.close()
+    write_pages(pages, "copies")
 
 with open(OUT, "w", encoding="utf-8") as out:
     json.dump(capture, out, ensure_ascii=False, indent=1)

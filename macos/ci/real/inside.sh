@@ -19,11 +19,13 @@ bot "$HERMES_HOME/profiles/commute" "通勤助手（mock）" "通勤"
 # 通勤 compacts a session by rotating it into a new one; the others compact it in place, as Hermes
 # does by default (stage compact)
 printf 'compression:\n  in_place: false\n' >> "$HERMES_HOME/profiles/commute/config.yaml"
-# two profiles that compact a session by themselves (stage auto) past 4000 tokens, which only a
-# reply to a request that says 满了 reports (mock_model.py): diary in place, errand into a new
-# session. Not Bot Mode's: the other stages see the same three assistants
+# two profiles that compact a session by themselves (stages auto, queued, copies) past 4000 tokens,
+# which only a reply to a request that says 满了 reports (mock_model.py): diary in place, errand into
+# a new session. Bot Mode's too, so that another assistant can message them (stage copies)
 $hermes profile create diary --clone --no-alias --description "日记（mock）" > /dev/null
 $hermes profile create errand --clone --no-alias --description "跑腿（mock）" > /dev/null
+bot "$HERMES_HOME/profiles/diary" "日记（mock）" "日记"
+bot "$HERMES_HOME/profiles/errand" "跑腿（mock）" "跑腿"
 printf 'compression:\n  threshold_tokens: 4000\n' >> "$HERMES_HOME/profiles/diary/config.yaml"
 printf 'compression:\n  threshold_tokens: 4000\n  in_place: false\n' >> "$HERMES_HOME/profiles/errand/config.yaml"
 # the gateway refuses a home others can write to
@@ -39,7 +41,7 @@ for _ in $(seq 1 60); do
 done
 [ -n "$ready" ] || { echo "the gateway did not come up"; tail -20 /out/gateway.log; exit 1; }
 
-for stage in ${STAGES:-plain peer peer2 background gap behind compact auto queued}; do
+for stage in ${STAGES:-plain peer peer2 background gap behind compact auto queued copies}; do
     echo "######## $stage"
     python /real/probe.py "$stage" "/out/capture-$stage.json" > "/out/$stage.txt" 2>&1 || { tail -20 "/out/$stage.txt"; exit 1; }
     # the frames that say little are left out of what is shown (they are in the .txt); stage behind

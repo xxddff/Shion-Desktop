@@ -11,13 +11,15 @@
 # reader, and its review talk over a turn's end that overtook the answer to session.resume:
 #   ./read_notices.sh captures/capture-peer.json captures/capture-peer2.json captures/capture-background.json
 #   ./read_behind.sh captures/capture-behind.json
-# and the pages read before and after a compaction (stages compact and auto) and behind a turn with
-# prompts queued (stage queued) are what the logic checks of sending and of notices run over:
+# and the pages read before and after a compaction (stages compact, auto and copies) and behind a
+# turn with prompts queued (stage queued) are what the logic checks of sending and of notices run over:
 #   cp captures/compaction-send.json ../logic/send/compaction.json
 #   cp captures/compaction-notices.json ../logic/notices/compaction.json
 #   cp captures/autocompaction-send.json ../logic/send/autocompaction.json
 #   cp captures/autocompaction-notices.json ../logic/notices/autocompaction.json
 #   cp captures/queued-send.json ../logic/send/queued.json
+#   cp captures/copies-send.json ../logic/send/copies.json
+#   cp captures/copies-notices.json ../logic/notices/copies.json
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 image="${HERMES_TEST_IMAGE:-shion-hermes-test}"
