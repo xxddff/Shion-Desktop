@@ -11,7 +11,7 @@ root, out = Path(sys.argv[1]), Path(sys.argv[2])
 WANTED = {
     "macos/Shion/Model/AppStore+Events.swift": ["func followNotices(", "func awaitsOwnReply(", "static func notice(",
                                                 "static func rowNumber(", "static let noticeRows"],
-    "macos/Shion/Model/AppStore.swift": ["static let pageSize"],
+    "macos/Shion/Model/AppStore.swift": ["static let pageSize", "func transcriptPage("],
 }
 
 

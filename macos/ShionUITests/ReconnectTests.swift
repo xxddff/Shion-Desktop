@@ -209,13 +209,14 @@ final class ReconnectTests: XCTestCase {
         // the cards were read from their rows after the reply they led to was there, and put
         // before it: the chat, followed at its end, stays at its end, the newest reply in view and
         // not pushed under the composer by what came in above it
-        let shown = element("transcript", in: app)
-        let last = waitUntil(timeout: 5) {
-            guard let top = self.places("两件事都知道了（CI）。", in: app).last else { return false }
-            return top >= shown.frame.minY && top + 14 <= shown.frame.maxY
-        }
-        XCTAssertTrue(last, "the newest reply is not in view once the cards came in above it: at "
-                      + "\(places("两件事都知道了（CI）。", in: app)), the chat shows \(shown.frame)")
+        let newest = "两件事都知道了（CI）。"
+        XCTAssertTrue(waitUntil(timeout: 5) { self.inView(newest, in: app) },
+                      "the newest reply is not in view once the cards came in above it: at \(places(newest, in: app))")
+        // the first four messages' cards come later still, from two pages further up, each
+        // answered a moment late by the stand-in: the newest reply is in view after those too
+        Thread.sleep(forTimeInterval: 5)
+        XCTAssertTrue(waitUntil(timeout: 3) { self.inView(newest, in: app) },
+                      "the newest reply is not in view once the cards from further up came in: at \(places(newest, in: app))")
         // the find bar counts the lines of the whole chat, not only the rows in the window
         app.typeKey("f", modifierFlags: .command)
         let finding = element("find-field", in: app)
@@ -588,6 +589,14 @@ final class ReconnectTests: XCTestCase {
             }
         }
         return tops.sorted()
+    }
+
+    /// Whether the lowest text that is just `text` stands within what the chat's transcript shows.
+    @MainActor
+    private func inView(_ text: String, in app: XCUIApplication) -> Bool {
+        let shown = element("transcript", in: app).frame
+        guard let top = places(text, in: app).last else { return false }
+        return top >= shown.minY && top + 14 <= shown.maxY
     }
 
     /// How many lines the find bar says hold what is looked for: the 8 of "3/8".

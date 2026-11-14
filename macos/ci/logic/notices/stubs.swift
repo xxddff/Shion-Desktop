@@ -24,6 +24,7 @@ struct ChatItem: Identifiable, Hashable {
 
 final class ChatControl {
     var storedRows: [String: Int] = [:]
+    var namedRows: [String: Set<Int>] = [:]
 }
 
 /// Records what every read asks for, and answers as the test scripts it.
