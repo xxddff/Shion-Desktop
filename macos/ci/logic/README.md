@@ -17,3 +17,5 @@
 | `chat/` | Bot Chat 重新接上时快照和帧的先后（`AppStore.swift`、`AppStore+Reconnect.swift` 里的几个方法） |
 
 改了这些文件里的规则，先在这里加一项会失败的检查，再改代码。
+
+`chat/` 和 `send/` 是把应用里的几个方法原样取出来编（`extract.py`），所以还需要 `python3`。替身 `fake_reconnect.py` 里「同一句话说两遍」那两段脚本另有一个不用 Mac 的核对：`python3 macos/ci/check_fake_reconnect.py`。

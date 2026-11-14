@@ -487,6 +487,25 @@ do {
           s.deliveries.state(id) == .unsent(nil) && ids(s) == ["row-10", "row-11", id])
 }
 
+// a receipt lost, the message never got there, and a row in its words stored a moment ago names
+// another submission (the same words said from another window): that row is that message's
+do {
+    let s = store(.queue, running: false)
+    s.loadedChats = [bot]
+    let server = Server(for: s)
+    server.running = false
+    server.prompt = { throw GatewayError.offline }
+    server.rows = [oldRow(10, "嗯"), theirRow(11, "那就这么定了。")]
+    s.chats[bot] = s.transcriptItems(["rows": .array(server.rows)])
+    _ = typed("好的", in: s)
+    let id = s.chats[bot]?.last?.id ?? ""
+    await until { s.deliveries.state(id) == .unsure }
+    server.rows += [namedRow(12, "好的", submission: "SOMEONE-ELSES"), theirRow(13, "嗯。")]
+    await comeBack(s, replayed: false)
+    check("a row that names another submission does not pass for a message in its words: \(ids(s)) \(String(describing: s.deliveries.state(id)))",
+          s.deliveries.state(id) == .unsent(nil) && ids(s) == ["row-10", "row-11", "row-12", "row-13", id])
+}
+
 // a message Hermes refused, with 重发 under it, when the page is read in the chat's place later
 do {
     let s = store(.queue, running: false)

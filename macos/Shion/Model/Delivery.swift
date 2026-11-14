@@ -52,6 +52,19 @@ nonisolated enum DeliveryCheck {
         Set((snapshot["pending"]?.array ?? []).compactMap { $0["input_id"]?.string })
     }
 
+    /// The rows of a transcript page that name the submission they were stored for, by that
+    /// submission (Hermes keeps a prompt's `submission_id` on its row: display_metadata). Such a
+    /// row is that prompt and no other message: one in the same words is not it.
+    static func named(in page: JSONValue) -> [String: Int] {
+        var named: [String: Int] = [:]
+        for row in page["rows"]?.array ?? [] {
+            if let submission = row["display_metadata"]?["submission_id"]?.string, let number = row["row_id"]?.int {
+                named[submission] = number
+            }
+        }
+        return named
+    }
+
     /// Whether Hermes has a message that went out before the connection went, once it is back.
     /// With the session's frames replayed from before it went out (`caughtUp`), Hermes has it only
     /// if they, or what came live before the drop, named it (`seen`): an admission is published as

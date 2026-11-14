@@ -21,6 +21,9 @@ final class ChatControl {
     /// Also what came live in a turn Hermes started and is known to be a row since that turn's
     /// end: its reply's bubble, the cards its start made (AppStore.noteTurnRows).
     @ObservationIgnored var storedRows: [String: Int] = [:]
+    /// session id → the transcript rows known to name a submission (DeliveryCheck.named): each is
+    /// that prompt's, so none of them says a message in the same words got there.
+    @ObservationIgnored var namedRows: [String: Set<Int>] = [:]
     /// Assistant id → the cards the turn under way began with (a frame said what started it),
     /// until its end names their row.
     @ObservationIgnored var turnCards: [String: [String]] = [:]

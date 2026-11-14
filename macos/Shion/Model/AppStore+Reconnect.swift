@@ -290,7 +290,11 @@ extension AppStore {
         let doubtful = deliveries.unsure(in: botId)
         guard !doubtful.isEmpty else { return }
         let pending = DeliveryCheck.pending(in: snapshot)
+        // a row known to name a submission is that prompt's (one that named this message was
+        // taken for it as the page was read: `onPage`), so it is not what says this one arrived
+        let named = sessions[botId].flatMap { control.namedRows[$0] } ?? []
         let rows = (chats[botId] ?? []).filter { $0.role == .user && deliveries.state($0.id) == nil }
+            .filter { !(DeliveryCheck.row(of: $0.id).map(named.contains) ?? false) }
             .map { StoredUserRow(text: $0.text, at: $0.at) }
         for (id, sent) in doubtful {
             // as a row shows it: a file's `@file:` line is not among its words
@@ -332,8 +336,12 @@ extension AppStore {
             "profile": .string(botId), "session_id": .string(sessionId),
             "order": "latest", "limit": .number(Double(Self.pageSize)),
         ]) {
+            // a row that names a submission is a prompt's, not what was put into a turn
+            let named = Set(DeliveryCheck.named(in: read).values)
+            control.namedRows[sessionId, default: []].formUnion(named)
             page = transcriptItems(read).filter { $0.role == .user }
                 .map { StoredUserRow(text: $0.text, at: $0.at, row: DeliveryCheck.row(of: $0.id)) }
+                .filter { !($0.row.map(named.contains) ?? false) }
         }
         guard sessions[botId] == sessionId else { return }
         var taken = control.confirmedRows[sessionId] ?? []
@@ -374,14 +382,16 @@ extension AppStore {
     /// since, which read the same and are other messages. One Hermes refused, or a turn did not
     /// take, is on no row.
     func onPage(_ held: [ChatItem], page: JSONValue, rows: [ChatItem], botId: String) -> [String: Bool] {
-        var named: [String: Int] = [:]
-        for row in page["rows"]?.array ?? [] {
-            if let submission = row["display_metadata"]?["submission_id"]?.string, let number = row["row_id"]?.int {
-                named[submission] = number
-            }
+        let named = DeliveryCheck.named(in: page)
+        let prompts = Set(named.values)
+        if let sessionId = sessions[botId] {
+            control.namedRows[sessionId, default: []].formUnion(prompts)
         }
+        // a row that names a submission is that prompt, found by its name just below: it never
+        // stands for another message because it reads the same
         let stored = rows.filter { $0.role == .user }
             .map { StoredUserRow(text: $0.text, at: $0.at, row: DeliveryCheck.row(of: $0.id)) }
+            .filter { !($0.row.map(prompts.contains) ?? false) }
         var taken = sessions[botId].flatMap { control.confirmedRows[$0] } ?? []
         var there: [String: Bool] = [:]
         for item in held where item.role == .user {

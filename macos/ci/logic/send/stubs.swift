@@ -79,6 +79,7 @@ final class ChatControl {
     var fences: [String: Fence] = [:]
     var storedRows: [String: Int] = [:]
     var confirmedRows: [String: Set<Int>] = [:]
+    var namedRows: [String: Set<Int>] = [:]
 }
 
 /// Records every call, and answers as the test scripts it.
