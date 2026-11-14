@@ -15,10 +15,16 @@ is decided by the last message of the request:
   "说很多"                                   -> a reply of several megabytes in LONG_PARTS parts
   "慢慢说"                                   -> 第一段。 and, once the file GO is there, 第二段。: a reply
                                                that ends when a probe says so
+  "长长地回"                                 -> a reply of LONG_REPLY characters, none of them twice: what a
+                                               compaction has to summarize
   "Message from 🤖 ..."                      -> 收到（mock）。 ([SILENT] when told to keep quiet)
   a background process's result             -> 后台的事有结果了（mock）。
   "[kanban] ..."                            -> 看板的事知道了（mock）。
   anything else                             -> 好（mock）。
+
+A request whose last message says 满了 is answered as any other, with usage that says the context
+holds FULL tokens, past the threshold of the profiles that compact by themselves (inside.sh); any
+other answer says 100.
 
 Every request is noted in LOG (one JSON line: what was asked with, what was answered).
 
@@ -43,6 +49,8 @@ SLOW_LONGEST = 60.0
 # of 1500 characters. No two parts alike: Hermes cuts a stream that repeats itself (a runaway loop).
 LONG_PARTS = 3000
 LONG_PAUSE = 0.001
+LONG_REPLY = 3000
+FULL = 6000
 
 
 def filler(index):
@@ -85,6 +93,8 @@ def decide(body):
         return "tool", ("terminal", {"command": "sleep 3; echo mock-slow-finished"})
     if "说很多" in said:
         return "long", None
+    if "长长地回" in said:
+        return "text", "".join(chr(0x4E00 + (len(messages) * 131 + k * 17) % 20000) for k in range(LONG_REPLY))
     if "慢慢说" in said:
         return "slow", None
     if "Message from 🤖" in said and "保持沉默" in said:
@@ -144,7 +154,9 @@ class Handler(BaseHTTPRequestHandler):
         kind, value = decide(body)
         note(body, kind, value)
         rid, made = f"chatcmpl-mock-{count[0]}", int(time.time())
-        usage = {"prompt_tokens": 100, "completion_tokens": 10, "total_tokens": 110}
+        last = (body.get("messages") or [{}])[-1]
+        full = last.get("role") == "user" and "满了" in text_of(last.get("content"))
+        usage = {"prompt_tokens": FULL if full else 100, "completion_tokens": 10, "total_tokens": (FULL if full else 100) + 10}
         call = None
         if kind == "tool":
             call = {"id": f"call_mock_{count[0]}", "type": "function",
