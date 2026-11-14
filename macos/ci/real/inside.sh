@@ -19,7 +19,8 @@ bot "$HERMES_HOME/profiles/commute" "通勤助手（mock）" "通勤"
 chmod -R go-w "$HOME"
 
 nohup python /real/mock_model.py 9911 /out/mock-model.log > /out/mock-model.out 2>&1 &
-nohup $hermes gateway run -v > /out/gateway.log 2>&1 &
+# the gateway, Hermes's own, started through hold_gateway.py: it can hold the answer to an attach (stage behind)
+nohup python /real/hold_gateway.py gateway run -v > /out/gateway.log 2>&1 &
 ready=""
 for _ in $(seq 1 60); do
     if $hermes gateway attach --json 2>/dev/null | grep -q '"state":"ready"'; then ready=yes; break; fi
@@ -27,8 +28,12 @@ for _ in $(seq 1 60); do
 done
 [ -n "$ready" ] || { echo "the gateway did not come up"; tail -20 /out/gateway.log; exit 1; }
 
-for stage in ${STAGES:-plain peer peer2 background gap}; do
+for stage in ${STAGES:-plain peer peer2 background gap behind}; do
     echo "######## $stage"
     python /real/probe.py "$stage" "/out/capture-$stage.json" > "/out/$stage.txt" 2>&1 || { tail -20 "/out/$stage.txt"; exit 1; }
-    grep -v "session.info\|session.usage\|thinking.delta\|agent.step" "/out/$stage.txt" | cut -c1-400
+    # the frames that say little are left out of what is shown (they are in the .txt); stage behind
+    # names such frames in what it found, so only the lines of the frames themselves go there
+    quiet="session.info\|session.usage\|thinking.delta\|agent.step"
+    if [ "$stage" = behind ]; then quiet=" event \(session.info\|session.usage\|thinking.delta\|agent.step\) "; fi
+    grep -v "$quiet" "/out/$stage.txt" | cut -c1-400
 done

@@ -11,6 +11,8 @@ is decided by the last message of the request:
   "问课程和通勤"                             -> one call to two teammates, with constraints
   "后台跑一下"     (terminal offered)        -> a terminal call in the background, told to notify
   "说很多"                                   -> a reply of several megabytes in LONG_PARTS parts
+  "慢慢说"                                   -> 第一段。 and, once the file GO is there, 第二段。: a reply
+                                               that ends when a probe says so
   "Message from 🤖 ..."                      -> 收到（mock）。 ([SILENT] when told to keep quiet)
   a background process's result             -> 后台的事有结果了（mock）。
   "[kanban] ..."                            -> 看板的事知道了（mock）。
@@ -20,6 +22,7 @@ Every request is noted in LOG (one JSON line: what was asked with, what was answ
 
   python mock_model.py [port] [log]"""
 import json
+import os
 import random
 import sys
 import threading
@@ -29,6 +32,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 9911
 LOG = sys.argv[2] if len(sys.argv) > 2 else "mock-model.log"
 MODEL = "mock-model"
+# 「慢慢说」 goes on once this file is there (beside the log), or after SLOW_LONGEST seconds
+GO = os.path.join(os.path.dirname(os.path.abspath(LOG)), "model-go")
+SLOW = ("第一段。", "第二段。")
+SLOW_LONGEST = 60.0
 # a reply long enough that a viewer who stops reading falls more than Hermes keeps for it (4 MB a viewer,
 # tui_gateway/transport.py FanoutTransport): 3000 parts of 1500 characters
 # of 1500 characters. No two parts alike: Hermes cuts a stream that repeats itself (a runaway loop).
@@ -74,6 +81,8 @@ def decide(body):
                                      "notify_on_complete": True})
     if "说很多" in said:
         return "long", None
+    if "慢慢说" in said:
+        return "slow", None
     if "Message from 🤖" in said and "保持沉默" in said:
         return "text", "[SILENT]"
     if "Message from 🤖" in said:
@@ -85,6 +94,12 @@ def decide(body):
     return "text", "好（mock）。"
 
 
+def wait_for_go():
+    until = time.monotonic() + SLOW_LONGEST
+    while not os.path.exists(GO) and time.monotonic() < until:
+        time.sleep(0.02)
+
+
 def note(body, kind, value):
     messages = body.get("messages") or []
     with lock:
@@ -93,7 +108,7 @@ def note(body, kind, value):
                 "roles": [m.get("role") for m in messages][-6:],
                 "last": text_of((messages[-1] if messages else {}).get("content"))[:600],
                 "tools": sorted({(t.get("function") or {}).get("name") or "" for t in body.get("tools") or []}),
-                "answer": kind if kind == "long" else {kind: value}}
+                "answer": kind if kind in ("long", "slow") else {kind: value}}
         with open(LOG, "a", encoding="utf-8") as out:
             out.write(json.dumps(line, ensure_ascii=False) + "\n")
 
@@ -131,7 +146,10 @@ class Handler(BaseHTTPRequestHandler):
             call = {"id": f"call_mock_{count[0]}", "type": "function",
                     "function": {"name": value[0], "arguments": json.dumps(value[1], ensure_ascii=False)}}
         if not body.get("stream"):
-            words = "".join(f"第{i + 1}节。" for i in range(40)) if kind == "long" else (value if kind == "text" else None)
+            if kind == "slow":
+                wait_for_go()
+            words = "".join(f"第{i + 1}节。" for i in range(40)) if kind == "long" else "".join(SLOW) if kind == "slow" \
+                else (value if kind == "text" else None)
             message = {"role": "assistant", "content": words}
             if call:
                 message["tool_calls"] = [call]
@@ -159,6 +177,11 @@ class Handler(BaseHTTPRequestHandler):
                 for index in range(LONG_PARTS):
                     chunk({"content": f"第{index + 1}节。" + filler(index)})
                     time.sleep(LONG_PAUSE)
+                chunk({}, "stop")
+            elif kind == "slow":
+                chunk({"content": SLOW[0]})
+                wait_for_go()
+                chunk({"content": SLOW[1]})
                 chunk({}, "stop")
             else:
                 for start in range(0, len(value), 3):

@@ -7,8 +7,10 @@
 #   ./run.sh [directory for the captures]      default: ./captures
 #   STAGES="peer gap" ./run.sh                 only some of probe.py's stages
 #
-# Then, where there is a Swift compiler, the Mac's own notice reader over what was captured:
+# Then, where there is a Swift compiler, the Mac's own code over what was captured: its notice
+# reader, and its review talk over a turn's end that overtook the answer to session.resume:
 #   ./read_notices.sh captures/capture-peer.json captures/capture-peer2.json captures/capture-background.json
+#   ./read_behind.sh captures/capture-behind.json
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 image="${HERMES_TEST_IMAGE:-shion-hermes-test}"

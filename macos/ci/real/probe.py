@@ -9,10 +9,14 @@ Runs inside the container (inside.sh), beside a gateway that serves three Bot Mo
   python probe.py background <capture.json>   a command left running in the background, told to notify
   python probe.py gap <capture.json>          a viewer that stops reading while a very long reply streams,
                                               until Hermes ends its subscription (session.replay_gap)
+  python probe.py behind <capture.json>       a session read again (session.resume) while a turn runs, its
+                                              answer held after Hermes took the snapshot (hold_gateway.py)
+                                              until the turn has ended: the end reaches the viewer first
 
 Each prints what a viewer gets, frame by frame, and writes it as JSON for the Mac's own code to be
-run over (read_notices.sh)."""
+run over (read_notices.sh, read_behind.sh)."""
 import json
+import os
 import socket
 import subprocess
 import sys
@@ -53,6 +57,8 @@ class Socket:
             more["sock"] = raw
         self.ws = connect(found["url"], subprotocols=found["protocols"], open_timeout=15, max_size=None, **more)
         self.name, self.frames, self.n, self.quiet = name, [], 0, quiet
+        # a request's answer, and how many session frames had come when it did
+        self.answers, self.answered_at = {}, {}
         self.call("client.capabilities", {"server_requests": True}, quiet=True)
 
     def read(self, timeout):
@@ -60,6 +66,9 @@ class Socket:
             frame = json.loads(self.ws.recv(timeout=timeout))
         except TimeoutError:
             return None
+        if "id" in frame and "method" not in frame:
+            self.answers[frame["id"]] = frame
+            self.answered_at[frame["id"]] = len(self.frames)
         if frame.get("method") == "event":
             params = frame.get("params") or {}
             if params.get("session_id"):
@@ -69,10 +78,15 @@ class Socket:
                     say(f"  {self.name} event", kind, "seq", params.get("seq"), short(params.get("payload"), 420))
         return frame
 
-    def call(self, method, params, quiet=False, timeout=30.0):
+    def begin(self, method, params):
+        """Sends a request and does not wait: its answer is in `answers` once it was read."""
         self.n += 1
         rid = f"{self.name}{self.n}"
         self.ws.send(json.dumps({"jsonrpc": "2.0", "id": rid, "method": method, "params": params}))
+        return rid
+
+    def call(self, method, params, quiet=False, timeout=30.0):
+        rid = self.begin(method, params)
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             frame = self.read(max(0.05, deadline - time.monotonic()))
@@ -277,6 +291,85 @@ elif STAGE == "gap":
                    rejoin={k: (v if k != "events" else [{kk: vv for kk, vv in e.items() if kk != "payload"} for e in v][:40])
                            for k, v in rejoin.items()},
                    after=[f for f in slow.frames[mark:] if f.get("type") != "message.delta"])
+
+elif STAGE == "behind":
+    # hold_gateway.py holds an attach's answer while HOLD exists; mock_model.py ends 「慢慢说」 once GO does
+    HOLD, GO = "/out/hold-attach", "/out/model-go"
+    for path in (HOLD, HOLD + ".reached", GO):
+        if os.path.exists(path):
+            os.remove(path)
+    a = Socket("a")
+    # a session as Shion makes one to talk a skill's review over (SkillReviewTalk.open), read as it reads it
+    made = a.call("session.create", {"profile": "default", "request_id": "shion-review-probe-" + uuid.uuid4().hex[:8],
+                                     "source": "gui", "hidden": True, "toolsets": [], "ignore_rules": True}, quiet=True)
+    session = made.get("session_id")
+    if not session:
+        say("no session", short(made))
+        raise SystemExit(1)
+    resume = {"profile": "default", "session_id": session, "display_projection": True}
+    a.call("session.resume", resume, quiet=True)
+    start = len(a.frames)
+    ask(a, "default", session, "请和我一起审核（探测）")
+    say("the first turn", "ended" if a.listen(60, until="message.complete", after=start) else "DID NOT END in 60 s")
+    a.listen(2)
+    opened = a.call("session.resume", resume, quiet=True)
+    say("the session as a sheet opening now reads it: last_sequence", opened.get("last_sequence"), "running",
+        opened.get("running"), "rows", len(opened.get("display_messages") or []))
+
+    say("=== a message whose reply the model holds half way")
+    mark = len(a.frames)
+    submission = str(uuid.uuid4()).upper()
+    receipt = a.call("prompt.submit", {"profile": "default", "session_id": session, "text": "慢慢说（探测）",
+                                       "submission_id": submission})
+    say("its first part", "came" if a.listen(60, until="message.delta", after=mark) else "DID NOT COME in 60 s")
+    a.listen(1)
+
+    say("=== the session is read again while the turn runs; Hermes's answer is held after it took the snapshot")
+    open(HOLD, "w").close()
+    at_call = len(a.frames)
+    rid = a.begin("session.resume", resume)
+    deadline = time.monotonic() + 20
+    while not os.path.exists(HOLD + ".reached") and time.monotonic() < deadline:
+        a.read(0.05)
+    say("the attach", "took its snapshot and waits" if os.path.exists(HOLD + ".reached") else "DID NOT REACH the wait in 20 s",
+        "| answered already:", rid in a.answers)
+    open(GO, "w").close()
+    say("the model goes on; the turn", "ended" if a.listen(60, until="message.complete", after=at_call)
+        else "DID NOT END in 60 s")
+    deadline, idle = time.monotonic() + 10, False
+    while time.monotonic() < deadline and not idle:
+        ends = [n for n, f in enumerate(a.frames) if n >= at_call and f.get("type") == "message.complete"]
+        idle = bool(ends) and any(f.get("type") == "session.info" and (f.get("payload") or {}).get("running") is False
+                                  for f in a.frames[ends[0]:])
+        if not idle:
+            a.read(0.2)
+    say("session.info saying nothing runs", "came" if idle else "DID NOT COME in 10 s",
+        "| the answer to session.resume before these frames:", rid in a.answers)
+    overtaken = rid not in a.answers
+    os.remove(HOLD)
+    deadline = time.monotonic() + 30
+    while rid not in a.answers and time.monotonic() < deadline:
+        a.read(0.2)
+    held = (a.answers.get(rid) or {}).get("result") or {}
+    at_answer = a.answered_at.get(rid, len(a.frames))
+    between = a.frames[at_call:at_answer]
+    say("=== the answer, after", len(between), "frames that came while it was held:",
+        [(f.get("type"), f.get("seq")) for f in between if f.get("type") != "message.delta"])
+    say("the snapshot: replay_epoch", held.get("replay_epoch"), "last_sequence", held.get("last_sequence"), "running",
+        held.get("running"), "pending", len(held.get("pending") or []), "rows",
+        [(m.get("row_id"), m.get("role"), (m.get("text") or "")[:24]) for m in held.get("display_messages") or []])
+    newest = max((f.get("seq") or 0 for f in between), default=0)
+    say("older than the frames already on the socket:", (held.get("last_sequence") or 0) < newest,
+        f"(the newest frame is seq {newest}, of epoch {next((f.get('replay_epoch') for f in between), None)})")
+    end = next((f for f in between if f.get("type") == "message.complete"), {})
+    say("the turn's end names its rows:", short((end.get("payload") or {}).get("persisted_turn")))
+    a.listen(2)
+    again = a.call("session.resume", resume, quiet=True)
+    say("read once more, nothing held: last_sequence", again.get("last_sequence"), "running", again.get("running"), "rows",
+        [(m.get("row_id"), m.get("role"), (m.get("text") or "")[:24]) for m in again.get("display_messages") or []])
+    capture.update(session=session, submission=submission, receipt=receipt, opened=opened, overtaken=overtaken,
+                   frames_before=a.frames[mark:at_call], frames_between=between, frames_after=a.frames[at_answer:],
+                   held=held, again=again, page=rows_of(a, "default", session, quiet=True))
 
 with open(OUT, "w", encoding="utf-8") as out:
     json.dump(capture, out, ensure_ascii=False, indent=1)
