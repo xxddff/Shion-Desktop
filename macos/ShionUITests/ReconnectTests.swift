@@ -39,7 +39,11 @@ import XCTest
 ///    had, the newest page is read in the chat's place): the same words said again while the chat
 ///    is being attached again (the stand-in keeps that answer back until StandIn.attach), and that
 ///    request lost. The page's row in those words is the first saying's, so the message said again
-///    stays under the page with 等连上后确认, then 没发出去 with 重发, which sends it, once.
+///    stays under the page with 等连上后确认, then 没发出去 with 重发, which sends it, once;
+/// 11. half way through a reply, and once back Hermes will not attach the chat again (its store
+///    busy, the socket kept) until StandIn.attach: the chat keeps the reply it had, says what
+///    failed with Hermes's reason and 再试一次, and is not left replying; attached again, by a try
+///    of its own or by 再试一次, the reply is whole and what is said is answered.
 /// A picture at each step (reconnect-*.png).
 final class ReconnectTests: XCTestCase {
     private let server = "http://127.0.0.1:8765"
@@ -418,6 +422,48 @@ final class ReconnectTests: XCTestCase {
             XCTFail("no 重发 to press")
         }
         keep(app.windows.firstMatch.screenshot(), "reconnect-18-said-again-resent")
+
+        // 11. half way through a reply, and once back every session.resume of the chat is refused
+        // (storage_unavailable, as Hermes answers when its store is busy; the socket kept) until
+        // StandIn.attach. The frames replayed as Shion is back say a turn runs; not attached, the
+        // chat keeps the reply it had, says what failed with Hermes's reason and 再试一次, and is
+        // not left replying. Once Hermes would, it is attached again, by a try of its own or by
+        // 再试一次, and the reply is whole
+        XCTAssertTrue(waitUntil(timeout: 20) { !self.element("stop", in: app).exists }, "the turn before is still replying")
+        say("断线：接不上", in: app)
+        XCTAssertTrue(waitForText("第3拍。", in: app, timeout: 10), "the reply did not start")
+        XCTAssertTrue(waitForText("重新连接中…", in: app, timeout: 10), "the socket did not drop")
+        StandIn.tunnelUp("11. back, and not attached again")
+        XCTAssertTrue(waitUntil(timeout: 40) { !self.hasText("重新连接中…", in: app) }, "the connection did not come back")
+        let refused = element("rejoin-failure", in: app)
+        let saysSo = refused.waitForExistence(timeout: 20)
+        keep(app.windows.firstMatch.screenshot(), "reconnect-19-not-attached")
+        XCTAssertTrue(saysSo, "a chat Hermes would not attach again does not say so")
+        XCTAssertTrue(holds("没能重新接上这个对话", whole: false, in: refused) && holds("storage_unavailable", whole: false, in: refused),
+                      "it does not say what could not be done, in Hermes's words")
+        XCTAssertTrue(waitUntil(timeout: 5) { !self.element("stop", in: app).exists }, "the chat is still shown as replying")
+        XCTAssertTrue(holds(["第1拍。", "第15拍。"], in: app), "the chat lost the reply it had")
+        let tryAgain = element("rejoin-retry", in: app)
+        XCTAssertTrue(tryAgain.exists, "no 再试一次 beside it")
+        XCTAssertTrue(waitUntil(timeout: 10) { tryAgain.isEnabled }, "再试一次 cannot be pressed while the chat was replying before")
+        StandIn.attach("11. Hermes attaches the chat again")
+        // the next try gets it: one of its own while the line says when, else 再试一次 (with none of
+        // its own to come, nothing takes the line away under the click)
+        let back = waitUntil(timeout: 40) {
+            guard refused.exists else { return true }
+            if !self.holds(" 再试", whole: false, in: refused), tryAgain.exists, tryAgain.isEnabled {
+                tryAgain.click()
+            }
+            return false
+        }
+        keep(app.windows.firstMatch.screenshot(), "reconnect-20-attached-again")
+        XCTAssertTrue(back, "the chat was not attached again once Hermes would")
+        XCTAssertTrue(waitForText("第30拍。", in: app, timeout: 20), "the rest of the reply did not come")
+        once("第1拍。", whole: false, "the reply is not in one bubble", "reconnect-count-11", in: app)
+        XCTAssertTrue(waitUntil(timeout: 20) { !self.element("stop", in: app).exists }, "a bubble is still replying")
+        say("接上了吗（CI）", in: app)
+        XCTAssertTrue(waitForText("收到：接上了吗（CI）", in: app, timeout: 15), "what was said once attached again got no answer")
+        keep(app.windows.firstMatch.screenshot(), "reconnect-21-attached-said")
         app.terminate()
     }
 

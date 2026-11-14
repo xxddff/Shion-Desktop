@@ -88,6 +88,13 @@ before saying so does not take the rest of the test with it:
              submission), it is lost: the socket drops before it is admitted, once the newest page
              has been asked for and answered. Sent again under that id, it is admitted like any
              other sentence
+  接不上     30 parts 0.3 s apart; the socket drops after the 5th, the 6th to the 15th come while
+             Shion is away, and the reply waits at the 15th until Shion is back and asks what it
+             missed. From the drop on, every `session.resume` of the session is refused before
+             anything is attached, the socket kept (code 5001, storage_unavailable, as Hermes
+             answers a call whose store is busy), until the test says so (`POST /ci/attach/go`):
+             the rest of the reply comes meanwhile, to nobody. Once the chat is attached again,
+             Shion has it from its replay
 
 Stdlib only.
 """
@@ -110,7 +117,9 @@ except ImportError:
 
 PREFIX = "断线："
 CONTROL = "/ci/tunnel/up"  # the test's word that brings the tunnel back (StandIn.swift)
-ATTACH = "/ci/attach/go"  # the test's word that lets a held session.resume be answered (又说一遍)
+# the test's word that lets the chat be attached: a session.resume held back is answered (又说一遍),
+# and one refused is refused no more (接不上)
+ATTACH = "/ci/attach/go"
 HOLD = 25.0  # seconds such a session.resume waits for that word: under the 30 s Shion waits for an answer
 NOBODY = 60.0  # seconds a tunnel waits for that word before it comes back by itself
 MEANWHILE = 30.0  # seconds the word waits for what a script does while Shion is away
@@ -135,6 +144,7 @@ waiting = collections.defaultdict(list)  # session id -> admissions queued behin
 dropped = set()  # submission ids whose socket was dropped before they were admitted
 gone = set()  # the words of messages with pictures and files dropped once, whatever their id
 repeats = {}  # session id -> where 又说一遍 is, from its first saying until the second is lost
+refusing = {}  # session id -> since when 接不上 has its session.resume refused, until the test's word
 tunnel = threading.Lock()
 down = {"held": False, "since": 0.0, "why": "", "meanwhile": None}
 awaited = {}  # session id -> set once a connection asks for it again (Shion is back): a reply waits
@@ -460,6 +470,8 @@ def answer(handler, method, params, rid):
     """The requests this module answers itself; True once answered."""
     if method == "session.events.since":
         return events_since(handler, params, rid)
+    if method == "session.resume" and refuses(handler, params.get("session_id"), rid):
+        return True
     if method == "prompt.submit":
         return submit(handler, params, rid)
     if method == "approval.respond" and params.get("prompt_id") == APPROVAL["prompt_id"]:
@@ -647,6 +659,46 @@ def flood(turn):
         say(turn, sentence[n % len(sentence)])
     end(turn)
     turn["meanwhile"].set()  # all 600 out while Shion was away: more than its replay can reach
+
+
+def unattached(turn):
+    """接不上: as 讲到一半, shorter; from the drop on, the session is not attached again until the
+    test says so (`refuses`)."""
+    session_id = turn["session_id"]
+    begin(turn)
+    for n in range(1, 31):
+        time.sleep(0.3)
+        say(turn, f"第{n}拍。")
+        if n == 5:
+            with bus:
+                refusing[session_id] = {"go": threading.Event(), "since": time.time()}
+            back = back_for(session_id)
+            drop(turn["handler"], "half way through a reply; once back, the chat is refused until the test says so",
+                 turn["meanwhile"])
+        elif n == 15:
+            turn["meanwhile"].set()
+            if not back.wait(NOBODY + MEANWHILE):
+                log("  -> Shion did not come back to 接不上: the rest goes on anyway")
+    end(turn)
+
+
+def refuses(handler, session_id, rid):
+    """session.resume of a session 接不上 left unattached: refused as Hermes refuses a call whose
+    store is busy (gateway/session_controls.py: code 5001, storage_unavailable), before anything
+    is attached, the socket kept. Until the test's word (POST /ci/attach/go, `let_attach`), or
+    NOBODY seconds after the drop. True when refused here."""
+    with bus:
+        gate = refusing.get(session_id)
+    if gate is None or gate["go"].is_set():
+        return False
+    if time.time() - gate["since"] >= NOBODY:
+        gate["go"].set()
+        log(f"  -> nobody said so: {session_id} may be attached again after {NOBODY:.0f} s")
+        return False
+    log(f"    {session_id} is not attached again: storage_unavailable, until the test's word (POST {ATTACH})")
+    handler.send_json({"jsonrpc": "2.0", "id": rid, "error": {
+        "code": 5001, "message": "storage_unavailable", "data": {"reason": "storage_unavailable"}}})
+    return True
 
 
 def lagging(turn):
@@ -843,7 +895,7 @@ def expire(attachments):
 
 
 SCRIPTS = {"讲到一半": halfway, "讲完了": finished, "还没回执": unacked, "没收到": None, "等你批准": approval,
-           "说很多": flood, "跟不上": lagging, "回传": notices, "很多": many}
+           "说很多": flood, "跟不上": lagging, "回传": notices, "很多": many, "接不上": unattached}
 
 
 def respond(handler, params, rid):
@@ -962,13 +1014,19 @@ def hold(session_id):
 
 
 def let_attach(handler):
-    """POST /ci/attach/go: the session.resume held back is answered now; 409 when none is."""
+    """POST /ci/attach/go: the session.resume held back is answered now (又说一遍), and a session
+    whose session.resume was refused (接不上) is attached at the next one; 409 when there is
+    neither."""
     with bus:
         held = [gate for gate in repeats.values() if not gate["go"].is_set()]
         for gate in held:
             gate["go"].set()
-    log(f"POST {ATTACH} -> " + ("the chat is attached now" if held else "409 (no session.resume is held back)"))
-    word(handler, 200 if held else 409, {"held": bool(held)})
+        refused = [gate for gate in refusing.values() if not gate["go"].is_set()]
+        for gate in refused:
+            gate["go"].set()
+    log(f"POST {ATTACH} -> " + ("the chat is attached now" if held else "the chat may be attached again" if refused
+                                else "409 (no session.resume is held back or refused)"))
+    word(handler, 200 if held or refused else 409, {"held": bool(held), "refused": bool(refused)})
 
 
 def page_asked(session_id):

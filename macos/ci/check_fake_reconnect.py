@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Plays Shion's side of three of the stand-in's scripts (fake_reconnect.py: 很多, and the two
-same-words ones, 引导两遍 and 又说一遍) against the stand-in itself, and says what it expects of
-every answer.
+"""Plays Shion's side of four of the stand-in's scripts (fake_reconnect.py: 很多, the two
+same-words ones, 引导两遍 and 又说一遍, and 接不上) against the stand-in itself, and says what it
+expects of every answer.
 
 ReconnectTests needs the scripts to do exactly this, in this order, whatever the test's typing
 takes; a Mac is not needed to see that they do. The stand-in runs here as it does in CI
@@ -20,6 +20,10 @@ WebSocket of its own making, the requests Shion sends, and the test's words over
              after the newest page was answered, whichever of the two requests comes first; the
              next replay whole; the same submission sent again admitted; the resume answered by
              itself when nobody says the word
+  接不上     the drop half way through a reply; once back, the replay up to where the reply
+             waited, and every session.resume refused (5001 storage_unavailable) with the socket
+             kept and nothing of the session coming, until POST /ci/attach/go; then attached, the
+             rest of the reply caught up and its end
 
 Run it after changing those scripts; no CI step runs it. Exits 1 when something is not as expected.
 
@@ -54,6 +58,7 @@ SESSION, PROFILE = "sess-shion", "shion"
 MANY_SCRIPT = "断线：很多"
 STEER_SCRIPT, STEERED_WORDS = "断线：引导两遍", "改到五点（CI）"
 AGAIN = "断线：又说一遍"
+REFUSED = "断线：接不上"
 
 failed = []
 lines = []  # the stand-in's log, shown when something fails
@@ -387,6 +392,49 @@ def nobody_says(port, token, client):
     expect("and the word then finds nothing held back", code == 409, f"{code} {word}")
 
 
+def not_attached_again(port, token):
+    print("\n接不上: back after the drop, and the chat not attached again until the test says so")
+    client, _, snapshot = attached(port, token)
+    expect("the chat is attached", bool(snapshot and snapshot.get("subscription_id")), str(snapshot))
+    receipt = client.answer(submit(client, REFUSED, str(uuid.uuid4())))
+    expect("the sentence that starts the turn has its receipt", bool(receipt and receipt.get("admission_id")), str(receipt))
+    expect("the reply starts", client.event("message.delta", where=lambda payload: payload.get("text") == "第1拍。") is not None)
+    expect("then the socket goes", client.gone(5) is not None)
+    cursor = client.cursor()
+    code, word = post(port, fake_reconnect.CONTROL)
+    expect("the tunnel comes back once the reply waits for Shion", code == 200 and word.get("meanwhile") == "done",
+           f"{code} {word}")
+
+    back = Client(port, token)
+    replay = back.call("session.events.since", {"profile": PROFILE, "session_id": SESSION,
+                                                "last_sequence": cursor[1], "replay_epoch": cursor[0]})
+    parts = [event["payload"].get("text") for event in (replay or {}).get("events", []) if event.get("type") == "message.delta"]
+    expect("the replay has what came while away, up to where the reply waited",
+           bool(replay) and replay.get("snapshot_required") is False and parts[-1:] == ["第15拍。"], str(parts))
+    for n in (1, 2):
+        refused = back.call("session.resume", {"profile": PROFILE, "session_id": SESSION, "omit_messages": True})
+        expect(f"session.resume {n} is refused as a busy store refuses it: 5001 storage_unavailable",
+               bool(refused) and refused.get("code") == 5001
+               and (refused.get("data") or {}).get("reason") == "storage_unavailable", str(refused))
+    expect("the socket stays up", back.gone(0.1) is None)
+    expect("nothing of the session comes while it is not attached, though the reply goes on",
+           back.event("message.delta", seconds=1.5) is None)
+    code, word = post(port, fake_reconnect.ATTACH)
+    expect("the test's word lets it be attached", code == 200 and word.get("refused") is True, f"{code} {word}")
+    snapshot = back.call("session.resume", {"profile": PROFILE, "session_id": SESSION, "omit_messages": True})
+    expect("the next session.resume attaches it", bool(snapshot) and snapshot.get("subscription_id") is not None,
+           str(snapshot)[:200])
+    caught = back.event("message.delta", where=lambda payload: payload.get("text") == "第16拍。")
+    end = back.event("message.complete", seconds=15)
+    expect("the rest of the reply comes, from where the replay stopped, and its end", caught is not None and end is not None)
+    with fake_hermes.lock:
+        rows = [row for row in fake_hermes.transcripts.get(SESSION, []) if row.get("role") == "assistant"]
+    expect("the reply is stored whole", bool(rows) and rows[-1].get("text", "").startswith("第1拍。")
+           and rows[-1].get("text", "").endswith("第30拍。"), str(rows[-1:])[:200])
+    code, word = post(port, fake_reconnect.ATTACH)
+    expect("the word a second time finds nothing to let be", code == 409, f"{code} {word}")
+
+
 def main():
     def log(*parts):
         lines.append(" ".join(str(part) for part in parts))
@@ -410,6 +458,7 @@ def main():
         client = said_again(port, token, client, page_first=False)
         fake_reconnect.HOLD = 2.0  # not the half minute a test has
         nobody_says(port, token, client)
+        not_attached_again(port, token)
     except Exception as error:  # a step that could not go on: the log says where the stand-in was
         expect("the run went through", False, repr(error))
     finally:
