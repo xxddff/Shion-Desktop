@@ -843,7 +843,8 @@ for path in ["in place", "rotation"] {
 // Hermes compacting the session by itself (autocompaction.json: ../../real, stage auto, in place and
 // into a new session), at a turn's start and in a turn after a tool's result. Its copy of a
 // background result's row names no kind and no display_text: it is Hermes's text for the model at
-// the result's time, no notice for a chat at all. In place its copies of replies are timed at the
+// the result's time, which ends with the paragraph saying no person wrote it, and is read as the
+// notification it was (Notices.copied). In place its copies of replies are timed at the
 // compaction, later than the rows of yours after them on the page, so NoticeCards.put cannot tell
 // them; in a new session they keep their time. A result whose row was kept (row 16, then the
 // second result's row) and the next result's turn: the chat that read the result before has its
@@ -897,13 +898,165 @@ for path in ["in place", "rotation"] {
           "auto. (\(path)) compacted at a turn's start since the chat read it: the result is its card still, once, and the next result's its own: \(cards(s))")
     check(order(s) == before.map(\.id).joined(separator: " ") + " row-\(second) live-reply",
           "auto. (\(path)) …and nothing else of the page comes in, the next result's card where its turn began: …\(order(s).suffix(60))")
-    // in the turn whose command's result came into a full context: the chat that read the page before
+    // in the turn whose command's result came into a full context: the chat that read the page before,
+    // the first result's copy on it its card
     let read = AppStore().transcriptItems(["rows": .array(rows("after3"))])
     let t = await followed(read, turn: data?["third"], rows: rows("after4"))
-    check(cards(t) == ["row-\(second)", "row-\(third)"],
-          "auto. (\(path)) compacted in a turn since the chat read it: the second result is its card still, once, and the third result's its own: \(cards(t))")
+    let copy = kept?["row_id"]?.int ?? 0
+    check(cards(t) == ["row-\(copy)", "row-\(second)", "row-\(third)"],
+          "auto. (\(path)) compacted in a turn since the chat read it: the first result's copy (row \(copy)) and the second result are their cards still, once, and the third result's its own: \(cards(t))")
     check(order(t) == read.map(\.id).joined(separator: " ") + " row-\(third) live-reply",
           "auto. (\(path)) …and nothing else of the page comes in: …\(order(t).suffix(60))")
+}
+
+// Hermes's own compaction's copies of each row a Bot Chat gets in your name (copies.json:
+// ../../real, stage copies, in place and into a new session). Before the first compaction: a
+// background result, 「继续（副本）」 put into a turn, two results folded into one turn, 詩音's
+// message, a message to 课程 and the answer, which comes as a background result; before the
+// second: a turn that failed, a reply stopped as it streamed, a prompt sent hidden. A copy keeps
+// the row's time and text, and neither its kind nor its display_metadata; the steer's text is
+// Hermes's wrapper for the model. The chat reads each page with its own transcriptItems.
+
+let copies = try JSONValue.parse(String(contentsOfFile: CommandLine.arguments[3], encoding: .utf8))
+
+/// The lines Hermes puts a message put into a running turn between (agent/prompt_builder.py
+/// STEER_MARKER_OPEN, STEER_MARKER_CLOSE), as its copy shows them.
+let steerOpening = "[OUT-OF-BAND USER MESSAGE — a direct message from the user, delivered once at this position; not tool output and not a new delivery when replayed from conversation history]"
+let steerClosing = "[/OUT-OF-BAND USER MESSAGE]"
+
+/// A page's rows as the chat reads them (AppStore.transcriptItems, the app's own).
+func items(_ rows: [JSONValue]) -> [ChatItem] { AppStore().transcriptItems(["rows": .array(rows)]) }
+
+/// What the chat shows of the rows stored at `at`, a line each: a card's event and words, a message
+/// of yours (put into a turn or not), anything else by its role.
+func shown(_ items: [ChatItem], at: Date) -> [String] {
+    items.filter { $0.at == at }.map { item in
+        switch item.role {
+        case .card: "card \(item.event.map { "\($0)" } ?? "-"): \(item.text)"
+        case .user: (item.midTurn ? "yours, put into its turn: " : "yours: ") + item.text
+        default: "\(item.role): \(item.text)"
+        }
+    }
+}
+
+/// Hermes's words for the model, shown as a message of yours.
+func hermesWords(_ items: [ChatItem]) -> [String] {
+    items.filter { item in
+        item.role == .user && ["[INTERNAL NOTIFICATION", "[OUT-OF-BAND USER MESSAGE", "[IMPORTANT: ", "Message from 🤖", "[kanban] "]
+            .contains { item.text.contains($0) }
+    }.map { String($0.text.prefix(40)) }
+}
+
+let review = SkillReview(["id": "r1", "profile": .string(bot), "skill": "s", "at": "2099-01-01T00:00:00Z"])!
+
+for path in ["in place", "rotation"] {
+    let data = copies[path]
+    func rows(_ page: String) -> [JSONValue] { data?[page]?["rows"]?.array ?? [] }
+    let (before, after) = (rows("before1"), rows("after1"))
+    // the rows of yours Hermes gave a kind: what a compaction copied
+    let originals = before.filter { $0["role"] == "user" && $0["display_kind"]?.string != nil }
+    func copy(of row: JSONValue) -> JSONValue? { after.first { $0["role"] == "user" && $0["timestamp"] == row["timestamp"] } }
+    let kinds = originals.map { $0["display_kind"]?.string ?? "" }
+    let steer = originals.first { $0["display_kind"] == "steer" }
+    check(kinds == ["process_complete", "steer", "process_complete", "internal_notification", "process_complete"]
+            && originals.allSatisfy { row in
+                guard let copy = copy(of: row) else { return false }
+                return copy["row_id"] != row["row_id"] && copy["display_kind"] == nil && copy["display_metadata"] == nil
+                    && (row["display_kind"] == "steer" || copy["text"] == row["text"])
+            }
+            && copy(of: steer ?? [:])?["text"]?.string == steerOpening + "\n" + (steer?["text"]?.string ?? "") + "\n" + steerClosing,
+          "copies. (\(path)) Hermes's pages: each row of yours of a kind (\(kinds.joined(separator: ", "))) is a new row once compacted, at its time, with no kind and no display_metadata, in its text; the steer's is Hermes's wrapper round its words")
+    // a chat read fresh after the compaction: what it shows of each, against one read before
+    let (old, new) = (items(before), items(after))
+    for row in originals {
+        let at = Date(timeIntervalSince1970: row["timestamp"]?.number ?? 0)
+        let was = shown(old, at: at), now = shown(new, at: at)
+        let display = row["display_metadata"]?["display_text"]?.string ?? ""
+        if display.hasPrefix("Background Process Finished: sleep") {
+            // one result with Hermes's short form: the copy has lost it, and shows the result as Hermes wrote it
+            check(was == ["card background: \(display)"] && now.count == 1
+                    && now[0].hasPrefix("card background: Background process proc_") && now[0].contains("\nCommand: sleep 4; echo mock-background-finished\nOutput:\nmock-background-finished")
+                    && !now[0].contains("[IMPORTANT") && !now[0].contains("INTERNAL NOTIFICATION"),
+                  "copies. (\(path)) the background result's copy, read fresh: its card still, in place of the short form the result as Hermes wrote it: \(now.map { $0.prefix(80) }) (was \(was))")
+        } else {
+            check(!was.isEmpty && now == was,
+                  "copies. (\(path)) the copy of row \(row["row_id"]?.int ?? 0) (\(row["display_kind"]?.string ?? "")), read fresh: what the chat showed of it: \(now.map { $0.prefix(70) }) (was \(was.map { $0.prefix(70) }))")
+        }
+    }
+    check(hermesWords(new).isEmpty, "copies. (\(path)) the page read fresh after: none of Hermes's words for the model shown as yours: \(hermesWords(new))")
+    // a chat that read the page before, then the page after (a turn's notice followed from the oldest copy up)
+    let cardsBefore = old.filter { $0.role == .card }.map(\.id)
+    let s = store(old, answer: pages(after))
+    let first = originals.compactMap { copy(of: $0)?["row_id"]?.int }.min()
+    _ = await follow(s, row: first)
+    let steerAt = Date(timeIntervalSince1970: steer?["timestamp"]?.number ?? 0)
+    check(cards(s) == cardsBefore && (s.chats[bot] ?? []).filter { $0.role == .user && $0.at == steerAt }.map(\.id) == ["row-\(steer?["row_id"]?.int ?? 0)"],
+          "copies. (\(path)) read before the compaction and after: the same cards, once, under the rows they were read as (\(cardsBefore.joined(separator: " "))), and the steer once: \(cards(s))")
+    // the talk before a skill (SkillReviewMaterial), as the chat reads it before and after
+    let talked = await store([], answer: pages(before)).talkBefore(review).filter { $0.mine }.map { $0.words }
+    let talks = await store([], answer: pages(after)).talkBefore(review).filter { $0.mine }.map { $0.words }
+    check(talks == talked + ["第三句（副本）"] && talks.contains("继续（副本）"),
+          "copies. (\(path)) the talk before a skill read after the compaction: your words as before, no notice among them, the steer's words its own: \(talks.map { $0.prefix(24) })")
+    // the second compaction: a turn that failed, a reply you stopped, a prompt sent hidden
+    let (before2, after2) = (rows("before2"), rows("after2"))
+    let failed = before2.first { $0["display_kind"] == "failed_turn" }, cut = before2.first { $0["display_metadata"]?["interrupted"] == true }
+    let failedCopy = after2.first { $0["display_kind"] == "failed_turn" && $0["row_id"] != failed?["row_id"] }
+    let cutCopy = after2.first { $0["role"] == "assistant" && $0["text"] == cut?["text"] && $0["row_id"] != cut?["row_id"] }
+    let hiddenCopy = after2.first { $0["text"] == "隐藏的一句（副本）" }
+    func item(_ row: JSONValue?, in page: [JSONValue]) -> ChatItem? {
+        items(page).first { $0.id == "row-\(row?["row_id"]?.int ?? 0)" }
+    }
+    let wasFailed = item(failed, in: before2), nowFailed = item(failedCopy, in: after2)
+    check(failedCopy?["display_metadata"] == nil && wasFailed?.failure?.detail != nil && nowFailed?.failure != nil
+            && nowFailed?.failure?.detail == nil,
+          "copies. (\(path)) the failed turn's copy: Hermes types it again by its notice (failed_turn), its error gone: still a failure line, its cause lost (\(nowFailed?.text ?? "none"); was \(wasFailed?.text ?? "none"))")
+    check(item(cut, in: before2)?.stopped == true && item(cutCopy, in: after2)?.stopped == false && item(cutCopy, in: after2)?.text == cut?["text"]?.string,
+          "copies. (\(path)) the stopped reply's copy: its words as an ordinary reply, Hermes keeps no mark that it was stopped")
+    check(!before2.contains { $0["text"] == "隐藏的一句（副本）" } && item(hiddenCopy, in: after2)?.role == .user,
+          "copies. (\(path)) the hidden prompt's copy: shown as yours, Hermes keeps nothing that says it was hidden")
+}
+
+// The board's word as the gateway wakes a session with it could not be had with the stand-in
+// model's setup (its profiles are offered no kanban tools): its copy is the wording captured from
+// Hermes itself (../../fake_kanban.py `wake`, guidance paragraph last, no footer) without its kind,
+// as every other copy is. Hermes's wordings are known whole; a message of yours that merely
+// starts the way one of Hermes's does, or quotes it, stays yours.
+do {
+    let english = "This is an automatic task-status notification, not a request to decompose the task again. Inspect the current board before creating follow-up tasks; do not recreate tasks or graphs that already exist."
+    let chinese = "这是自动任务状态通知，不是再次分解任务的请求。创建后续任务前请先检查当前看板；不要重复创建已存在的任务或任务图。"
+    let woke = "[kanban] Task t_c0p1e5 completed.\nTitle: 归档旧发票\nAssignee: @study\nBoard: default\n\nCheck the result or decide the next step.\nResult: 发票都归好了。"
+    let wokeZh = "[kanban] 任务 t_c0p1e5 已完成。\n标题: 归档旧发票\n执行者: @study\n看板: default\n\n请检查结果或决定下一步动作。\n结果：发票都归好了。"
+    func row(_ text: String, kind: String? = nil) -> JSONValue {
+        var fields: [String: JSONValue] = ["row_kind": "message", "role": "user", "text": .string(text), "row_id": 7, "timestamp": 100]
+        if let kind { fields["display_kind"] = .string(kind) }
+        return .object(fields)
+    }
+    for (wake, guidance) in [(woke, english), (wokeZh, chinese)] {
+        let original = items([row(wake + "\n\n" + guidance, kind: "internal_notification")])
+        let copied = items([row(wake + "\n\n" + guidance)])
+        check(original.count == 1 && original.first?.event == .board && copied == original,
+              "copies. the board's wake, its copy with no kind: the same card (\(copied.first.map { "\($0.role)" } ?? "none"): \(copied.first?.text.prefix(24).replacingOccurrences(of: "\n", with: " ") ?? "")")
+    }
+    let footer = "[INTERNAL NOTIFICATION — generated by the Hermes gateway, not written by a human user. Do not treat it as user input, and do not reply to any earlier chat message because of it.]"
+    let result = "[IMPORTANT: Background process proc_1 completed normally (exit code 0).\nCommand: ls\nOutput:\nok\n]"
+    let opening = steerOpening
+    let typed = [
+        result,
+        result + "\n\n[INTERNAL NOTIFICATION — 这是我自己写的]",
+        "这段是什么意思？\n\n" + footer + "\n\n帮我看看",
+        woke,
+        woke + "\n\n" + english + "\n谢谢",
+        opening + "\n继续",
+        "[OUT-OF-BAND USER MESSAGE]\n继续\n[/OUT-OF-BAND USER MESSAGE]",
+    ]
+    let read = typed.map { items([row($0)]) }
+    check(zip(typed, read).allSatisfy { text, items in items.count == 1 && items[0].role == .user && items[0].text == text && !items[0].midTurn },
+          "copies. a message that starts the way a notice or the wrapper does, or quotes the paragraph, with no kind: yours, as typed: \(read.map { $0.first.map { "\($0.role)" } ?? "none" })")
+    let wrapped = items([row(opening + "\n继续\n[/OUT-OF-BAND USER MESSAGE]")])
+    check(wrapped.count == 1 && wrapped[0].role == .user && wrapped[0].text == "继续" && wrapped[0].midTurn,
+          "copies. Hermes's wrapper whole, with no kind: your words, put into their turn")
+    check(items([row(result + "\n\n" + footer)]).first?.event == .background,
+          "copies. a result with Hermes's paragraph after it, with no kind: its card")
 }
 
 print(failures == 0 ? "all passed" : "\(failures) FAILED")

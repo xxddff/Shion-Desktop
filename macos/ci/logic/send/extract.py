@@ -10,13 +10,18 @@ root, out = Path(sys.argv[1]), Path(sys.argv[2])
 
 WANTED = {
     "macos/Shion/Model/AppStore.swift": ["func send(_ text: String, to botId: String, mode:", "func loadLatestPage(",
-                                         "func uniqued(", "?func transcriptPage("],
+                                         "func uniqued(", "?func transcriptPage(",
+                                         # a page's rows as the chat reads them
+                                         "func transcriptItems(", "func chatItems(from row:", "static func noticeCards(",
+                                         "static func sentMessage(", "static func madeCard(", "func text(of row:",
+                                         "func toolLine("],
     "macos/Shion/Model/AppStore+Media.swift": [
-        "func canSend(", "func sendMessage(", "func submit(_ words: String, _ drafts:", "static func retryable("],
+        "func canSend(", "func sendMessage(", "func submit(_ words: String, _ drafts:", "static func retryable(",
+        "static func userItem("],
     "macos/Shion/Model/AppStore+Control.swift": [
         "func noteFences(", "func controlNote(", "func retryTarget(", "static func startsTurn(", "static func endsTurn(",
         "func retryReply(",
-        "func storedRow(", "?func rowNow(", "func rewind(to row:"],
+        "func storedRow(", "?func rowNow(", "func rewind(to row:", "static func failedTurn("],
     "macos/Shion/Model/AppStore+Reconnect.swift": [
         "func say(", "func submit(_ text: String, id:", "func waitForChat(", "func requeue(", "func resend(",
         "func canResend(", "func rejoin(", "func keepReply(", "func reconcile(", "func settleCorrections(",

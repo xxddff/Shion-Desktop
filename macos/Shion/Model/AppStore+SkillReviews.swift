@@ -115,9 +115,13 @@ extension AppStore {
                 guard row["row_kind"]?.string != "compaction", let role = row["role"]?.string,
                       role == "user" || role == "assistant", (row["timestamp"]?.number ?? .infinity) <= written
                 else { continue }
-                let kind = row["display_kind"]?.string ?? ""
-                let words = text(of: row).trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !words.isEmpty, kind != "hidden", kind != "failed_turn", !Notices.machineKinds.contains(kind),
+                let kind = row["display_kind"]?.string
+                var words = text(of: row).trimmingCharacters(in: .whitespacesAndNewlines)
+                // what you put into a running turn: your words, from Hermes's own compaction's copy too
+                if role == "user", let steered = Notices.steered(words, kind: kind) { words = steered }
+                // nor a notice, its compaction's copy included: the chat shows a card for it (Notices.read)
+                guard !words.isEmpty, kind != "hidden", kind != "failed_turn",
+                      role != "user" || Notices.read(words, kind: kind, display: nil).isEmpty,
                       !words.hasPrefix("［专注检查］"), !Silence.isMarker(words)
                 else { continue }
                 found.append((role == "user", words))

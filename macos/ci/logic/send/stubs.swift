@@ -3,34 +3,15 @@ import Observation
 
 // Stand-ins for what the store's sending and retrying methods lean on, so the production methods
 // (cut out by extract.py, and AppStore+Compose.swift whole) compile and run away from the app, on
-// Linux or a Mac. Only what they touch.
+// Linux or a Mac. Only what they touch. ChatItem and ChatRole are the app's own (cut from
+// Models.swift by run.sh), and so is the reading of a page's rows (AppStore.transcriptItems,
+// chatItems: extract.py), with ChatMedia.swift, Notices.swift and Silence.swift whole.
 
 struct LaunchOptions { var snapshot = false; static let current = LaunchOptions() }
 
 nonisolated enum GatewayError: Error {
     case offline
     case rpc(code: Int, message: String, reason: String?)
-}
-
-enum ChatRole { case user, assistant, system, card, tool }
-
-struct ChatMedia: Hashable {
-    enum Kind { case image, file }
-    var kind: Kind
-    var name: String
-}
-
-struct ChatItem: Identifiable, Hashable {
-    var id: String
-    let role: ChatRole
-    let at: Date
-    var text = ""
-    var media: [ChatMedia] = []
-    var midTurn = false
-    var streaming = false
-    var event: ChatEvent? = nil
-    var stopped = false
-    var failure: TurnFailure? = nil
 }
 
 struct Draft: Identifiable, Equatable {
@@ -45,8 +26,6 @@ struct Draft: Identifiable, Equatable {
     var isReady: Bool { ready }
     var media: ChatMedia { ChatMedia(kind: kind, name: name) }
 }
-
-enum SentNotes { static let defaultCaption = "What do you see in this image?" }
 
 nonisolated struct QuickAskWaiting: Equatable, Sendable {
     let id: String
@@ -182,25 +161,4 @@ final class AppStore {
     func runs(_ snapshot: JSONValue) -> Bool { snapshot["running"]?.bool ?? false }
     func waits(_ botId: String) -> Bool { false }
     func uploadAgain(_ drafts: [Draft], botId: String) async -> [Draft]? { nil }
-
-    /// As the production one for words alone: a file's `@file:` lines are not among them.
-    static func userItem(id: String, at: Date, text: String) -> ChatItem {
-        ChatItem(id: id, role: .user, at: at, text: text)
-    }
-
-    /// A page as the stand-in server gives it: rows with row_id, role, text, and display_kind. A
-    /// compaction row is the line the production one makes of it (a tool's row, which has no
-    /// row_id, is left out).
-    func transcriptItems(_ page: JSONValue) -> [ChatItem] {
-        (page["rows"]?.array ?? []).compactMap { row in
-            guard let id = row["row_id"]?.int, let text = row["text"]?.string else { return nil }
-            let at = Date(timeIntervalSince1970: row["timestamp"]?.number ?? 0)
-            if row["row_kind"]?.string == "compaction" {
-                return ChatItem(id: "compaction-\(id)", role: .system, at: at, text: "更早的对话压缩成了摘要")
-            }
-            var item = ChatItem(id: "row-\(id)", role: row["role"]?.string == "user" ? .user : .assistant, at: at, text: text)
-            item.midTurn = row["display_kind"]?.string == "steer"
-            return item
-        }
-    }
 }

@@ -1323,6 +1323,89 @@ for path in paths {
     }
 }
 
+// ---- a message put into a turn, stored again by Hermes's own compaction ------------------------
+// Hermes's own pages (copies.json: ../../real, stage copies): 「继续（副本）」 put into the run
+// 「慢慢做（副本）」 began (row 11), stored as row 14 (a steer); Hermes compacted the session at the
+// start of 第三句's turn, and kept it as a new row at its time, no longer a steer but Hermes's
+// wrapper for the model round its words. The chat reads it with its own transcriptItems.
+
+let copied = try JSONValue.parse(String(contentsOfFile: CommandLine.arguments[4], encoding: .utf8))
+
+for path in paths {
+    let data = copied[path]
+    let (before, after) = (data?["before1"]?["rows"]?.array ?? [], data?["after1"]?["rows"]?.array ?? [])
+    let prompt = data?["steered"]?.string ?? ""
+    let begun = numbered(11, in: before), steer = numbered(14, in: before)
+    let kept = copy(of: steer, in: after)
+    let third = after.last { $0["text"] == "第三句（副本）" }
+    let thirds = third?["display_metadata"]?["submission_id"]?.string ?? "third"
+    let run = (data?["runs1"]?.array ?? []).first { $0["input_id"]?.string == prompt }
+    check("copies (\(path)) Hermes's pages: 「继续（副本）」 put into the run 「慢慢做（副本）」 began (row 11), row 14, is row \(kept?["row_id"]?.int ?? 0) once compacted, at its time, Hermes's wrapper, no steer; the prompt's own copy names nothing; 第三句 names its submission",
+          begun?["display_metadata"]?["submission_id"]?.string == prompt && steer?["display_kind"] == "steer"
+            && run?["persisted_turn"]?["user_row_id"]?.int == 11
+            && kept?["display_kind"] == nil && kept?["text"]?.string?.hasPrefix("[OUT-OF-BAND USER MESSAGE") == true
+            && kept?["text"]?.string?.contains("\n继续（副本）\n") == true
+            && copy(of: begun, in: after)?["display_metadata"] == nil && third != nil && thirds != "third")
+    for replayed in [true, false] {
+        let how = "\(path), \(replayed ? "frames replayed" : "newest page read")"
+        // said from here into the run 「慢慢做（副本）」 began, as the chat had it then; it got there
+        // (row 14) and its answer was lost; the chat looks once Hermes has compacted the session
+        let s = store(.steer)
+        s.loadedChats = [bot]
+        let server = Server(for: s)
+        servers.append(server)
+        server.rows = rows(before, before: 11)
+        s.chats[bot] = s.transcriptItems(["rows": .array(rows(before, before: 11))])
+            + [ChatItem(id: prompt, role: .user, at: then, text: "慢慢做（副本）"),
+               ChatItem(id: "reply", role: .assistant, at: Date(), text: "", streaming: true)]
+        s.streaming[bot] = "reply"
+        s.noteFences(started(prompt, generation: 5))
+        _ = typed("继续（副本）", in: s)
+        let got = s.chats[bot]?.last?.id ?? ""
+        await until { s.deliveries.state(got) == .unconfirmed }
+        server.rows = after
+        await comeBack(s, replayed: replayed)
+        check("copies (\(how)) 「继续（副本）」 said from here into that run, got there, its answer lost, the session compacted since: its copy, row \(kept?["row_id"]?.int ?? 0), says so: \(standing(got, in: s))",
+              s.deliveries.state(got) == nil && s.control.storedRows[got] == kept?["row_id"]?.int)
+        // the same words put into 第三句's turn and lost: the older steer's copy is not it, read from
+        // the transcript as row 14, or said from here, its row known by its number
+        for live in [false, true] {
+            let r = store(.steer)
+            r.loadedChats = [bot]
+            let readServer = Server(for: r)
+            servers.append(readServer)
+            readServer.rows = before
+            var items = r.transcriptItems(["rows": .array(before)])
+            if live, let index = items.firstIndex(where: { $0.id == "row-14" }) {
+                items[index] = ChatItem(id: "older", role: .user, at: then, text: "继续（副本）", midTurn: true)
+                r.control.storedRows["older"] = 14
+            }
+            r.chats[bot] = items + [ChatItem(id: thirds, role: .user, at: Date(), text: "第三句（副本）"),
+                                    ChatItem(id: "reply", role: .assistant, at: Date(), text: "", streaming: true)]
+            r.streaming[bot] = "reply"
+            r.noteFences(started(thirds, generation: 14))
+            _ = typed("继续（副本）", in: r)
+            let lost = r.chats[bot]?.last?.id ?? ""
+            await until { r.deliveries.state(lost) == .unconfirmed }
+            readServer.rows = after
+            await comeBack(r, replayed: replayed)
+            check("copies (\(how)) 「继续（副本）」 put into 第三句's turn and lost, the older 「继续（副本）」 \(live ? "said from here, its row 14 known by number" : "read from the transcript as row 14") and its copy unwrapped on the page: not it, in doubt: \(standing(lost, in: r))",
+                  inDoubt(lost, in: r))
+        }
+    }
+    // 重试 under a turn that a background result, or 课程's answer, began, stopped, the chat read
+    // after the compaction: the copy of what began it is no message of yours to ask again
+    for original in [9, 36] {
+        guard let began = copy(of: numbered(original, in: before), in: after), let number = began["row_id"]?.int else {
+            check("copies (\(path)) the copy of row \(original) is on the page", false)
+            continue
+        }
+        let s = stoppedChat(rows: rows(after, before: number) + [began], prompt: nil, page: after, answers: [:])
+        check("copies (\(path)) the turn row \(original) began, its copy row \(number) read after the compaction, stopped: no 重试 (\(s.chats[bot]?.dropLast().last.map { "\($0.role)" } ?? "none") before it)",
+              s.retryTarget(bot) == nil)
+    }
+}
+
 #if !BEFORE
 /// The row of yours in 「继续」 that Hermes stored `seconds` after `then`, whatever its number.
 func continued(_ seconds: Int) -> StoredUserRow.Identity {

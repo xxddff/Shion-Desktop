@@ -1,7 +1,8 @@
-"""Cuts the store's reading of a turn's notice (followNotices, and what it calls in its file) out of
-the app's files, verbatim (less `private`), into one `extension AppStore`, so it compiles and runs
-against stand-ins (stubs.swift) away from the app. A declaration that moved or was renamed stops
-the run: say where it is now. Usage:
+"""Cuts the store's reading of a turn's notice (followNotices, and what it calls in its file), the
+reading of a transcript page's rows into a chat's items (transcriptItems, chatItems and what they
+call) and of the talk before a skill (talkBefore) out of the app's files, verbatim (less `private`),
+into one `extension AppStore`, so it compiles and runs against stand-ins (stubs.swift) away from the
+app. A declaration that moved or was renamed stops the run: say where it is now. Usage:
     python3 extract.py <repository root> <out file>"""
 import sys
 from pathlib import Path
@@ -11,7 +12,13 @@ root, out = Path(sys.argv[1]), Path(sys.argv[2])
 WANTED = {
     "macos/Shion/Model/AppStore+Events.swift": ["func followNotices(", "func awaitsOwnReply(", "static func notice(",
                                                 "static func rowNumber(", "static let noticeRows"],
-    "macos/Shion/Model/AppStore.swift": ["static let pageSize", "func transcriptPage("],
+    "macos/Shion/Model/AppStore.swift": ["static let pageSize", "func transcriptPage(", "func transcriptItems(",
+                                         "func uniqued(", "func chatItems(from row:", "static func noticeCards(",
+                                         "static func sentMessage(", "static func madeCard(", "func text(of row:",
+                                         "func toolLine("],
+    "macos/Shion/Model/AppStore+Control.swift": ["static func failedTurn("],
+    "macos/Shion/Model/AppStore+Media.swift": ["static func userItem("],
+    "macos/Shion/Model/AppStore+SkillReviews.swift": ["func talkBefore("],
 }
 
 

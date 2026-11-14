@@ -725,20 +725,22 @@ extension AppStore {
             ?? row["tool_call_id"]?.string.map { "tool-\($0)" } ?? UUID().uuidString
         switch row["role"]?.string {
         case "user":
-            guard row["display_kind"]?.string != "hidden" else { return [] }
+            let kind = row["display_kind"]?.string
+            guard kind != "hidden" else { return [] }
             let body = text(of: row)
             // the plugin's focus-check line that woke 詩音: for her, not for the transcript
             guard !body.hasPrefix("［专注检查］") else { return [] }
-            // what you put into a turn already running (session.steer): your words, in that turn
-            if row["display_kind"]?.string == "steer" {
-                var item = Self.userItem(id: id, at: at, text: body)
+            // what you put into a turn already running (session.steer): your words, in that turn,
+            // also where Hermes's own compaction stored the row again as its wrapper for the model
+            if let words = Notices.steered(body, kind: kind) {
+                var item = Self.userItem(id: id, at: at, text: words)
                 item.midTurn = true
                 return [item]
             }
             // what Hermes gave the assistant as a turn in your name: the board's word, another
-            // assistant's message, a background result. A card each, not a message of yours
-            let notices = Notices.read(body, kind: row["display_kind"]?.string,
-                                       display: row["display_metadata"]?["display_text"]?.string)
+            // assistant's message, a background result. A card each, not a message of yours, and
+            // so is such a row stored again by Hermes's own compaction, its kind gone (Notices.read)
+            let notices = Notices.read(body, kind: kind, display: row["display_metadata"]?["display_text"]?.string)
             guard notices.isEmpty else { return Self.noticeCards(notices, id: id, at: at) }
             return [Self.userItem(id: id, at: at, text: body)]
         case "assistant":
