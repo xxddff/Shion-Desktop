@@ -65,7 +65,7 @@ cp captures/compaction-notices.json ../logic/notices/compaction.json
 ../logic/run.sh send notices
 ```
 
-那里把应用自己发送和重新接上的方法原样编进去，替身服务器照抓到的样子给出压缩前后的页，看一句引导进去、回答丢了的话，压缩以后会不会被认成送到了。
+`send` 把应用自己发送和重新接上的方法原样编进去，替身服务器照抓到的样子给出压缩前后的页，看一句引导进去、回答丢了的话，压缩以后会不会被认成送到了；`notices` 把读通知的方法原样编进去，看压缩前读过的一条后台结果，压缩以后在对话里还是不是一张卡。
 
 ## 2026-11-13 这一次看到的（Hermes `611bf53`）
 
@@ -108,3 +108,4 @@ cp captures/compaction-notices.json ../logic/notices/compaction.json
 - 收回（`session.mutate` 的 `rewind`）：按压缩前的行号收回一句留下来的话（3 → 12、20 → 29、56 → 66），回的和收回一句总结掉的（5、50）一模一样：`invalid_params`，`field: target_message_id`，`detail: "compacted: target user message was summarized when the session was compressed"`，什么都没收回。两种压缩、三次都是这样。原地压缩把留下来的旧行和总结掉的一样标成 `active=0, compacted=1`；换成新会话时旧行留在旧会话里，算压缩前的祖先。从拒绝里分不出这两种。
 - 按新的行号（66）照常收回：`rewound_count: 4`，`target_message` 是那句话，`content` 是原话，`display_metadata` 里还是那个 `submission_id`。原地压缩的，收回以后页上又出现了原来那一行（56）和它的工具调用，在摘要之上：留下来的那份收回了，归档的原行就不再被它挡着；换成新会话的没有。
 - 停掉的那一轮：结束帧 `status: interrupted`，`persisted_turn` 是 `{row_ids: [56, 57, 58, 59], complete: false, user_row_id: 56, submission_id: …}`；页上 56 后面只有一行工具调用，收尾的占位是隐藏的。压缩以后它是 66，提交编号和时间不变。
+- `../logic/notices` 拿这几页跑应用自己的代码：改之前，压缩前读过第一条结果的对话，在第二条结果那一轮结束、读最新几行时，给 48 那一行（第一条结果）又出了一张卡，在新的那张上面；改之后还是原来那张，第二条结果有它自己的一张。压缩以后才读的对话，改之前也是对的。

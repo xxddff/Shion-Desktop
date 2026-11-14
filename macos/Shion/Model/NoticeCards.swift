@@ -66,6 +66,21 @@ nonisolated enum NoticeCards {
             !stored && self.row == nil && stage == nil && !text.isEmpty && role == row.role && event == row.event
                 && text == row.text
         }
+
+        /// This row as read before a compaction stored it again under a new number: a compaction
+        /// keeps a row's time (Hermes's, on both) and its words. A notice's card is also the same
+        /// card of its row (a row of several notices is several cards, at one time); its words
+        /// decide nothing there, its time does: two notices can say the same.
+        func wasCopied(as row: Held) -> Bool {
+            guard stored, row.stored, id != row.id, role == row.role, at == row.at else { return false }
+            return event != nil ? NoticeCards.card(of: id) == NoticeCards.card(of: row.id) : text == row.text
+        }
+    }
+
+    /// Which of its row's cards an item of a page is (AppStore.noticeCards): `row-12` the first,
+    /// `row-12-card2` the second.
+    static func card(of id: String) -> Int {
+        id.range(of: "-card", options: .backwards).flatMap { Int(id[$0.upperBound...]) } ?? 1
     }
 
     /// The same status line again within this is the notice said twice (Hermes means to say it
@@ -121,7 +136,9 @@ nonisolated enum NoticeCards {
     /// The page's rows and the chat's items tell of the same things in the same order, so they are
     /// matched from the newest back, each row to an item above the one the row after it was
     /// matched to:
-    /// - the item under the row's own id is the row (read before);
+    /// - the item under the row's own id is the row (read before), and so is the item that was the
+    ///   row before a compaction stored it again under a new number (`wasCopied`): it stays as it
+    ///   is, the same card or bubble, not one more;
     /// - the item known to be that row is the row: what came live in a turn that is over (its
     ///   reply, the card its start made) was told its rows by the turn's end. Whatever else says
     ///   the same, before or after, is another row (the review's RR10 and RR11 at their root);
@@ -151,7 +168,7 @@ nonisolated enum NoticeCards {
         for index in page.indices.reversed() {
             let row = held(page[index])
             let floor = max(0, limit - (index + 1 + reach))
-            var found = among[..<limit].lastIndex { $0.id == row.id }
+            var found = among[..<limit].lastIndex { $0.id == row.id || $0.wasCopied(as: row) }
             var takesPlace = false
             if found == nil, row.startsTurn {
                 // the card its turn's start made, known by the row the turn's end named; else one

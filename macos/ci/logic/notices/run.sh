@@ -3,7 +3,8 @@
 # and the store's reading of a turn's notice (AppStore.followNotices and the page read it goes
 # through, AppStore.transcriptPage, cut from the app's files as they are by extract.py, with
 # Delivery.swift for the rows that name a submission) against stand-ins for the rest of the app
-# (stubs.swift) and transcripts paged as Hermes pages them.
+# (stubs.swift) and transcripts paged as Hermes pages them, some of them Hermes's own, read before and
+# after a compaction (compaction.json, from ../../real stage compact).
 #   ./run.sh                    SWIFTC names the compiler where `swiftc` is not it
 #   SHION_ROOT=/another/copy    the app's files of another copy of the repository
 set -euo pipefail
@@ -20,4 +21,4 @@ grep -q "var startsTurn" "$work/event.swift"
     "$here/main.swift" "$here/stubs.swift" "$work/extracted.swift" "$work/event.swift" \
     "$model/NoticeCards.swift" "$model/Notices.swift" "$model/Delivery.swift" \
     "$root/macos/Shion/Gateway/JSONValue.swift"
-"$work/check"
+"$work/check" "$here/compaction.json"

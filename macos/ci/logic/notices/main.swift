@@ -771,5 +771,74 @@ do {
     check(most == [12, 50] && cards(u) == ["frame"], "R3-05. and no more than one: \(reads(most)), \(cards(u))")
 }
 
+// A compaction: which card a row read before it is under its new number. The same card of a row at
+// the same time, whatever its words
+do {
+    func card(_ id: String, at: Double) -> Item {
+        Item(id: id, event: .background, text: "Background Process Finished: ./backup.sh", at: Date(timeIntervalSince1970: at),
+             role: "card", stored: true, row: number(id))
+    }
+    var chat = [card("row-80", at: 5), card("row-80-card2", at: 5)]
+    let copied = NoticeCards.put(page: [card("row-90", at: 5), card("row-90-card2", at: 5)], in: &chat) { $0 }
+    check(copied.added == 0 && chat.map(\.id) == ["row-80", "row-80-card2"],
+          "compacted. a row of two notices in the same words, numbered anew: the same two cards: \(chat.map(\.id))")
+    let later = NoticeCards.put(page: [card("row-90", at: 5), card("row-90-card2", at: 5), card("row-95", at: 9)], in: &chat) { $0 }
+    check(later.added == 1 && chat.map(\.id) == ["row-80", "row-80-card2", "row-95"],
+          "compacted. …and the same words at another time another card: \(chat.map(\.id))")
+}
+
+// A compaction keeps a notice's row as a new row, its time and words as they were
+// (compaction.json: pages Hermes gave, ../../real stage compact, in place and into a new session).
+// A command's result started a turn (row 38) and the chat read it; the session was compacted, the
+// row is row 48 now; a second command's result, in the same words, started a turn (row 54), whose
+// end has the store read the newest rows. The notice the chat shows is the same card, once; the new
+// one is a card of its own, though it says the same.
+
+let compaction = try JSONValue.parse(String(contentsOfFile: CommandLine.arguments[1], encoding: .utf8))
+
+/// The newest `limit` rows of `rows` (oldest first), or the `limit` before a cursor, as Hermes pages
+/// a transcript newest first.
+func pages(_ rows: [JSONValue]) -> (JSONValue) -> JSONValue {
+    { params in
+        let limit = params["limit"]?.int ?? 100
+        let end = params["cursor"]?.string.flatMap { Int($0.dropFirst("before-".count)) } ?? rows.count
+        let start = max(0, end - limit)
+        return ["rows": .array(Array(rows[start..<end])), "next_cursor": start > 0 ? .string("before-\(start)") : .null]
+    }
+}
+
+for path in ["in place", "rotation"] {
+    let captured = compaction[path]
+    let start = captured?["start"]
+    let turn = captured?["persisted_turn"]
+    let read = AppStore().transcriptItems(["rows": captured?["before3"]?["rows"] ?? []])
+    func followed(from chat: [ChatItem]) async -> AppStore {
+        // the second result's turn as it came: the card its start made, and its reply, the rows its end named
+        var chat = chat
+        let rows = ["live-reply": turn?["final_assistant_row_id"]?.int ?? 0]
+        for card in Notices.read(start?["text"]?.string ?? "", kind: start?["display_kind"]?.string,
+                                 display: start?["display_text"]?.string).enumerated().map({ index, notice in
+            ChatItem(id: index == 0 ? NoticeCards.id(.begun) : "card-\(index)", role: .card, at: Date(), text: notice.text,
+                     event: notice.event)
+        }) {
+            NoticeCards.begin(card, in: &chat) { AppStore.notice($0, rows: rows) }
+        }
+        chat.append(ChatItem(id: "live-reply", role: .assistant, at: Date(), text: "后台的事有结果了（mock）。"))
+        var known = rows
+        for card in chat where NoticeCards.stage(of: card.id) == .begun { known[card.id] = turn?["user_row_id"]?.int }
+        let s = store(chat, rows: known, answer: pages(captured?["after3b"]?["rows"]?.array ?? []))
+        _ = await follow(s, row: turn?["user_row_id"]?.int)
+        return s
+    }
+    let s = await followed(from: read)
+    check(cards(s) == ["row-38", "row-54"],
+          "compacted. (\(path)) read before the compaction, the notice is its card still, once, and the new one in its words its own: \(cards(s))")
+    check(order(s).hasSuffix("row-37 row-38 row-39 row-54 live-reply"),
+          "compacted. (\(path)) …each where it was, ahead of its reply: …\(order(s).suffix(60))")
+    // read after the compaction: nothing of it to tell apart
+    let after = await followed(from: AppStore().transcriptItems(["rows": captured?["after3"]?["rows"] ?? []]))
+    check(cards(after) == ["row-48", "row-54"], "compacted. (\(path)) the chat read after the compaction: the same two cards: \(cards(after))")
+}
+
 print(failures == 0 ? "all passed" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)
