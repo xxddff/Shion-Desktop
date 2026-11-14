@@ -471,16 +471,13 @@ extension AppStore {
         return there
     }
 
-    /// Hermes's time of the row the turn under way began with as a message was said
-    /// (DeliveryCheck.Before.turn): the message is stored after it. An item read from the
-    /// transcript has that time as its own; a prompt said from here is the row that names its
-    /// submission on `page`, and what came live is the row its turn's end named (ChatControl
-    /// .storedRows), when that row is on the page. Nil when neither is known: then only numbers,
-    /// names and rows' times and words tell other messages' rows apart.
-    private func began(_ turn: DeliveryCheck.TurnStart?, page: JSONValue) -> Date? {
-        guard let turn else { return nil }
-        if let at = turn.at { return at }
-        guard let number = DeliveryCheck.named(in: page)[turn.id] ?? control.storedRows[turn.id],
+    /// Hermes's time of the row that began the run a message was put into
+    /// (DeliveryCheck.Before.turn): the message is stored after it. An admission is the row on
+    /// `page` that names its submission (whoever sent it), or, sent from here, the row its turn's
+    /// end named (ChatControl.storedRows), when that row is on the page. Nil when neither is: then
+    /// only numbers, names and rows' times and words tell other messages' rows apart.
+    private func began(_ turn: String?, page: JSONValue) -> Date? {
+        guard let turn, let number = DeliveryCheck.named(in: page)[turn] ?? control.storedRows[turn],
               let row = (page["rows"]?.array ?? []).first(where: { $0["row_id"]?.int == number })
         else { return nil }
         return row["timestamp"]?.number.map { Date(timeIntervalSince1970: $0) }

@@ -40,4 +40,4 @@ python3 "$here/extract.py" "$root" "$work/extracted.swift"
     "$model/AppStore+Compose.swift" "$model/Deliveries.swift" "$model/Delivery.swift" "$model/Compose.swift" \
     "$model/NoticeCards.swift" "$model/Rejoin.swift" "$model/TurnFailure.swift" \
     "$root/macos/Shion/Gateway/JSONValue.swift" "$root/macos/Shion/Gateway/EventCursors.swift"
-"$work/checks" "$here/compaction.json" "$here/autocompaction.json"
+"$work/checks" "$here/compaction.json" "$here/autocompaction.json" "$here/queued.json"

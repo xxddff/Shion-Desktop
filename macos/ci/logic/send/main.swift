@@ -1156,12 +1156,23 @@ func autoChat(_ path: String, live: Bool, anonymous: Bool = false) -> (AppStore,
         s.control.storedRows[submission] = autoEnd(path, "继续（自动）")
     }
     let third = autoEnd(path, "第三句（自动）").flatMap { numbered($0, in: autoPage(path, "after")) }
-    items.append(ChatItem(id: third?["display_metadata"]?["submission_id"]?.string ?? "third", role: .user, at: Date(),
-                          text: "第三句（自动）"))
+    let submission = third?["display_metadata"]?["submission_id"]?.string ?? "third"
+    items.append(ChatItem(id: submission, role: .user, at: Date(), text: "第三句（自动）"))
     items.append(ChatItem(id: "reply", role: .assistant, at: Date(), text: "从前有座山", streaming: true))
     s.chats[bot] = items
     s.streaming[bot] = "reply"
+    // its run begun: Hermes says so of the admission
+    s.noteFences(started(submission, generation: 1))
     return (s, server)
+}
+
+/// The session.info frame Hermes publishes as a run begins: the admission it runs, by its input_id
+/// (the submission id), with the run's execution_generation (null while it waits); as queued.json's
+/// frames have it.
+func started(_ submission: String, generation: Int) -> JSONValue {
+    ["type": "session.info", "session_id": .string(session), "execution_generation": .number(Double(generation)),
+     "payload": ["pending": [["input_id": .string(submission), "execution_generation": .number(Double(generation)),
+                              "status": "started"]]]]
 }
 
 for path in paths {
@@ -1241,6 +1252,75 @@ for path in paths {
     await until { !asked(sent).isEmpty || notRetried(sent) != nil }
     check("auto 重试 (\(path)) sent from here: its turn's end named the copy, taken back as it: \(retried(sent))",
           rewound(sent) == [now] && asked(sent) == ["慢慢做，满了（自动）"] && notRetried(sent) == nil)
+}
+
+// ---- a message put into a turn with prompts queued behind that turn --------------------------------
+// Hermes's own pages (queued.json: ../../real, stage queued): 「慢慢做（排队）」 began run 1 (row 1);
+// while its command ran, two prompts were queued behind it (rows 6 and 8, stored and timed as their
+// own turns began, after run 1) and 「继续（排队）」 was put into run 1 (row 4, stored in it). Which
+// admission a run is, session.info says as it begins (`pending`: input_id, execution_generation).
+// A message put into run 1 is stored after run 1's own first row, not after the prompts queued
+// behind it, which the chat shows before it.
+
+let queued = try JSONValue.parse(String(contentsOfFile: CommandLine.arguments[3], encoding: .utf8))
+
+/// 詩音's chat with run 1 under way: its prompt said from here, unless `ours` is false (another
+/// client's: the chat never had it), its frames up to its end taken (`frames`), and the items
+/// `behind` it; the server (kept in `servers`) giving the page Hermes gave once every queued turn
+/// had run.
+func queuedChat(_ path: String, ours: Bool = true, behind: [ChatItem]) -> AppStore {
+    let data = queued[path]
+    let first = data?["submissions"]?["慢慢做（排队）"]?.string ?? ""
+    let s = store(.steer)
+    s.loadedChats = [bot]
+    let server = Server(for: s)
+    servers.append(server)
+    server.rows = data?["queued"]?["rows"]?.array ?? []
+    s.chats[bot] = (ours ? [ChatItem(id: first, role: .user, at: then, text: "慢慢做（排队）")] : [])
+        + [ChatItem(id: "reply", role: .assistant, at: Date(), text: "", streaming: true)] + behind
+    s.streaming[bot] = "reply"
+    // what came of run 1 before its end, its session's id this chat's
+    for frame in (data?["frames"]?.array ?? []).prefix(while: { $0["type"] != "message.complete" }) {
+        guard case .object(var fields) = frame else { continue }
+        fields["session_id"] = .string(session)
+        s.noteFences(.object(fields))
+    }
+    return s
+}
+
+for path in paths {
+    let data = queued[path]
+    let rows = data?["queued"]?["rows"]?.array ?? []
+    func time(_ number: Int) -> Double { numbered(number, in: rows)?["timestamp"]?.number ?? 0 }
+    let one = data?["submissions"]?["排队的第一句（排队）"]?.string ?? ""
+    let two = data?["submissions"]?["排队的第二句（排队）"]?.string ?? ""
+    check("queued (\(path)) Hermes's pages: 「继续（排队）」 put into run 1 is row 4, after run 1's prompt (row 1) and before the prompts queued behind run 1 (rows 6, 8)",
+          numbered(4, in: rows)?["display_kind"] == "steer" && time(1) < time(4) && time(4) < time(6) && time(6) < time(8)
+            && numbered(6, in: rows)?["display_metadata"]?["submission_id"]?.string == one
+            && numbered(8, in: rows)?["display_metadata"]?["submission_id"]?.string == two)
+    let waiting = [ChatItem(id: one, role: .user, at: Date(), text: "排队的第一句（排队）"),
+                   ChatItem(id: two, role: .user, at: Date(), text: "排队的第二句（排队）")]
+    // the board's word told as the turn ran, its turn not begun; and a prompt that did not go
+    let told = ChatItem(id: NoticeCards.id(.told), role: .card, at: Date(), text: "✔ [default] @study Kanban t_1 done — 整理", event: .board)
+    let unsent = ChatItem(id: "unsent", role: .user, at: Date(), text: "没发出去的一句")
+    for (behind, what, ours) in [(waiting, "two prompts queued behind it", true), (Array(waiting.prefix(1)), "one prompt queued behind it", true),
+                                 ([told], "the board's word told, its turn not begun", true), ([unsent], "a prompt that did not go", true),
+                                 (waiting, "begun by another client, two prompts queued behind it", false)] {
+        for replayed in [true, false] {
+            let how = "\(path), \(replayed ? "frames replayed" : "newest page read")"
+            let s = queuedChat(path, ours: ours, behind: behind)
+            if behind.contains(unsent) {
+                s.deliveries.track(unsent.id, botId: bot, text: unsent.text, at: Date())
+                s.deliveries.set(unsent.id, .unsent(nil))
+            }
+            _ = typed("继续（排队）", in: s)
+            let steer = s.chats[bot]?.last?.id ?? ""
+            await until { s.deliveries.state(steer) == .unconfirmed }
+            await comeBack(s, replayed: replayed)
+            check("queued (\(how)) 「继续（排队）」 put into run 1, \(what), got there, its answer lost: its row 4 says so: \(standing(steer, in: s))",
+                  s.deliveries.state(steer) == nil && s.control.storedRows[steer] == 4)
+        }
+    }
 }
 
 #if !BEFORE

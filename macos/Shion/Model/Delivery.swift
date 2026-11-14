@@ -98,16 +98,11 @@ nonisolated enum DeliveryCheck {
         /// one too many when such a message was then refused, and the message it was counted for
         /// could stay in doubt for good with its row in the transcript.
         var others: Set<String> = []
-        /// The chat's item that began the turn under way as it was said (the last before it that
-        /// starts a turn): Hermes stores the message after that item's row (AppStore.began).
-        var turn: TurnStart?
-    }
-
-    /// An item that began a turn, and Hermes's time of its row where the item was read from the
-    /// transcript (its own time is the row's then).
-    nonisolated struct TurnStart: Equatable, Sendable {
-        var id: String
-        var at: Date?
+        /// For a message put into a running turn: the admission that run is, by its submission id,
+        /// as Hermes said of that run (ChatControl.began). Hermes stores the message after that
+        /// admission's row (AppStore.began). Nil when that is not known; never the last item before
+        /// it that starts a turn, which may be a prompt waiting behind the run, stored after it.
+        var turn: String?
     }
 
     /// What is known of the other messages in a message's words at the moment the transcript is

@@ -37,10 +37,21 @@ final class ChatControl {
     /// give the same row to another message in the same words. By their time and words
     /// (StoredUserRow.Identity): compacted, the session has such a row under a new number.
     @ObservationIgnored var confirmedRows: [String: Set<StoredUserRow.Identity>] = [:]
+    /// session id → the newest run Hermes said had begun, and the admission it runs, by its
+    /// submission id (`pending` of a session.info or a snapshot: an entry's `execution_generation`
+    /// is that run's once it runs, null while it waits). A message put into that run is stored
+    /// after that admission's row (DeliveryCheck.Before.turn). A turn Hermes begins itself is an
+    /// admission of its own, named for a background process's completion, which no row names.
+    @ObservationIgnored var began: [String: Began] = [:]
 
     struct Fence {
         var generation: Int?
         var revision: Int?
+    }
+
+    struct Began {
+        var generation: Int
+        var by: String
     }
 
     /// Never backwards: a frame that comes late cannot undo a newer one. A refusal's fresh fences
@@ -121,6 +132,13 @@ extension AppStore {
             revision = payload["revision"]?.int ?? revision
         }
         control.note(sessionId, generation: generation, revision: revision)
+        // which admission a run is: a snapshot's own `pending`, or a session.info's
+        for entry in (type == "session.info" ? payload["pending"] : frame["pending"])?.array ?? [] {
+            if let run = entry["execution_generation"]?.int, let id = entry["input_id"]?.string,
+               run > control.began[sessionId]?.generation ?? 0 {
+                control.began[sessionId] = ChatControl.Began(generation: run, by: id)
+            }
+        }
         guard type == "message.complete" else { return }
         // `submission_id` is whose turn it was: a prompt sent from here is named by its item's id
         let turn = payload["persisted_turn"]
@@ -247,7 +265,7 @@ extension AppStore {
 
     /// What starts a turn: a message you typed (not one put into a turn already running), or a
     /// notice Hermes sends in your name (the board's word, another assistant's message).
-    static func startsTurn(_ item: ChatItem) -> Bool {
+    private static func startsTurn(_ item: ChatItem) -> Bool {
         (item.role == .user && !item.midTurn) || (item.role == .card && item.event?.startsTurn == true)
     }
 

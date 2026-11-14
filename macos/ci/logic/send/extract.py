@@ -14,12 +14,14 @@ WANTED = {
     "macos/Shion/Model/AppStore+Media.swift": [
         "func canSend(", "func sendMessage(", "func submit(_ words: String, _ drafts:", "static func retryable("],
     "macos/Shion/Model/AppStore+Control.swift": [
-        "func controlNote(", "func retryTarget(", "static func startsTurn(", "static func endsTurn(", "func retryReply(",
+        "func noteFences(", "func controlNote(", "func retryTarget(", "static func startsTurn(", "static func endsTurn(",
+        "func retryReply(",
         "func storedRow(", "?func rowNow(", "func rewind(to row:"],
     "macos/Shion/Model/AppStore+Reconnect.swift": [
         "func say(", "func submit(_ text: String, id:", "func waitForChat(", "func requeue(", "func resend(",
         "func canResend(", "func rejoin(", "func keepReply(", "func reconcile(", "func settleCorrections(",
         "?func onPage(", "?func began("],
+    # what 3e1c409 and a4c1a83 read an item's row from, to see them fail (SHION_ROOT)
     "macos/Shion/Model/AppStore+Events.swift": ["?static func rowNumber("],
 }
 

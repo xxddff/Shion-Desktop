@@ -12,7 +12,7 @@
 | 目录 | 查什么 |
 | --- | --- |
 | `notices/` | 事件卡片：同一条通知只有一张卡，记录行和卡片怎么对上、放在哪，Hermes 各种通知原文读成什么（`NoticeCards.swift`、`Notices.swift`）；一轮结束后往上读到哪一页为止，对着照 Hermes 的样子分页的对话记录（`AppStore+Events.swift` 的 `followNotices`）；压缩以后读到的同一行还是原来那张卡，Hermes 自己压缩以后也不多出卡来（压缩前后的页是真的 Hermes 给的：`compaction.json` 是 `../real` 的 `compact` 阶段的，`autocompaction.json` 是 `auto` 阶段的） |
-| `send/` | 发送和确认：引导、打断、排队，回执丢了以后靠对话记录确认，一行只确认一条，压缩以后也一样，Hermes 自己压缩以后也是；重试收回的是那条消息现在的行，压缩以后也是（压缩前后的页和收回的回答是真的 Hermes 给的：`compaction.json` 是 `../real` 的 `compact` 阶段的，`autocompaction.json` 是 `auto` 阶段的）（`AppStore+Compose.swift`、`AppStore+Reconnect.swift`、`AppStore+Control.swift` 的重试、`Deliveries.swift`、`Delivery.swift`） |
+| `send/` | 发送和确认：引导、打断、排队，回执丢了以后靠对话记录确认，一行只确认一条，压缩以后也一样，Hermes 自己压缩以后、一轮后面排着别的提示时也是；重试收回的是那条消息现在的行，压缩以后也是（压缩前后的页和收回的回答是真的 Hermes 给的：`compaction.json` 是 `../real` 的 `compact` 阶段的，`autocompaction.json` 是 `auto` 阶段的，`queued.json` 是 `queued` 阶段的）（`AppStore+Compose.swift`、`AppStore+Reconnect.swift`、`AppStore+Control.swift` 的重试、`Deliveries.swift`、`Delivery.swift`） |
 | `talk/` | 技能审核会话：发出的话不丢、再试一次、订阅断了重新接上、快照不盖过更新的帧、重新接上被拒（`SkillReviewTalk.swift`、`Rejoin.swift`） |
 | `chat/` | Bot Chat 重新接上时快照和帧的先后，重新接上被拒时说什么、什么时候再试（`AppStore.swift`、`AppStore+Reconnect.swift` 里的几个方法，`Rejoin.swift`） |
 

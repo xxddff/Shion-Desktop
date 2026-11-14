@@ -57,6 +57,12 @@ final class Deliveries {
         sent[id]?.before = before
     }
 
+    /// It goes into a running turn whose run `starter` began (DeliveryCheck.Before.turn), or one
+    /// whose beginning is not known (nil).
+    func put(_ id: String, intoRunBegunBy starter: String?) {
+        sent[id]?.before?.turn = starter
+    }
+
     /// Said again (重发, 再发一次): it is the newest message in its words now, so what else reads
     /// the same is all before it, and nothing was said after it.
     func saidAgain(_ id: String, past before: DeliveryCheck.Before) {

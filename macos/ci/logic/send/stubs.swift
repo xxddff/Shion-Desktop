@@ -78,6 +78,7 @@ final class MediaStub {
 
 final class ChatControl {
     struct Fence { var generation: Int?; var revision: Int? }
+    var stopping: Set<String> = []
     var retrying: Set<String> = []
     var fences: [String: Fence] = [:]
     var storedRows: [String: Int] = [:]
@@ -88,6 +89,8 @@ final class ChatControl {
     var confirmedRows: [String: Set<StoredUserRow.Identity>] = [:]
     #endif
     var namedRows: [String: Set<Int>] = [:]
+    struct Began { var generation: Int; var by: String }
+    var began: [String: Began] = [:]
 
     /// As the production one: never backwards, but for a refusal's fresh fences.
     func note(_ sessionId: String, generation: Int?, revision: Int?, replacing: Bool = false) {
@@ -133,6 +136,7 @@ final class AppStore {
     var chats: [String: [ChatItem]] = [:]
     var chatErrors: [String: String] = [:]
     var sessions: [String: String] = [:]
+    var sessionBots: [String: String] = [:]
     var busyMode = BusyMode.queue
     var live = true
     var readOnly = false

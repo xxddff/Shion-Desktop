@@ -104,6 +104,10 @@ extension AppStore {
             if deliveries.sent[id]?.before == nil {
                 deliveries.aim(id, past: sameWords(as: id, in: botId))
             }
+            // and what began the run it goes into, where Hermes said so: Hermes stores it after
+            // that row (AppStore.began)
+            let began = control.began[sessionId]
+            deliveries.put(id, intoRunBegunBy: began?.generation == correction.generation ? began?.by : nil)
             let answer: JSONValue?
             do {
                 answer = try await gateway.call(correction.method, [
@@ -132,16 +136,10 @@ extension AppStore {
     /// they stand now (DeliveryCheck.Before): those stored as a known row (read from the
     /// transcript, also by their time and words), and (by their ids) the ones not known not to be
     /// there, said and not stored yet or their own receipt still out. The words are the item's,
-    /// or (the item gone from the chat) the ones it was sent with, as a row shows them. And the
-    /// item that began the turn under way, which Hermes stored before it.
+    /// or (the item gone from the chat) the ones it was sent with, as a row shows them.
     func sameWords(as id: String, in botId: String) -> DeliveryCheck.Before {
         var before = DeliveryCheck.Before()
         let items = chats[botId] ?? []
-        if let index = items.firstIndex(where: { $0.id == id }),
-           let start = items[..<index].last(where: { Self.startsTurn($0) }) {
-            // one read from the transcript has its row's time already
-            before.turn = DeliveryCheck.TurnStart(id: start.id, at: Self.rowNumber(start.id) == nil ? nil : start.at)
-        }
         guard let words = words(of: id, in: botId) else { return before }
         for item in items where item.role == .user && item.id != id && item.text == words {
             switch deliveries.state(item.id) {
