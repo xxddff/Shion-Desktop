@@ -111,8 +111,17 @@ struct ChatView: View {
                                 did = "toEnd (container)"
                                 toEnd(lines, with: reader)
                             } else if new.height == old.height {
-                                follow.on = new.below <= 40
-                                did = "on=\(follow.on) (same height)"
+                                // the reader's, once the transcript was put at its end and when
+                                // what shows did move. A transcript just made reports where it
+                                // is before that, from its top, nothing having moved: taken for
+                                // the reader's, that ended the following as a chat opened, and a
+                                // reply arriving in a chat just opened was not followed down
+                                if follow.placed, abs(new.below - old.below) > 0.5 {
+                                    follow.on = new.below <= 40
+                                    did = "on=\(follow.on) (same height)"
+                                } else {
+                                    did = "not the reader's (placed=\(follow.placed))"
+                                }
                             } else if follow.on, Date() < follow.until, new.below > 1, let last = lines.last {
                                 did = "again to \(last.id.suffix(6))"
                                 reader.scrollTo(last.id, anchor: .bottom)
