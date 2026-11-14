@@ -46,6 +46,10 @@ nonisolated enum NoticeCards {
         /// It is a row of the transcript under the row's own id (read from a page), not something
         /// that came as a frame or was said here: it is that row and no other, whatever it says.
         var stored = false
+        /// The transcript row it is known to be: a row read from a page says so in its id, and
+        /// what came live learns it as its turn ends (the end names the rows the turn was stored
+        /// as: `persisted_turn`). Nil while its turn is under way.
+        var row: Int?
 
         var stage: Stage? { NoticeCards.stage(of: id) }
 
@@ -57,9 +61,10 @@ nonisolated enum NoticeCards {
         }
 
         /// Something that came live and may be this row: the same words from the same side, and
-        /// no row's id of its own.
+        /// not known to be any row yet.
         func isLive(_ row: Held) -> Bool {
-            !stored && stage == nil && !text.isEmpty && role == row.role && event == row.event && text == row.text
+            !stored && self.row == nil && stage == nil && !text.isEmpty && role == row.role && event == row.event
+                && text == row.text
         }
     }
 
@@ -117,12 +122,14 @@ nonisolated enum NoticeCards {
     /// matched from the newest back, each row to an item above the one the row after it was
     /// matched to:
     /// - the item under the row's own id is the row (read before);
-    /// - a card that came as a frame and says the same is this notice, and the row takes its
-    ///   place, with its id and its time: the newest such card for the newest row, so a page that
-    ///   holds only the last of several notices in the same words gives them to the last of the
-    ///   cards (matched from the oldest they went to the wrong ones: the review's RR10);
-    /// - for any other row, something that came live in the same words from the same side: never
-    ///   an item that is another row (RR11), and none further up than the page can reach.
+    /// - the item known to be that row is the row: what came live in a turn that is over (its
+    ///   reply, the card its start made) was told its rows by the turn's end. Whatever else says
+    ///   the same, before or after, is another row (the review's RR10 and RR11 at their root);
+    /// - only for a turn still under way, whose items know no row yet: a card that came as a
+    ///   frame and says the same is this notice (the newest such card for the newest row), and
+    ///   for any other row something that came live in the same words from the same side, none
+    ///   further up than the page can reach.
+    /// The row takes the place of a card that came as a frame, with its id and its time.
     /// A row that started a turn and has none of these (the gateway's board wake and another
     /// assistant's message: their turn's start says nothing) gets its card: ahead of the item
     /// of the nearest row after it (the reply it started), else behind that of the nearest row
@@ -147,11 +154,15 @@ nonisolated enum NoticeCards {
             var found = among[..<limit].lastIndex { $0.id == row.id }
             var takesPlace = false
             if found == nil, row.startsTurn {
-                found = among[floor..<limit].lastIndex { $0.stage == .begun && $0.says(row) }
-                    ?? among[floor..<limit].lastIndex { $0.stage == .told && $0.says(row) }
+                // the card its turn's start made, known by the row the turn's end named; else one
+                // of a turn still under way that says the same
+                found = row.row.flatMap { number in among[..<limit].lastIndex { $0.stage != nil && $0.row == number && $0.says(row) } }
+                    ?? among[floor..<limit].lastIndex { $0.stage == .begun && $0.row == nil && $0.says(row) }
+                    ?? among[floor..<limit].lastIndex { $0.stage == .told && $0.row == nil && $0.says(row) }
                 takesPlace = found != nil
             } else if found == nil {
-                found = among[floor..<limit].lastIndex { $0.isLive(row) }
+                found = row.row.flatMap { number in among[..<limit].lastIndex { !$0.stored && $0.stage == nil && $0.row == number } }
+                    ?? among[floor..<limit].lastIndex { $0.isLive(row) }
             }
             if let found {
                 if takesPlace {
@@ -196,10 +207,10 @@ nonisolated enum NoticeCards {
 
     /// Whether to read further up the transcript after `pages` pages, for the row that started a
     /// turn now over (`row`, as its end names it) or for a card that came as a frame and still
-    /// has no row (`awaiting`). `read` are the ids of the rows read so far. The row is looked
-    /// for until it was read or passed; a card without a row is worth one more page, as it was.
-    /// So notices that came while away are all found, however many turns there were, and nothing
-    /// is read for a turn whose row is among the newest.
+    /// has no row (`awaiting`: a turn that failed names none). `read` are the ids of the rows read
+    /// so far. The row is looked for until it was read or passed, however far up that is; a card
+    /// without a row is worth one more page. So notices that came while away are all found,
+    /// however many turns there were, and nothing is read for a turn whose row is among the newest.
     static func readsFurther(for row: Int?, read: [Int], pages: Int, awaiting: Bool) -> Bool {
         if let row, !read.isEmpty, !read.contains(where: { $0 <= row }) { return true }
         return awaiting && pages < 2

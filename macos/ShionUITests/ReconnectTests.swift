@@ -173,6 +173,44 @@ final class ReconnectTests: XCTestCase {
                     + "\(said.count), \(answers.count), \(replies.count), \(earlier != nil)")
         }
 
+        // 2c. more turns while away than the newest rows first read can show: eight messages from
+        // 课程, each a turn whose start says nothing, then two results folded into one turn (课程's
+        // answer and a command that failed). Each result has its card, neither hiding the other
+        // under a count; and every one of the eight messages has its card, the transcript being
+        // read further up for the ones the newest rows do not reach
+        say("断线：很多", in: app)
+        XCTAssertTrue(waitForText("好的（CI）。", in: app, timeout: 10), "the short reply did not come")
+        XCTAssertTrue(waitForText("重新连接中…", in: app, timeout: 10), "the socket did not drop")
+        StandIn.tunnelUp("2c. many turns Hermes started by itself while away")
+        XCTAssertTrue(waitUntil(timeout: 40) { !self.hasText("重新连接中…", in: app) }, "the connection did not come back")
+        XCTAssertTrue(waitForText("两件事都知道了（CI）。", in: app, timeout: 20), "the turns Hermes started while away did not come")
+        let both = waitUntil(timeout: 15) {
+            self.places("周五有空（CI）。", in: app).count == 1
+                && self.cards("event-card", holding: "No space left on device（CI）", in: app) >= 1
+        }
+        keep(app.windows.firstMatch.screenshot(), "reconnect-4c-many-while-away")
+        XCTAssertTrue(both, "two results folded into one turn are not a card each: the answer "
+                      + "\(places("周五有空（CI）。", in: app).count), the failed command "
+                      + "\(cards("event-card", holding: "No space left on device（CI）", in: app))")
+        XCTAssertTrue(cards("event-card", holding: "exit code 1", in: app) >= 1 && cards("event-card", holding: "./backup.sh", in: app) >= 1,
+                      "the command that failed does not say which it was and how it ended")
+        XCTAssertFalse(hasText("2 Background Processes Finished", in: app), "the two results show as a count")
+        XCTAssertFalse(hasText("bot_mode_dm", in: app), "the command that waited for the answer shows in the chat")
+        // the find bar counts the lines of the whole chat, not only the rows in the window
+        app.typeKey("f", modifierFlags: .command)
+        let finding = element("find-field", in: app)
+        if finding.waitForExistence(timeout: 5) {
+            finding.click()
+            finding.typeText("带话（CI）")
+            let count = element("find-count", in: app)
+            let all = waitUntil(timeout: 15) { self.total(count) == 8 }
+            keep(app.windows.firstMatch.screenshot(), "reconnect-4d-all-found")
+            XCTAssertTrue(all, "not every message that came while away has its card: \(count.exists ? count.label : "no count") of 8")
+            finding.typeKey(.escape, modifierFlags: [])
+        } else {
+            XCTFail("⌘F did not open the find bar")
+        }
+
         // 3. admitted, and the receipt lost with the connection
         say("断线：还没回执", in: app)
         let unsure = element("unsure", in: app).waitForExistence(timeout: 10)
@@ -454,6 +492,14 @@ final class ReconnectTests: XCTestCase {
             }
         }
         return tops.sorted()
+    }
+
+    /// How many lines the find bar says hold what is looked for: the 8 of "3/8".
+    @MainActor
+    private func total(_ count: XCUIElement) -> Int? {
+        guard count.exists else { return nil }
+        let said = (count.value as? String).flatMap { $0.isEmpty ? nil : $0 } ?? count.label
+        return said.split(separator: "/").last.flatMap { Int($0.trimmingCharacters(in: .whitespaces)) }
     }
 
     /// Every event card accessibility has, for reading after the run: where it is and what it says.

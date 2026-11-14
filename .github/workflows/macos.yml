@@ -9,7 +9,9 @@ name: macOS app
 # contains [package]. A manual run can also do less (`run`): only build, the debug app for the
 # tests and the release app as it is packaged (which leaves the screenshots' made-up day out), or
 # build and run one suite against the stand-in, with more named beside it (`suites`), each on its
-# own runner: what failed is run again in about six minutes, not the eighteen of everything.
+# own runner: what failed is run again in about six minutes, not the eighteen of everything. Or
+# only the logic checks (`logic`: macos/ci/logic, the app's own sources compiled with small
+# stand-ins and run against scripted answers; no Xcode project, no window, a couple of minutes).
 #
 # UI tests own the screen, so a runner runs one suite at a time; the run is split over runners:
 #   build        compiles for testing once and hands the products on (test-products, a tar: a
@@ -17,6 +19,7 @@ name: macOS app
 #   screenshots  every page, from those products
 #   e2e          the suites against the stand-in, in three shards of about twelve minutes
 #   package      the Release build and Shion.dmg; waits for nothing and for no test
+#   logic        the logic checks; waits for nothing
 #   shots        puts every job's screenshots and stand-in logs in one artifact (Linux)
 # The test build uses Xcode's compilation cache (results stored by what went into each compile:
 # the sources, the flags, the SDK), kept between runs with actions/cache. A changed file is another
@@ -31,12 +34,13 @@ on:
   workflow_dispatch:
     inputs:
       run:
-        description: all (every test, the screenshots, the package), build (compile only), or one suite
+        description: all (every test, the screenshots, the package), build (compile only), logic (the logic checks only), or one suite
         type: choice
         default: all
         options:
           - all
           - build
+          - logic
           - SignInTests
           - BoardTests
           - BotsTests
@@ -64,8 +68,23 @@ env:
   SHION_SUITES: ${{ inputs.suites }}
 
 jobs:
+  # the notice cards, sending and confirming, a review's session, resuming a chat: the rules
+  # themselves, on the app's own source files, without the app (macos/ci/logic/README.md)
+  logic:
+    name: Logic checks
+    if: ${{ (inputs.run || 'all') == 'all' || inputs.run == 'logic' }}
+    runs-on: xcode-27
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: The logic checks
+        run: |
+          swiftc --version
+          macos/ci/logic/run.sh
+
   build:
     name: Build for testing
+    if: ${{ inputs.run != 'logic' }}
     runs-on: xcode-27
     timeout-minutes: 20
     env:
@@ -283,7 +302,7 @@ jobs:
   e2e:
     name: End to end ${{ matrix.id }} (${{ matrix.suites }})
     needs: build
-    if: ${{ (inputs.run || 'all') != 'build' }}
+    if: ${{ (inputs.run || 'all') != 'build' && inputs.run != 'logic' }}
     runs-on: xcode-27
     timeout-minutes: 45
     strategy:

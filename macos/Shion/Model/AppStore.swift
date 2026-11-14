@@ -826,7 +826,13 @@ extension AppStore {
                 text = chats[botId]?.first(where: { $0.id == id })?.text ?? ""
             }
             if shown {
+                let reply = streaming[botId]
+                let held = chats[botId]?.count ?? 0
                 completeReply(botId, payload)
+                // the rows the turn was stored as: its reply's bubble (the one that streamed, or
+                // the one its end brought whole) and the cards its start made are those rows now
+                let whole = (chats[botId]?.count ?? 0) > held ? chats[botId]?.last?.id : nil
+                noteTurnRows(payload["persisted_turn"], in: botId, reply: reply ?? whole)
                 // a turn of someone else's making: what started it is a row to read (AppStore+Events.swift)
                 let submission = payload["persisted_turn"]?["submission_id"]?.string
                 if submission == nil || chats[botId]?.contains(where: { $0.id == submission }) != true {

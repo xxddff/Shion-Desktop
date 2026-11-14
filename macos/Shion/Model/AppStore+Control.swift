@@ -18,7 +18,12 @@ final class ChatControl {
     @ObservationIgnored var fences: [String: Fence] = [:]
     /// A prompt sent from here (its chat item's id, which is also its `submission_id`) → the
     /// transcript row Hermes stored it as (`message.complete.persisted_turn`).
+    /// Also what came live in a turn Hermes started and is known to be a row since that turn's
+    /// end: its reply's bubble, the cards its start made (AppStore.noteTurnRows).
     @ObservationIgnored var storedRows: [String: Int] = [:]
+    /// Assistant id → the cards the turn under way began with (a frame said what started it),
+    /// until its end names their row.
+    @ObservationIgnored var turnCards: [String: [String]] = [:]
     /// session id → the transcript rows that have each confirmed a message put into a running
     /// turn as the connection went (AppStore.settleCorrections). Such a message has no receipt,
     /// so a row of yours in its words is all that says it got there, and a row says so of one

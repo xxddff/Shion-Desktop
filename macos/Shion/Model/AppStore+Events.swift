@@ -13,8 +13,30 @@ extension AppStore {
     func noteTurnStart(_ payload: JSONValue, in botId: String) {
         guard let text = payload["text"]?.string, !text.isEmpty else { return }
         let notices = Notices.read(text, kind: payload["display_kind"]?.string, display: payload["display_text"]?.string)
+        let rows = control.storedRows
+        var made: [String] = []
         for card in Self.noticeCards(notices, id: NoticeCards.id(.begun), at: Date()) {
-            NoticeCards.begin(card, in: &chats[botId, default: []]) { Self.notice($0) }
+            NoticeCards.begin(card, in: &chats[botId, default: []]) { Self.notice($0, rows: rows) }
+            if chats[botId]?.contains(where: { $0.id == card.id }) == true { made.append(card.id) }
+        }
+        // the turn's end names the row these stand for (`noteTurnRows`)
+        control.turnCards[botId] = made
+    }
+
+    /// A turn's end names the rows it was stored as (`persisted_turn`): what the turn began with
+    /// (`user_row_id`) and its reply (`final_assistant_row_id`). The cards its start made and the
+    /// reply's bubble are those rows from now on, whatever they say: when the transcript is read,
+    /// each is found by its row and not by words that something else may share (NoticeCards.put).
+    /// `reply` is the bubble the turn ended with, where it left one.
+    func noteTurnRows(_ turn: JSONValue?, in botId: String, reply: String?) {
+        let cards = control.turnCards.removeValue(forKey: botId) ?? []
+        guard let turn else { return }
+        if let row = turn["user_row_id"]?.int {
+            for id in cards { control.storedRows[id] = row }
+        }
+        if let row = turn["final_assistant_row_id"]?.int, let reply,
+           chats[botId]?.contains(where: { $0.id == reply }) == true {
+            control.storedRows[reply] = row
         }
     }
 
@@ -23,24 +45,33 @@ extension AppStore {
     func noteStatus(_ payload: JSONValue, in botId: String) {
         guard payload["kind"]?.string == "process", let text = payload["text"]?.string else { return }
         let notices = Notices.read(text, kind: nil, display: nil).filter { $0.event == .board }
+        let rows = control.storedRows
         for card in Self.noticeCards(notices, id: NoticeCards.id(.told), at: Date()) {
-            NoticeCards.tell(card, in: &chats[botId, default: []]) { Self.notice($0) }
+            NoticeCards.tell(card, in: &chats[botId, default: []]) { Self.notice($0, rows: rows) }
         }
     }
 
     /// A chat's item as NoticeCards tells notices apart: only an event's card says a notice.
-    private static func notice(_ item: ChatItem) -> NoticeCards.Held {
+    /// `rows` are the rows items that came live are known to be (ChatControl.storedRows).
+    private static func notice(_ item: ChatItem, rows: [String: Int]) -> NoticeCards.Held {
         // a row read from a page is under its own id: its number, or its call's for a tool's row
         NoticeCards.Held(id: item.id, event: item.role == .card ? item.event : nil, text: item.text, at: item.at,
                          role: String(describing: item.role),
-                         stored: item.id.hasPrefix("row-") || item.id.hasPrefix("tool-") || item.id.hasPrefix("compaction-"))
+                         stored: item.id.hasPrefix("row-") || item.id.hasPrefix("tool-") || item.id.hasPrefix("compaction-"),
+                         row: rowNumber(item.id) ?? rows[item.id])
     }
 
-    /// How many of the newest rows are read for what started a turn, and how many pages further
-    /// up (of a page's rows each) when the row is not among them: more turns came while away
-    /// than the first read reached.
+    /// The row a page's item is, from its id: `row-12`, and `row-12-card2` for the second card of
+    /// a notice of several lines.
+    static func rowNumber(_ id: String) -> Int? {
+        guard id.hasPrefix("row-") else { return nil }
+        return Int(id.dropFirst(4).prefix { $0.isNumber })
+    }
+
+    /// How many of the newest rows are read for what started a turn. When the row is not among
+    /// them (more turns came while away than that), the transcript is read further up a page at
+    /// a time until it is.
     private static let noticeRows = 12
-    private static let noticePagesAtMost = 6
 
     /// A turn this Mac did not start (the board's word, another assistant's message, a background
     /// result): Hermes stores what started it as a row and tells a viewer nothing more, so the
@@ -48,9 +79,9 @@ extension AppStore {
     /// yours, and at the end of a turn that was not one of yours (the row is written as the turn
     /// begins, a moment after the start is announced). The end names the row (`row`:
     /// persisted_turn's user_row_id), and the transcript is read further up until that row was
-    /// read: after a long time away each turn's notice is found, not only the ones among the
-    /// newest rows (the board's wake and a teammate's message start a turn that says nothing, so
-    /// no card that came as a frame asks for its row: the review's RR09).
+    /// read, however far that is: after a long time away each turn's notice is found, not only
+    /// the ones among the newest rows (the board's wake and a teammate's message start a turn
+    /// that says nothing, so no card that came as a frame asks for its row: the review's RR09).
     ///
     /// A page's rows are matched to the chat's items from the newest back (NoticeCards.put): a row
     /// takes the place of the card that came for it as a frame, live or replayed, and brings its
@@ -82,14 +113,17 @@ extension AppStore {
                 }
                 guard let page = asked, sessions[botId] == sessionId, loadedChats.contains(botId) else { return }
                 // the chat may have changed while the page was read: the place is found again by its item
+                let known = control.storedRows
                 let put = NoticeCards.put(page: transcriptItems(page), in: &chats[botId, default: []], above: above) {
-                    Self.notice($0)
+                    Self.notice($0, rows: known)
                 }
                 pages += 1
-                read += (page["rows"]?.array ?? []).compactMap { $0["row_id"]?.int }
-                guard !atStart, pages <= Self.noticePagesAtMost, let older = page["next_cursor"]?.string,
+                let numbers = (page["rows"]?.array ?? []).compactMap { $0["row_id"]?.int }
+                read += numbers
+                // a page with no row on it is the top, whatever its cursor says
+                guard !atStart, !numbers.isEmpty, let older = page["next_cursor"]?.string,
                       NoticeCards.readsFurther(for: row, read: read, pages: pages,
-                                               awaiting: NoticeCards.awaitsRow(chats[botId] ?? [], as: { Self.notice($0) }))
+                                               awaiting: NoticeCards.awaitsRow(chats[botId] ?? [], as: { Self.notice($0, rows: known) }))
                 else { return }
                 cursor = older
                 above = put.top ?? above

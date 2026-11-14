@@ -53,9 +53,11 @@ nonisolated enum Notices {
         if let kind, machineKinds.contains(kind) {
             // a teammate's answer, not the command line of the process that waited for it. Several
             // results can come as one turn (`results`): each is read for what it is, so an answer
-            // among them hides neither another answer nor a command that failed
+            // among them hides neither another answer nor a command that failed, and several
+            // commands are not just a count (Hermes's short form for them is "2 Background
+            // Processes Finished")
             let all = results(body)
-            if all.contains(where: { peerAnswers($0) != nil }) {
+            if all.count > 1 || all.contains(where: { peerAnswers($0) != nil }) {
                 return all.flatMap { peerAnswers($0) ?? [Notice(event: .background, text: unwrapped($0))] }
             }
             let shown = (display ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
