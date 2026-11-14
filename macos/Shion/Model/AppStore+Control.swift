@@ -247,7 +247,7 @@ extension AppStore {
 
     /// What starts a turn: a message you typed (not one put into a turn already running), or a
     /// notice Hermes sends in your name (the board's word, another assistant's message).
-    private static func startsTurn(_ item: ChatItem) -> Bool {
+    static func startsTurn(_ item: ChatItem) -> Bool {
         (item.role == .user && !item.midTurn) || (item.role == .card && item.event?.startsTurn == true)
     }
 

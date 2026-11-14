@@ -98,6 +98,16 @@ nonisolated enum DeliveryCheck {
         /// one too many when such a message was then refused, and the message it was counted for
         /// could stay in doubt for good with its row in the transcript.
         var others: Set<String> = []
+        /// The chat's item that began the turn under way as it was said (the last before it that
+        /// starts a turn): Hermes stores the message after that item's row (AppStore.began).
+        var turn: TurnStart?
+    }
+
+    /// An item that began a turn, and Hermes's time of its row where the item was read from the
+    /// transcript (its own time is the row's then).
+    nonisolated struct TurnStart: Equatable, Sendable {
+        var id: String
+        var at: Date?
     }
 
     /// What is known of the other messages in a message's words at the moment the transcript is
@@ -117,6 +127,12 @@ nonisolated enum DeliveryCheck {
         /// Said after it while it was still in doubt, and Hermes may have them: the newest such
         /// rows are theirs.
         var later = 0
+        /// Hermes's time of the row that began the turn it was said in: a row stored then or
+        /// before is another message's, whatever its number and whether it names anything. A
+        /// compaction Hermes runs by itself stores the messages it keeps again under new numbers,
+        /// at their own time and naming no submission, so a message known by its number alone
+        /// is a row nobody can name after it, in the same words; its time stays the old one.
+        var since: Date?
     }
 
     /// The row a chat item stands for, where its id says (`row-<id>`: it was read from the transcript).
@@ -128,7 +144,8 @@ nonisolated enum DeliveryCheck {
     /// the page shows it got there: a row of yours in its words that is no other message's.
     /// The rows in its words that are known to be others' are left out, by number or by their
     /// time and words (`others`: under the new number a compaction gave it, such a row is
-    /// still known); of the rest, as many as other messages may account for are theirs
+    /// still known), and so are the rows stored before the turn it was said in began
+    /// (`others.since`); of the rest, as many as other messages may account for are theirs
     /// (`earlier` of the oldest, `later` of the newest), and only one beyond those is this
     /// message's: the one after the earlier ones. Nil: the page does not show that it got there,
     /// and it stays in doubt. So a message in the same words, said before or after, never passes
@@ -136,7 +153,7 @@ nonisolated enum DeliveryCheck {
     static func stored(_ text: String, others: Others, page: [StoredUserRow]) -> StoredUserRow? {
         let free = page.filter { row in
             row.text == text && !(row.row.map { others.rows.contains($0) } ?? false)
-                && !others.identities.contains(row.identity)
+                && !others.identities.contains(row.identity) && !(others.since.map { row.at <= $0 } ?? false)
         }
         return free.count > others.earlier + others.later ? free[others.earlier] : nil
     }

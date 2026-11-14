@@ -387,7 +387,9 @@ extension AppStore {
         let unconfirmed = deliveries.unconfirmed(in: botId)
         guard !unconfirmed.isEmpty else { return }
         var page: [StoredUserRow] = []
-        if pagesTranscripts, let read = try? await transcriptPage(botId, sessionId, limit: Self.pageSize) {
+        var read: JSONValue = [:]
+        if pagesTranscripts, let newest = try? await transcriptPage(botId, sessionId, limit: Self.pageSize) {
+            read = newest
             // a row that names a submission is a prompt's, not what was put into a turn
             let named = Set(DeliveryCheck.named(in: read).values)
             page = transcriptItems(read).filter { $0.role == .user }
@@ -399,8 +401,11 @@ extension AppStore {
         for (id, sent) in unconfirmed where deliveries.state(id) == .unconfirmed {
             // as a row shows it: a file's `@file:` line is not among its words
             let item = Self.userItem(id: id, at: sent.at, text: sent.text)
-            // the other messages in its words, as each stands now (AppStore.others)
-            guard let stored = DeliveryCheck.stored(item.text, others: others(of: id, in: botId, taken: taken), page: page) else {
+            // the other messages in its words, as each stands now (AppStore.others), and when the
+            // turn it was put into began
+            var known = others(of: id, in: botId, taken: taken)
+            known.since = began(sent.before?.turn, page: read)
+            guard let stored = DeliveryCheck.stored(item.text, others: known, page: page) else {
                 // a page read in its place: it goes back at the bottom, still in doubt
                 if chats[botId]?.contains(where: { $0.id == id }) != true {
                     chats[botId, default: []].append(item)
@@ -454,7 +459,9 @@ extension AppStore {
             case .unsent, .declined:
                 there[item.id] = false
             case .sending, .unsure, .unconfirmed:
-                let row = DeliveryCheck.stored(item.text, others: others(of: item.id, in: botId, taken: taken), page: stored)
+                var known = others(of: item.id, in: botId, taken: taken)
+                known.since = began(sent.before?.turn, page: page)
+                let row = DeliveryCheck.stored(item.text, others: known, page: stored)
                 there[item.id] = row != nil
                 if let row {
                     taken.insert(row.identity)
@@ -462,6 +469,21 @@ extension AppStore {
             }
         }
         return there
+    }
+
+    /// Hermes's time of the row the turn under way began with as a message was said
+    /// (DeliveryCheck.Before.turn): the message is stored after it. An item read from the
+    /// transcript has that time as its own; a prompt said from here is the row that names its
+    /// submission on `page`, and what came live is the row its turn's end named (ChatControl
+    /// .storedRows), when that row is on the page. Nil when neither is known: then only numbers,
+    /// names and rows' times and words tell other messages' rows apart.
+    private func began(_ turn: DeliveryCheck.TurnStart?, page: JSONValue) -> Date? {
+        guard let turn else { return nil }
+        if let at = turn.at { return at }
+        guard let number = DeliveryCheck.named(in: page)[turn.id] ?? control.storedRows[turn.id],
+              let row = (page["rows"]?.array ?? []).first(where: { $0["row_id"]?.int == number })
+        else { return nil }
+        return row["timestamp"]?.number.map { Date(timeIntervalSince1970: $0) }
     }
 
     // MARK: the sidebar

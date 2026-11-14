@@ -19,7 +19,8 @@ WANTED = {
     "macos/Shion/Model/AppStore+Reconnect.swift": [
         "func say(", "func submit(_ text: String, id:", "func waitForChat(", "func requeue(", "func resend(",
         "func canResend(", "func rejoin(", "func keepReply(", "func reconcile(", "func settleCorrections(",
-        "?func onPage("],
+        "?func onPage(", "?func began("],
+    "macos/Shion/Model/AppStore+Events.swift": ["?static func rowNumber("],
 }
 
 

@@ -1106,6 +1106,104 @@ for path in paths {
           })
 }
 
+// ---- Hermes compacting the session by itself --------------------------------------------------
+// At a turn's start (preflight) and in a turn, after a tool's result, once the context is past
+// compression.threshold_tokens (autocompaction.json: ../../real, stage auto, in place and into a new
+// session). Its copies keep a message's time and words but not its display_metadata: the prompt
+// 「继续（自动）」, row 5 by its turn's end, is a row that names nothing once compacted (row 24 in
+// place, 25 in a new session), at its time; the 「继续（自动）」 put into the next turn (row 10) is
+// Hermes's wrapper for its words, no longer a steer. The turn under way keeps its prompt's name:
+// 第三句, begun as the session was compacted, is stored after it, naming its submission.
+
+let auto = try JSONValue.parse(String(contentsOfFile: CommandLine.arguments[2], encoding: .utf8))
+
+/// The rows of a page the stage auto read (`before`, `after`, `during`, `after2`) on a path.
+func autoPage(_ path: String, _ page: String) -> [JSONValue] { auto[path]?[page]?["rows"]?.array ?? [] }
+
+/// The row a turn's end named (persisted_turn.user_row_id) for the turn begun with `words`.
+func autoEnd(_ path: String, _ words: String) -> Int? { auto[path]?["ends"]?[words]?["user_row_id"]?.int }
+
+/// The row on `rows` of `role` stored at `row`'s time: its copy, whatever its number and words.
+func copy(of row: JSONValue?, in rows: [JSONValue]) -> JSONValue? {
+    rows.first { $0["role"] == row?["role"] && $0["timestamp"] == row?["timestamp"] }
+}
+
+/// 詩音's chat as it stood when Hermes compacted the session at 第三句's start: the rows before it,
+/// 「继续（自动）」 among them the live message it was where `live` (said from here: its row known by
+/// number only, from its turn's end), else as read from the transcript (naming nothing where
+/// `anonymous`); then 第三句, said from here, its turn under way.
+func autoChat(_ path: String, live: Bool, anonymous: Bool = false) -> (AppStore, Server) {
+    let rows = autoPage(path, "before").map { row -> JSONValue in
+        guard anonymous, row["row_id"]?.int == 5, case .object(var fields) = row else { return row }
+        fields["display_metadata"] = nil
+        return .object(fields)
+    }
+    let s = store(.steer)
+    s.loadedChats = [bot]
+    let server = Server(for: s)
+    server.rows = rows
+    var items = s.transcriptItems(["rows": .array(rows)])
+    if live, let index = items.firstIndex(where: { $0.id == "row-5" }),
+       let submission = numbered(5, in: rows)?["display_metadata"]?["submission_id"]?.string {
+        items[index] = ChatItem(id: submission, role: .user, at: then, text: "继续（自动）")
+        s.control.storedRows[submission] = autoEnd(path, "继续（自动）")
+    }
+    let third = autoEnd(path, "第三句（自动）").flatMap { numbered($0, in: autoPage(path, "after")) }
+    items.append(ChatItem(id: third?["display_metadata"]?["submission_id"]?.string ?? "third", role: .user, at: Date(),
+                          text: "第三句（自动）"))
+    items.append(ChatItem(id: "reply", role: .assistant, at: Date(), text: "从前有座山", streaming: true))
+    s.chats[bot] = items
+    s.streaming[bot] = "reply"
+    return (s, server)
+}
+
+for path in paths {
+    let (before, after) = (autoPage(path, "before"), autoPage(path, "after"))
+    let continued = numbered(5, in: before), kept = copy(of: numbered(5, in: before), in: after)
+    let third = autoEnd(path, "第三句（自动）").flatMap { numbered($0, in: after) }
+    check("auto (\(path)) Hermes's pages: 「继续（自动）」 row 5 by its turn's end, named, is row \(kept?["row_id"]?.int ?? 0) once compacted, at its time, naming nothing; 第三句, begun then, names its submission; the steer's copy is Hermes's wrapper",
+          autoEnd(path, "继续（自动）") == 5 && continued?["display_metadata"]?["submission_id"]?.string != nil
+            && kept?["text"] == "继续（自动）" && kept?["row_id"]?.int != 5 && kept?["display_metadata"] == nil
+            && third?["display_metadata"]?["submission_id"]?.string != nil
+            && numbered(10, in: before)?["display_kind"] == "steer"
+            && copy(of: numbered(10, in: before), in: after)?["text"]?.string?.hasPrefix("[OUT-OF-BAND USER MESSAGE") == true)
+    for replayed in [true, false] {
+        let how = "\(path), \(replayed ? "frames replayed" : "newest page read")"
+        // said from here, its row known by number: the copy names nothing, and was stored long before
+        let (s, server) = autoChat(path, live: true)
+        _ = typed("继续（自动）", in: s)
+        let lost = s.chats[bot]?.last?.id ?? ""
+        await until { s.deliveries.state(lost) == .unconfirmed }
+        server.rows = after
+        await comeBack(s, replayed: replayed)
+        check("auto (\(how)) 「继续（自动）」 said from here, put into 第三句's turn and lost: its old prompt's copy, row \(kept?["row_id"]?.int ?? 0), is not it: in doubt, with its bubble and no row: \(standing(lost, in: s))",
+              inDoubt(lost, in: s))
+        // the same, and it got there: its row is the one stored in 第三句's turn
+        let (got, gotServer) = autoChat(path, live: true)
+        _ = typed("继续（自动）", in: got)
+        let stored = got.chats[bot]?.last?.id ?? ""
+        await until { got.deliveries.state(stored) == .unconfirmed }
+        let row = (after.compactMap { $0["row_id"]?.int }.max() ?? 0) + 1
+        gotServer.rows = after + [.object(["row_id": .number(Double(row)), "role": "user", "text": "继续（自动）",
+                                           "display_kind": "steer",
+                                           "timestamp": .number((third?["timestamp"]?.number ?? 0) + 1)])]
+        await comeBack(got, replayed: replayed)
+        check("auto (\(how)) …and when it got there, its own row \(row) says so, not the copy: \(standing(stored, in: got))",
+              got.deliveries.state(stored) == nil && got.control.storedRows[stored] == row)
+        // read from the transcript before, by its time and words, named or not; and the steer before it
+        for anonymous in [false, true] {
+            let (r, readServer) = autoChat(path, live: false, anonymous: anonymous)
+            _ = typed("继续（自动）", in: r)
+            let again = r.chats[bot]?.last?.id ?? ""
+            await until { r.deliveries.state(again) == .unconfirmed }
+            readServer.rows = after
+            await comeBack(r, replayed: replayed)
+            check("auto (\(how)) 「继续（自动）」 read from the transcript as row 5\(anonymous ? ", naming nothing" : ""), and the steer row 10 in its words: neither copy is it: \(standing(again, in: r))",
+                  inDoubt(again, in: r))
+        }
+    }
+}
+
 #if !BEFORE
 /// The row of yours in 「继续」 that Hermes stored `seconds` after `then`, whatever its number.
 func continued(_ seconds: Int) -> StoredUserRow.Identity {
