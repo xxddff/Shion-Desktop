@@ -30,7 +30,16 @@ import XCTest
 ///    and keeps the socket; what was missed comes back on it, and the reply is whole in one bubble;
 /// 8. a picture and a file, before Hermes had them: once back, 没发出去 with 重发. The server
 ///    cleared the picture meanwhile, so the same submission is refused, and the picture goes up
-///    again from the Mac under a new one; answered once, with both.
+///    again from the Mac under a new one; answered once, with both;
+/// 9. as the same words are put into a running turn for the second time (引导), neither call
+///    answered and one of the two stored: both say 不确定有没有送到 while down; once back the one
+///    row confirms one of them, marked as part of the turn, and the other stays in doubt, also
+///    after the two reconnects of the next step;
+/// 10. after a reply, with the session's frames of another epoch once back (the replay cannot be
+///    had, the newest page is read in the chat's place): the same words said again while the chat
+///    is being attached again (the stand-in keeps that answer back until StandIn.attach), and that
+///    request lost. The page's row in those words is the first saying's, so the message said again
+///    stays under the page with 等连上后确认, then 没发出去 with 重发, which sends it, once.
 /// A picture at each step (reconnect-*.png).
 final class ReconnectTests: XCTestCase {
     private let server = "http://127.0.0.1:8765"
@@ -321,6 +330,82 @@ final class ReconnectTests: XCTestCase {
         } else {
             XCTFail("no 重发 to press")
         }
+
+        // 9. the same words put into the running turn twice (引导) as the connection goes: neither
+        // call is answered, and Hermes stored one of them. Once back, its one row says that one
+        // got there, and never that both did, however often the transcript is looked at again
+        XCTAssertTrue(waitUntil(timeout: 20) { !self.element("stop", in: app).exists }, "the turn before is still replying")
+        say("断线：引导两遍", in: app)
+        XCTAssertTrue(waitForText("听着呢（CI）。", in: app, timeout: 10), "the turn did not start")
+        let busyMenu = element("busy-mode", in: app)
+        if busyMenu.waitForExistence(timeout: 5) {
+            busyMenu.click()
+            let intoTurn = app.menuItems.matching(NSPredicate(format: "title BEGINSWITH %@", "引导")).firstMatch
+            if intoTurn.waitForExistence(timeout: 5) {
+                intoTurn.click()
+            } else {
+                XCTFail("no 引导 in the menu")
+            }
+        } else {
+            XCTFail("no way to say how a message reaches a busy assistant")
+        }
+        let correction = "改到五点（CI）"
+        say(correction, in: app)
+        say(correction, in: app)
+        XCTAssertTrue(waitForText("重新连接中…", in: app, timeout: 10), "the socket did not drop under the second message")
+        let bothInDoubt = waitUntil(timeout: 10) { self.marks("unconfirmed", in: app) == 2 }
+        keep(app.windows.firstMatch.screenshot(), "reconnect-14-both-in-doubt")
+        XCTAssertTrue(bothInDoubt, "the two messages put into the turn do not both say 不确定有没有送到: \(marks("unconfirmed", in: app))")
+        StandIn.tunnelUp("9. the same words into a turn, twice")
+        XCTAssertTrue(waitUntil(timeout: 40) { !self.hasText("重新连接中…", in: app) }, "the connection did not come back")
+        let oneConfirmed = waitUntil(timeout: 20) {
+            self.marks("unconfirmed", in: app) == 1 && self.marks("mid-turn", in: app) == 1
+        }
+        keep(app.windows.firstMatch.screenshot(), "reconnect-15-one-confirmed")
+        XCTAssertTrue(oneConfirmed, "one row did not confirm just one of the two messages: "
+                      + "\(marks("unconfirmed", in: app)) in doubt, \(marks("mid-turn", in: app)) in the turn")
+        XCTAssertEqual(places(correction, in: app).count, 2, "the two messages are not both in the chat")
+        XCTAssertTrue(waitForText("按新的时间来（CI）。", in: app, timeout: 15), "the reply did not end")
+
+        // 10. said again in the words of a message just stored, while the chat is being attached
+        // again (the replay cannot be had, so the newest page is read in the chat's place), and
+        // that request lost. The page's row in those words is the first saying's: the message said
+        // again stays under the page, says 等连上后确认, and once back 没发出去 with 重发
+        XCTAssertTrue(waitUntil(timeout: 20) { !self.element("stop", in: app).exists }, "the turn before is still replying")
+        let repeated = "断线：又说一遍"
+        say(repeated, in: app)
+        XCTAssertTrue(waitForText("头一遍听到了（CI）。", in: app, timeout: 10), "the first saying got no answer")
+        XCTAssertTrue(waitForText("重新连接中…", in: app, timeout: 10), "the socket did not drop")
+        StandIn.tunnelUp("10. said again: the first saying")
+        XCTAssertTrue(waitUntil(timeout: 40) { !self.hasText("重新连接中…", in: app) }, "the connection did not come back")
+        // connected, and 詩音's chat not attached on the new socket: the stand-in keeps that answer
+        // back until the test says so, which is after the same words are said again
+        say(repeated, in: app)
+        XCTAssertTrue(waitUntil(timeout: 5) { self.places(repeated, in: app).count == 2 },
+                      "said again, the message is not in the chat under the first")
+        StandIn.attach("10. said again: the chat attached")
+        XCTAssertTrue(waitForText("重新连接中…", in: app, timeout: 15), "the socket did not drop under the message said again")
+        let stays = waitUntil(timeout: 10) { self.element("unsure", in: app).exists }
+        keep(app.windows.firstMatch.screenshot(), "reconnect-16-said-again")
+        XCTAssertTrue(stays, "the message said again does not say 等连上后确认 under the page read in the chat's place")
+        XCTAssertEqual(places(repeated, in: app).count, 2, "the first saying's row was taken for the message said again")
+        StandIn.tunnelUp("10. said again: lost")
+        let lost = element("unsent", in: app).waitForExistence(timeout: 40)
+        keep(app.windows.firstMatch.screenshot(), "reconnect-17-said-again-unsent")
+        XCTAssertTrue(lost, "the message Hermes never got does not say 没发出去")
+        XCTAssertEqual(places(repeated, in: app).count, 2, "the message said again is not in the chat once back")
+        // two more looks at the transcript since step 9, one of them a page read in the chat's place
+        XCTAssertEqual(marks("unconfirmed", in: app), 1, "the message no row confirmed is not the one still in doubt")
+        let sendAgain = element("resend", in: app)
+        if sendAgain.waitForExistence(timeout: 5), waitUntil(timeout: 10, { sendAgain.isEnabled }) {
+            sendAgain.click()
+            XCTAssertTrue(waitForText("收到：断线：又说一遍", in: app, timeout: 15), "重发 got no answer")
+            XCTAssertTrue(waitUntil(timeout: 5) { !self.element("unsent", in: app).exists }, "it still says 没发出去")
+            XCTAssertEqual(places(repeated, in: app).count, 2, "the two sayings are not there once each after 重发")
+        } else {
+            XCTFail("no 重发 to press")
+        }
+        keep(app.windows.firstMatch.screenshot(), "reconnect-18-said-again-resent")
         app.terminate()
     }
 
@@ -522,6 +607,21 @@ final class ReconnectTests: XCTestCase {
     private func cards(_ identifier: String, holding text: String, in app: XCUIApplication) -> Int {
         app.descendants(matching: .any).matching(identifier: identifier).allElementsBoundByIndex
             .filter { holds(text, whole: false, in: $0) }.count
+    }
+
+    /// How many messages carry a mark of one kind (its identifier: `unconfirmed`, `mid-turn`): one
+    /// for each line of the chat that has it, however many elements accessibility makes of a
+    /// label (its picture and its words).
+    @MainActor
+    private func marks(_ identifier: String, in app: XCUIApplication) -> Int {
+        var lines: [CGRect] = []
+        for mark in app.descendants(matching: .any).matching(identifier: identifier).allElementsBoundByIndex where mark.exists {
+            let frame = mark.frame
+            if frame.height > 0, !lines.contains(where: { $0.minY < frame.maxY && frame.minY < $0.maxY }) {
+                lines.append(frame)
+            }
+        }
+        return lines.count
     }
 
     @MainActor

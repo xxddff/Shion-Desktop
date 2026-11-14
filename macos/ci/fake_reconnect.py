@@ -76,6 +76,18 @@ before saying so does not take the rest of the test with it:
              (as one archived since); then the same message from another assistant twice, two
              minutes apart, whose start frames say what they start with. Shion has the frames from
              its replay, which say neither when nor which row, and the rows from the transcript
+  引导两遍   a reply that waits for what is put into it (`session.steer`). The first such message is
+             stored (a row of the turn, as Hermes keeps a steer) and not answered; at the second the
+             socket drops, so neither has an answer. The reply ends while Shion is away. One row
+             for two messages in the same words: it can say that one of them got there, never both
+  又说一遍   the first time, a short reply, then the socket drops and the session's frames start
+             over under another epoch, as after a restart of the server: once back, the replay
+             cannot be had and the newest page is read instead. That `session.resume` is not
+             answered until the test says so (`POST /ci/attach/go`), so what the test says in
+             between is said while the chat is being attached again. Said again (another
+             submission), it is lost: the socket drops before it is admitted, once the newest page
+             has been asked for and answered. Sent again under that id, it is admitted like any
+             other sentence
 
 Stdlib only.
 """
@@ -98,6 +110,8 @@ except ImportError:
 
 PREFIX = "断线："
 CONTROL = "/ci/tunnel/up"  # the test's word that brings the tunnel back (StandIn.swift)
+ATTACH = "/ci/attach/go"  # the test's word that lets a held session.resume be answered (又说一遍)
+HOLD = 25.0  # seconds such a session.resume waits for that word: under the 30 s Shion waits for an answer
 NOBODY = 60.0  # seconds a tunnel waits for that word before it comes back by itself
 MEANWHILE = 30.0  # seconds the word waits for what a script does while Shion is away
 KEPT = 512  # frames a session keeps (tui_gateway/event_replay.py _REPLAY_BUFFER_MAX)
@@ -120,6 +134,7 @@ running = {}  # session id -> the turn under way here
 waiting = collections.defaultdict(list)  # session id -> admissions queued behind it
 dropped = set()  # submission ids whose socket was dropped before they were admitted
 gone = set()  # the words of messages with pictures and files dropped once, whatever their id
+repeats = {}  # session id -> where 又说一遍 is, from its first saying until the second is lost
 tunnel = threading.Lock()
 down = {"held": False, "since": 0.0, "why": "", "meanwhile": None}
 awaited = {}  # session id -> set once a connection asks for it again (Shion is back): a reply waits
@@ -150,6 +165,10 @@ def tunnel_down(handler):
     tunnel's state. True when answered here."""
     if handler.command == "POST" and handler.path.split("?")[0] == CONTROL:
         bring_up(handler)
+        return True
+    if handler.command == "POST" and handler.path.split("?")[0] == ATTACH:
+        # the test's other word here: the session.resume held back is answered now (又说一遍)
+        let_attach(handler)
         return True
     with tunnel:
         held = down["held"]
@@ -285,6 +304,7 @@ def attach(handler, session_id):
     """session.resume or session.create on this connection: first the frames published since the
     cursor its events.since answered, then the session's frames as they come. Returns what the
     snapshot adds."""
+    hold(session_id)  # 又说一遍: not before the test says so
     with bus:
         asked_again(session_id)
         found = stream(session_id)
@@ -444,6 +464,10 @@ def answer(handler, method, params, rid):
         return submit(handler, params, rid)
     if method == "approval.respond" and params.get("prompt_id") == APPROVAL["prompt_id"]:
         return respond(handler, params, rid)
+    if method in ("session.steer", "session.redirect"):
+        return steered(handler, params)  # into 引导两遍's turn; any other is the stop and retry module's
+    if method == "session.transcript" and params.get("cursor") is None:
+        page_asked(params.get("session_id"))  # 又说一遍 waits for it; the stand-in answers it as ever
     return False
 
 
@@ -461,6 +485,8 @@ def scripted(handler, what, session_id, submission, text, profile, rid):
         dropped.add(submission)
         drop(handler, f"before {text!r} was admitted")
         return True
+    if what == "又说一遍" and session_id in repeats:
+        return said_again(handler, session_id, submission, text)
     admission = admit(session_id, submission, text, profile)
     # meanwhile: set once what the turn does while Shion is away is done (the tunnel waits for it)
     turn = {"what": what, "session_id": session_id, "text": text, "admission": admission, "handler": handler,
@@ -832,3 +858,144 @@ def respond(handler, params, rid):
     turn["choice"] = args["choice"]
     turn["answered"].set()
     return True
+
+
+# ---- the same words twice ----------------------------------------------------------------------
+# Two messages in the same words, where only the transcript can say what became of each: put into a
+# running turn as the connection goes (引导两遍), and said again while the chat is being attached
+# again, the second one lost (又说一遍). What the test types for them has no character XCUI's typing
+# can give as a compatibility ideograph (fake_words.py): the two sayings must be the same words.
+
+STEERING_FIRST, STEERING_REST = "听着呢（CI）。", ["好，", "按新的时间来（CI）。"]
+STEERING_WAITS = 30.0  # seconds 引导两遍's reply waits for the two messages before it ends without them
+AGAIN_REPLY = "头一遍听到了（CI）。"
+LOSES_AFTER = 0.5  # seconds between the newest page's answer and the drop that loses 又说一遍
+
+
+def steering(turn):
+    """引导两遍: a reply that waits for the two messages put into it (`steered`), and ends while Shion
+    is away."""
+    with bus:
+        heard = turn.setdefault("heard", threading.Event())
+    begin(turn)
+    time.sleep(0.3)
+    say(turn, STEERING_FIRST)
+    if not heard.wait(STEERING_WAITS):
+        log(f"  -> nothing was put into the 引导两遍 turn twice in {STEERING_WAITS:.0f} s: it ends as it is")
+    for part in STEERING_REST:
+        time.sleep(0.3)
+        say(turn, part)
+    end(turn)
+    turn["meanwhile"].set()  # ended while Shion was away: its replay has the end
+
+
+def steered(handler, params):
+    """session.steer (or session.redirect) into 引导两遍's turn, named by its run. The first is
+    stored, as Hermes keeps what is put into a turn (a user row of display_kind steer, in the words
+    as sent), and gets no answer; at the second the socket drops, nothing stored. So neither message
+    has an answer, and the transcript has one row for the two. False for any other turn's: the
+    stop and retry module answers those."""
+    session_id, text = params.get("session_id"), params.get("text")
+    with bus:
+        turn = running.get(session_id)
+        if (turn is None or turn.get("what") != "引导两遍" or not isinstance(text, str)
+                or params.get("execution_generation") != turn.get("generation")):
+            return False
+        heard = turn.setdefault("heard", threading.Event())
+        turn["steers"] = count = turn.get("steers", 0) + 1
+    if count == 1:
+        row = keep(session_id, "user", text, display_kind="steer")
+        log(f"    into the 引导两遍 turn: {text!r} stored as row {row}, and no answer yet")
+    elif count == 2:
+        log(f"    into the 引导两遍 turn again: {text!r}, not stored")
+        drop(handler, "as a second message was put into the turn, neither answered", turn["meanwhile"])
+        heard.set()
+    else:
+        log(f"    into the 引导两遍 turn a {count}th time: not answered")
+    return True
+
+
+def again(turn):
+    """又说一遍, the first time: a short reply, the socket drops, and the session's frames start over
+    under another epoch, as after a restart of the server: the replay Shion asks for once back
+    cannot be had (snapshot_required), so it reads the newest page. The session.resume before that
+    page waits for the test's word (`hold`)."""
+    session_id = turn["session_id"]
+    begin(turn)
+    time.sleep(0.2)
+    say(turn, AGAIN_REPLY)
+    end(turn)
+    time.sleep(0.5)
+    drop(turn["handler"], "after a short reply; its frames start over under another epoch", turn["meanwhile"])
+    with bus:
+        streams[session_id] = {"epoch": uuid.uuid4().hex, "seq": 0, "kept": collections.deque(), "evicted": 0}
+        repeats[session_id] = {"go": threading.Event(), "paged": False, "lost": None}
+    turn["meanwhile"].set()  # only now may the tunnel come back: the next session.resume is held
+
+
+def hold(session_id):
+    """A session.resume for a session whose 又说一遍 was said once: answered when the test says so
+    (POST /ci/attach/go, `let_attach`), so what the test says before that is said on a socket that
+    has not attached the chat yet. After HOLD seconds it is answered anyway, and the test's word
+    then finds nothing held."""
+    with bus:
+        gate = repeats.get(session_id)
+    if gate is None or gate["go"].is_set():
+        return
+    log(f"    {session_id}: this answer waits for the test's word (POST {ATTACH})")
+    if not gate["go"].wait(HOLD):
+        log(f"  -> nobody said so: {session_id} is attached after {HOLD:.0f} s")
+        gate["go"].set()
+
+
+def let_attach(handler):
+    """POST /ci/attach/go: the session.resume held back is answered now; 409 when none is."""
+    with bus:
+        held = [gate for gate in repeats.values() if not gate["go"].is_set()]
+        for gate in held:
+            gate["go"].set()
+    log(f"POST {ATTACH} -> " + ("the chat is attached now" if held else "409 (no session.resume is held back)"))
+    word(handler, 200 if held else 409, {"held": bool(held)})
+
+
+def page_asked(session_id):
+    """The newest page of a session is asked for, after its held session.resume was answered: Shion
+    is reading it in the chat's place. 又说一遍 said again is lost only after that."""
+    with bus:
+        gate = repeats.get(session_id)
+        if gate is None or not gate["go"].is_set() or gate["paged"]:
+            return
+        gate["paged"] = True
+        lost = gate["lost"]
+    if lost is not None:
+        lose(session_id, *lost)
+
+
+def said_again(handler, session_id, submission, text):
+    """又说一遍 said again, another submission: lost. The socket drops before it is admitted, once
+    the newest page has been asked for and answered (a moment after, so that Shion has read it):
+    the page has the first saying's row, in the same words, and not this message. Sent again under
+    its id, it is admitted like any other sentence (`dropped`)."""
+    dropped.add(submission)
+    with bus:
+        gate = repeats[session_id]
+        gate["lost"] = (handler, text)
+        paged = gate["paged"]
+    if paged:
+        lose(session_id, handler, text)
+    else:
+        log(f"    {text!r}, said again, waits to be lost until the newest page is asked for")
+    return True
+
+
+def lose(session_id, handler, text):
+    """The drop that loses 又说一遍 said again, a moment after the page's answer."""
+    def later():
+        time.sleep(LOSES_AFTER)
+        with bus:
+            repeats.pop(session_id, None)
+        drop(handler, f"before {text!r}, said again, was admitted; the newest page was read first")
+    threading.Thread(target=later, daemon=True).start()
+
+
+SCRIPTS.update({"引导两遍": steering, "又说一遍": again})

@@ -39,6 +39,15 @@ enum StandIn {
         say("/ci/quick/finish", step, "finish the quick window's reply", timeout: 10, file: file, line: line)
     }
 
+    /// Has the stand-in answer the `session.resume` it keeps back after 「断线：又说一遍」
+    /// (`POST /ci/attach/go`, ci/fake_reconnect.py): until then Shion is connected and the chat is
+    /// not attached on the new socket, so what ReconnectTests says in between is said while the
+    /// chat is being attached again. A failure naming `step` when no answer was kept back.
+    @discardableResult
+    static func attach(_ step: String, file: StaticString = #filePath, line: UInt = #line) -> Bool {
+        say("/ci/attach/go", step, "answer the session.resume it keeps back", timeout: 10, file: file, line: line)
+    }
+
     /// A mark in the stand-in's log (`fake_hermes-<test>.log`): where the test got to, should the
     /// app stop answering and the run be cut short. Nothing fails if it does not get there.
     static func mark(_ step: String) {
