@@ -12,7 +12,9 @@ Shaped like Hermes main (2026-11-12) and the shion plugin's `reviews.*` (hermes-
   (fake_profiles.py). `bind` keeps the first session; `decide` wants the card's own `entries`.
 - `session.create` with `request_id` `shion-review-<card id>`: a session of its own. Asserted: no
   title (Hermes would look a titled session up first), no tools (`toolsets: []`, so the talk can
-  change no skill and sets off no review of its own), `ignore_rules`.
+  change no skill and sets off no review of its own), `ignore_rules`. The first time a card asks,
+  the session is not made: refused as Hermes answers any call whose store was busy (code 5001,
+  `storage_unavailable`: gateway/session_controls.py, "clients retry"). Asked again, it is made.
 - a prompt in that session is admitted as any is (fake_reconnect.py: once per submission id, an
   exact retry gets the same admission and no second turn) and answered: what the assistant was
   given to review with, with an opinion on the skill; anything said after, with 「审核回复（CI）：」
@@ -32,6 +34,16 @@ dropped before it is admitted, 「断线：还没回执」 admitted and answered
 - 「订阅断了（CI）」: a reply in eight parts; at the third this socket's subscription to the session is
   retired and it gets `session.replay_gap` instead, the socket kept (fake_reconnect.py retire):
   the rest reaches only who attaches again.
+- 「快照迟到（CI）」: the same loss after the first part, and then every `session.resume` of the
+  session is answered as Hermes answers one while frames keep coming (gateway/
+  session_authority.py attach): the session is read and this socket joined to its frames at
+  once, and the answer is written a moment later, behind what was published meanwhile. Behind
+  each of the first three snapshots that is a part of the reply and the pending list again
+  (`session.info`); behind the fourth, the last part and the turn's end (`message.complete`,
+  `session.info`). So each snapshot says a turn runs and has no row of the reply, and each is
+  older than a frame its socket already got. Four are as many as Shion asks for before it goes
+  by the one it has (one, and SessionWords.rereads more); should it ask for fewer, the turn ends
+  after a while by itself, in words that say so.
 """
 import datetime
 import itertools
@@ -56,10 +68,16 @@ FAILS = "审核出错（CI）"
 LAGS = "订阅断了（CI）"
 LAG_PARTS = 8
 LAG_RETIRED_AT = 3
+BEHIND = "快照迟到（CI）"
+BEHIND_ASKS = 4  # snapshots Shion asks for before it goes by the one it has (EventCursors.swift: 1 + SessionWords.rereads)
+BEHIND_WAIT = 15.0  # seconds the turn waits for them
+BEHIND_UNASKED = "（没按剧本：快照只要了 {} 次）"
 
 cards = {}  # card id -> the card, as reviews.list gives it
 talks = {}  # request id -> the review session it made
+unmade = set()  # the request ids whose session was refused once
 refused = {}  # review session -> the submission id 「排队满了（CI）」 was refused under
+behind = {}  # review session -> the turn of 「快照迟到（CI）」 under way: every snapshot of it is overtaken
 row_ids = itertools.count(9000)
 lock = threading.Lock()
 
@@ -124,11 +142,22 @@ def rpc(conn, log, transcripts, method, params, rid):
         assert params.get("toolsets") == [], "a review session has no tools"
         assert params.get("ignore_rules") is True and params.get("hidden") is True
         with lock:
+            first = params["request_id"] not in unmade
+            unmade.add(params["request_id"])
+        if first:
+            # the store was busy: nothing made, nothing kept under the request id
+            log(f"    no review session for {params['request_id']} this time: storage_unavailable")
+            conn.send_json({"jsonrpc": "2.0", "id": rid, "error": {
+                "code": 5001, "message": "storage_unavailable", "data": {"reason": "storage_unavailable"}}})
+            return True
+        with lock:
             session_id = talks.setdefault(params["request_id"], "review-" + params["request_id"][len("shion-review-"):])
         log(f"    a review session of its own: {session_id}")
         conn.subscribed.add(session_id)
         return reply(conn.snapshot(session_id, {}))
 
+    if method == "session.resume":
+        return overtaken(conn, log, params, rid)
     if method != "prompt.submit" or not handles_prompt(params):
         return False
     session_id, text = params.get("session_id"), params.get("text", "")
@@ -172,6 +201,8 @@ def talk(conn, log, transcripts, params, rid):
         log(f"    {text!r} in {session_id} came again under the same submission id: taken")
     if text == LAGS:
         return lag(conn, log, params, rid)
+    if text == BEHIND:
+        return fall_behind(conn, log, params, rid)
     admitted()
     if text == FAILS and fake_words.sent(text) not in fake_control.rewound:
         threading.Thread(target=fail, args=(conn, log, transcripts, session_id, text, submission), daemon=True).start()
@@ -276,4 +307,73 @@ def lag(conn, log, params, rid):
         fake_reconnect.end(turn)
 
     threading.Thread(target=run, daemon=True).start()
+    return True
+
+
+def fall_behind(conn, log, params, rid):
+    """A reply whose frames overtake every snapshot asked for while it comes (fake_reconnect.py's
+    turns, as `lag`): one part, then this socket's subscription is retired with the second, so the
+    session is attached again; from there `overtaken` answers each `session.resume`."""
+    session_id, text = params.get("session_id"), fake_words.sent(params.get("text", ""))
+    admission = fake_reconnect.admit(session_id, params.get("submission_id"), text, params.get("profile"))
+    turn = {"what": "review behind", "session_id": session_id, "text": text, "admission": admission, "handler": conn,
+            "said": "", "answered": threading.Event(), "choice": None, "meanwhile": threading.Event(),
+            "asked": 0, "over": threading.Event()}
+    with fake_reconnect.bus:
+        fake_reconnect.running[session_id] = turn
+    fake_reconnect.publish_pending(session_id)
+    conn.send_json({"jsonrpc": "2.0", "id": rid, "result": fake_reconnect.receipt_of(admission)})
+
+    def run():
+        fake_reconnect.begin(turn)
+        time.sleep(0.4)
+        fake_reconnect.say(turn, "第1段。")
+        time.sleep(0.4)
+        with lock:
+            behind[session_id] = turn
+        with fake_reconnect.bus:
+            fake_reconnect.watchers.get(session_id, {}).pop(conn, None)
+        fake_reconnect.say(turn, "第2段。")
+        fake_reconnect.retire(conn, session_id)
+        if turn["over"].wait(BEHIND_WAIT):
+            return
+        with lock:
+            waiting = behind.pop(session_id, None) is not None
+        if waiting:
+            log(f"  -> NOT AS SCRIPTED: {session_id}'s snapshot was asked for {turn['asked']} time(s), not "
+                f"{BEHIND_ASKS}; the turn ends by itself")
+            fake_reconnect.say(turn, BEHIND_UNASKED.format(turn["asked"]))
+            fake_reconnect.end(turn)
+
+    threading.Thread(target=run, daemon=True).start()
+    return True
+
+
+def overtaken(conn, log, params, rid):
+    """`session.resume` of a session whose turn is 「快照迟到（CI）」's: answered here, True; any other
+    is not (False). The session is read and this socket joined to its frames first (`snapshot`),
+    then more is published, and only then is the answer written: what Hermes's attach does when
+    frames come between its snapshot and its reply. The fourth snapshot is overtaken by the
+    turn's end."""
+    session_id = params.get("session_id")
+    with lock:
+        turn = behind.get(session_id)
+        if turn is None:
+            return False
+        turn["asked"] += 1
+        asked = turn["asked"]
+        if asked == BEHIND_ASKS:
+            del behind[session_id]
+    result = conn.snapshot(session_id, params)
+    conn.subscribed.add(session_id)
+    fake_reconnect.say(turn, f"第{asked + 2}段。")
+    if asked == BEHIND_ASKS:
+        fake_reconnect.end(turn)
+        turn["over"].set()
+    else:
+        fake_reconnect.publish_pending(session_id, turn["generation"])
+    log(f"    snapshot {asked} of {session_id} (seq {result['last_sequence']}, running {result['running']}, "
+        f"{len(result.get('messages', []))} rows) answered behind "
+        + ("the turn's end" if asked == BEHIND_ASKS else "a part and the pending list"))
+    conn.send_json({"jsonrpc": "2.0", "id": rid, "result": result})
     return True
