@@ -137,8 +137,13 @@ extension AppStore {
                 take(secretRequest(method, id: id, params: entry["params"] ?? .null, botId: botId, sessionId: sessionId, timed: false))
             }
         }
+        // one that came on this socket after the resume was asked for may be newer than the
+        // snapshot (Hermes reads the session, then answers a moment later): left out of it or not,
+        // it still waits. One from before the resume and left out is over
+        let asked = resumeAsked[sessionId] ?? .distantFuture
         for request in secrets.requests where request.sessionId == sessionId && request.state == .waiting
-            && !request.demo && !listed.contains(request.id) {
+            && !request.demo && !listed.contains(request.id)
+            && !(request.at >= asked && request.connection == gateway.connection) {
             close(request.id, as: .expired)
         }
     }

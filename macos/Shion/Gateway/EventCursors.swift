@@ -64,7 +64,9 @@ extension EventCursor {
 /// joined to the stream, and answers a moment later: a turn that ends in that moment has its
 /// `message.complete` and `session.info` on the socket before the snapshot that still calls it
 /// running. Such a snapshot is older than what was taken, and must not be put over it: it is read
-/// again (`outdate`), and what the frames said of the turn stands (`running(after:)`).
+/// again (`outdate`), and where it comes back older every time, what the frames said stands over
+/// what it says: whether a turn runs (`running(after:)`), that one ended (`ended(after:)`: its
+/// reply or its failure is the frames'), and what waits for an answer of yours (`current`).
 /// Foundation only, so it can be checked away from a Mac.
 nonisolated struct SessionWords: Sendable {
     /// How often a snapshot is asked for again when frames already taken are newer than it. Those
@@ -82,6 +84,12 @@ nonisolated struct SessionWords: Sendable {
     private var turns: [String: (at: EventCursor, running: Bool)] = [:]
     /// The newest frame that said anything a snapshot says.
     private var states: [String: EventCursor] = [:]
+    /// The newest frame that ended a turn.
+    private var ends: [String: EventCursor] = [:]
+    /// What a frame last said of each approval or question of a session: asked, as the frame
+    /// carried it (the same object a snapshot lists: gateway/session_pending_controls.py), or
+    /// settled (nil).
+    private var prompts: [String: [String: (at: EventCursor, asked: JSONValue?)]] = [:]
 
     /// A frame's params, live or replayed, as it is taken. One without a place in the stream (a
     /// server that numbers nothing) says nothing here: no snapshot can be told older than it.
@@ -96,9 +104,18 @@ nonisolated struct SessionWords: Sendable {
             turns[session] = (at, true)
         case "message.complete":
             turns[session] = (at, false)
+            ends[session] = at
         case "session.info":
             if let running = frame["payload"]?["running"]?.bool {
                 turns[session] = (at, running)
+            }
+        case "approval.request", "clarify.request":
+            if let prompt = frame["payload"], let id = prompt["prompt_id"]?.string {
+                prompts[session, default: [:]][id] = (at, prompt)
+            }
+        case "approval.settled", "clarify.settled":
+            if let id = frame["payload"]?["prompt_id"]?.string {
+                prompts[session, default: [:]][id] = (at, nil)
             }
         default:
             break
@@ -118,6 +135,38 @@ nonisolated struct SessionWords: Sendable {
         guard let session = snapshot["session_id"]?.string, let turn = turns[session], turn.at.isAfter(snapshot)
         else { return nil }
         return turn.running
+    }
+
+    /// A frame later than this snapshot ended a turn: how that turn ended (the reply it brought,
+    /// or the failure it said) is what the frame said, and the snapshot's rows know nothing of it.
+    func ended(after snapshot: JSONValue) -> Bool {
+        guard let session = snapshot["session_id"]?.string else { return false }
+        return ends[session]?.isAfter(snapshot) == true
+    }
+
+    /// The snapshot with what frames later than it said put over what it says: whether a turn
+    /// runs, and what waits for an answer of yours (`prompts`). An approval or question asked
+    /// since is among them, as its frame carried it, and one settled since is not, whatever the
+    /// snapshot lists. So a snapshot that is still older than the frames after being asked for
+    /// again neither drops an ask a frame brought nor brings back one a frame took away. Where
+    /// no frame is later, or the snapshot is of another epoch (the stream started over: nothing
+    /// taken before can be told newer than it), it is itself.
+    func current(_ snapshot: JSONValue) -> JSONValue {
+        guard case .object(var object) = snapshot, let session = object["session_id"]?.string else { return snapshot }
+        if let running = running(after: snapshot) {
+            object["running"] = .bool(running)
+        }
+        let later = (prompts[session] ?? [:]).filter { $0.value.at.isAfter(snapshot) }
+        if !later.isEmpty {
+            var open = (object["prompts"]?.array ?? []).filter { prompt in
+                // said of again since: the frame's word, below
+                prompt["prompt_id"]?.string.map { later[$0] == nil } ?? true
+            }
+            // asked since, in the order they were asked
+            open += later.values.sorted { $0.at.seq < $1.at.seq }.compactMap(\.asked)
+            object["prompts"] = .array(open)
+        }
+        return .object(object)
     }
 }
 

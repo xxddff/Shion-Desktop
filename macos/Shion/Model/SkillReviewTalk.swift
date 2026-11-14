@@ -31,7 +31,9 @@ final class SkillReviewTalk: Identifiable {
     @ObservationIgnored private var streaming: String?
     /// `failure` is how the last turn ended: 再试一次 asks its message again.
     @ObservationIgnored private var turnFailed = false
-    /// An item's id → the transcript row it is, as last read: a rewind names the row.
+    /// An item's id → the transcript row it is, as last read or as the frame that ended its turn
+    /// named it: a rewind names the row, and a snapshot older than that frame is told from one
+    /// that has the row.
     @ObservationIgnored private var stored: [String: Int] = [:]
     @ObservationIgnored private var rejoining = false
 
@@ -97,6 +99,12 @@ final class SkillReviewTalk: Identifiable {
     /// talk answering for good, no frame being left to say otherwise. So a snapshot older than a
     /// frame already taken is asked for again (SessionWords), and whether a turn runs is the
     /// newest word there is: a later frame's before the snapshot's.
+    ///
+    /// It can come back older than the frames every time it is asked for (frames kept coming). The
+    /// rows it has are the session's all the same, as far as it goes; what the frames brought
+    /// since is under them and stays (`outdated`): a reply or a message of yours whose row the
+    /// snapshot does not have yet, and how the last turn ended. An item's row is known from the
+    /// frame that ended its turn (`take`), so a row the snapshot has is never shown twice.
     func read(in store: AppStore, caughtUp: Bool = false) async throws {
         guard let session else { return }
         let params: JSONValue = [
@@ -108,6 +116,8 @@ final class SkillReviewTalk: Identifiable {
             again += 1
             snapshot = try await store.gateway.call("session.resume", params)
         }
+        // still older than a frame taken: its rows stand, and so does what the frames brought since
+        let outdated = store.words.outdate(snapshot)
         // the session's run and revision, which taking a failed turn back names (AppStore.rewind)
         store.noteFences(snapshot)
         let rows = snapshot["display_messages"]?.array ?? snapshot["messages"]?.array ?? []
@@ -133,27 +143,65 @@ final class SkillReviewTalk: Identifiable {
         // what was said without a receipt: Hermes has it, or it stays under what Hermes has.
         // Words are compared as a row shows them (a file's `@file:` line is not among them)
         let waiting = items.filter { $0.role == .user && sent[$0.id] != nil }
+        let pending = DeliveryCheck.pending(in: snapshot)
         let found = SkillReviewDelivery.found(
             waiting: waiting.map { (id: $0.id, text: Self.shown($0)) },
             known: items.filter { $0.role == .user && sent[$0.id] == nil }.map(Self.shown),
             rows: fresh.filter { $0.role == .user }.map(\.text),
-            pending: DeliveryCheck.pending(in: snapshot))
-        for item in waiting {
-            switch found[item.id] {
-            case .stored?:
-                // a row is this message
-                sent[item.id] = nil
-            case .admitted?:
-                sent[item.id] = nil
-                fresh.append(item)
-            case nil:
-                // no answer came, and the session does not have it: it did not get there
-                if sent[item.id] == .unsure {
-                    sent[item.id] = .unsent(nil)
+            pending: pending)
+        // what stays under the snapshot's rows, in the order it was said
+        var under: [ChatItem] = []
+        // the rows that held items were found to be, so that two items in the same words are two rows
+        var taken: Set<Int> = []
+        for item in items where item.role == .user || item.role == .assistant {
+            if item.id == streaming { continue }
+            if item.role == .user, sent[item.id] != nil {
+                switch found[item.id] {
+                case .stored?:
+                    // a row is this message
+                    sent[item.id] = nil
+                case .admitted?:
+                    sent[item.id] = nil
+                    under.append(item)
+                case nil:
+                    // no answer came, and the session does not have it: it did not get there
+                    if sent[item.id] == .unsure {
+                        sent[item.id] = .unsent(nil)
+                    }
+                    under.append(item)
                 }
-                fresh.append(item)
+                continue
             }
+            // which of the snapshot's rows it is: the one under its id, the one the frame that ended
+            // its turn named, or (no row known: its turn has not ended) one in its words, each once
+            if let index = fresh.firstIndex(where: { $0.id == item.id }) {
+                taken.insert(index)
+                continue
+            }
+            // a row read before that the session no longer has: gone
+            if item.id.hasPrefix("row-") { continue }
+            if let row = stored[item.id] {
+                if let index = fresh.firstIndex(where: { places[$0.id] == row }) {
+                    taken.insert(index)
+                    continue
+                }
+            } else if let index = fresh.indices.first(where: {
+                !taken.contains($0) && fresh[$0].role == item.role && Self.words(of: fresh[$0]) == Self.words(of: item)
+            }) {
+                taken.insert(index)
+                continue
+            }
+            // Not among the rows. The snapshot is the session as it is, and what it does not have
+            // is gone (a turn taken back), unless it is older than the frames (what they brought
+            // is not on it yet) or Hermes lists the message as admitted: its row is stored as its
+            // turn begins, a moment after its receipt
+            guard outdated || (item.role == .user && pending.contains(item.id)) else { continue }
+            if let row = stored[item.id] {
+                places[item.id] = row
+            }
+            under.append(item)
         }
+        fresh += under
         if running, let id = streaming, var reply = items.first(where: { $0.id == id }) {
             if !caughtUp, !reply.text.isEmpty {
                 reply.text += "\n\n…\n\n"
@@ -173,6 +221,9 @@ final class SkillReviewTalk: Identifiable {
                 failure = nil
                 turnFailed = false
             }
+        } else if store.words.ended(after: snapshot) {
+            // a frame ended the last turn after the snapshot was read: how it ended is what that
+            // frame said (`take`), and these rows know nothing of it
         } else if let failed {
             failure = failed
             turnFailed = true
@@ -184,6 +235,11 @@ final class SkillReviewTalk: Identifiable {
 
     private static func shown(_ item: ChatItem) -> String {
         AppStore.userItem(id: item.id, at: item.at, text: item.text).text
+    }
+
+    /// An item's words as a row has them: yours as a row shows them, a reply's as they are.
+    private static func words(of item: ChatItem) -> String {
+        item.role == .user ? shown(item) : item.text
     }
 
     /// A failed turn in words: the line a chat gives it, and what to do about it where Shion
@@ -338,11 +394,20 @@ final class SkillReviewTalk: Identifiable {
                     items[index].text = final
                 }
             }
+            let replied = streaming
             close()
             busy = false
-            // whose turn it was: Hermes has that message
-            if let submission = payload["persisted_turn"]?["submission_id"]?.string {
+            // whose turn it was: Hermes has that message. And the rows the turn was stored as: a
+            // snapshot read before this frame does not have them, one read after it does (`read`)
+            let turn = payload["persisted_turn"]
+            if let submission = turn?["submission_id"]?.string {
                 sent[submission] = nil
+                if let row = turn?["user_row_id"]?.int, items.contains(where: { $0.id == submission }) {
+                    stored[submission] = row
+                }
+            }
+            if let replied, let row = turn?["final_assistant_row_id"]?.int, items.contains(where: { $0.id == replied }) {
+                stored[replied] = row
             }
             if failed {
                 failure = Self.words(TurnFailure.live(payload, streamed: streamed))

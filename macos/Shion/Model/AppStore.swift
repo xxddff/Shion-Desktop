@@ -81,6 +81,11 @@ final class AppStore {
     /// What each session's frames last said that a snapshot says too, and where in its stream: a
     /// snapshot older than that is not put over it (SessionWords, `resumed`).
     @ObservationIgnored var words = SessionWords()
+    /// session id → when the `session.resume` whose snapshot is being attached was asked for. A
+    /// password or key Hermes asked for after that is no frame and has no place in the stream:
+    /// it is newer than the snapshot may be, and is not closed for being left out of it
+    /// (AppStore+Secrets.swift resumeSecrets).
+    @ObservationIgnored var resumeAsked: [String: Date] = [:]
     /// Today, todos and reports come from the server's `shion` plugin (AppStore+Plugin.swift).
     var pluginData = false
     /// 詩音's paragraph at the top of 今天, from the plugin.
@@ -539,15 +544,22 @@ extension AppStore {
     /// stream and answers a moment later, so frames can come before a snapshot that is older than
     /// they are (a turn that ends in that moment: its end is here, the snapshot still says it
     /// runs and still lists what it asked). Such a snapshot is not the session as it is: it is
-    /// asked for again, a few times at most (SessionWords).
+    /// asked for again, a few times at most, and what the frames said since stands over whatever
+    /// it then still says otherwise (SessionWords.current): whether a turn runs, and what waits
+    /// for an answer of yours. So however often it comes back older than the frames, an ask a
+    /// frame brought is not dropped and one a frame settled does not come back. The moment the
+    /// answer's own call went out is kept for what is not a frame (`resumeAsked`).
     func resumed(_ botId: String, _ sessionId: String) async throws -> JSONValue {
+        var asked = Date()
         var snapshot = try await gateway.call("session.resume", resumeParams(botId, sessionId))
         var again = 0
         while again < SessionWords.rereads, words.outdate(snapshot) {
             again += 1
+            asked = Date()
             snapshot = try await gateway.call("session.resume", resumeParams(botId, sessionId))
         }
-        return snapshot
+        resumeAsked[sessionId] = asked
+        return words.current(snapshot)
     }
 
     /// Whether a turn runs in the session a snapshot is of: the newest word there is, a frame's
