@@ -11,11 +11,11 @@
 
 | 目录 | 查什么 |
 | --- | --- |
-| `notices/` | 事件卡片：同一条通知只有一张卡，记录行和卡片怎么对上、放在哪，Hermes 各种通知原文读成什么（`NoticeCards.swift`、`Notices.swift`） |
+| `notices/` | 事件卡片：同一条通知只有一张卡，记录行和卡片怎么对上、放在哪，Hermes 各种通知原文读成什么（`NoticeCards.swift`、`Notices.swift`）；一轮结束后往上读到哪一页为止，对着照 Hermes 的样子分页的对话记录（`AppStore+Events.swift` 的 `followNotices`） |
 | `send/` | 发送和确认：引导、打断、排队，回执丢了以后靠对话记录确认，一行只确认一条（`AppStore+Compose.swift`、`AppStore+Reconnect.swift`、`Deliveries.swift`、`Delivery.swift`） |
 | `talk/` | 技能审核会话：发出的话不丢、再试一次、订阅断了重新接上、快照不盖过更新的帧（`SkillReviewTalk.swift`） |
 | `chat/` | Bot Chat 重新接上时快照和帧的先后（`AppStore.swift`、`AppStore+Reconnect.swift` 里的几个方法） |
 
 改了这些文件里的规则，先在这里加一项会失败的检查，再改代码。
 
-`chat/` 和 `send/` 是把应用里的几个方法原样取出来编（`extract.py`），所以还需要 `python3`。替身 `fake_reconnect.py` 里「同一句话说两遍」那两段脚本另有一个不用 Mac 的核对：`python3 macos/ci/check_fake_reconnect.py`。
+`chat/`、`notices/` 和 `send/` 是把应用里的几个方法原样取出来编（`extract.py`），所以还需要 `python3`。替身 `fake_reconnect.py` 里「同一句话说两遍」那两段脚本另有一个不用 Mac 的核对：`python3 macos/ci/check_fake_reconnect.py`。

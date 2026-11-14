@@ -208,11 +208,13 @@ nonisolated enum NoticeCards {
     /// Whether to read further up the transcript after `pages` pages, for the row that started a
     /// turn now over (`row`, as its end names it) or for a card that came as a frame and still
     /// has no row (`awaiting`: a turn that failed names none). `read` are the ids of the rows read
-    /// so far. The row is looked for until it was read or passed, however far up that is; a card
-    /// without a row is worth one more page. So notices that came while away are all found,
-    /// however many turns there were, and nothing is read for a turn whose row is among the newest.
+    /// so far: a tool call's row has none, so pages of tool calls alone add nothing to them, and
+    /// the row is not passed until a row stored before it was read. The row is looked for until it
+    /// was read or passed, however far up that is; a card without a row is worth one more page. So
+    /// notices that came while away are all found, however many turns there were, and nothing is
+    /// read for a turn whose row is among the newest.
     static func readsFurther(for row: Int?, read: [Int], pages: Int, awaiting: Bool) -> Bool {
-        if let row, !read.isEmpty, !read.contains(where: { $0 <= row }) { return true }
+        if let row, !read.contains(where: { $0 <= row }) { return true }
         return awaiting && pages < 2
     }
 

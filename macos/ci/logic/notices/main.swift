@@ -8,7 +8,9 @@ import Foundation
 // chat with NoticeCards.put(page:). Each check prints ok or FAIL; the run fails on any FAIL.
 //
 // What is covered: issue #2's R14 and R18, the placing of a notice only its row says, the second
-// review's RR08 to RR11, and that what came live is matched by the row its turn's end named.
+// review's RR08 to RR11, and that what came live is matched by the row its turn's end named. Last,
+// the third review's R3-05: how far up the store reads for a turn's notice, with the store's own
+// AppStore.followNotices (cut from its file by extract.py, against stubs.swift).
 
 typealias Item = NoticeCards.Held
 
@@ -488,6 +490,285 @@ do {
     NoticeCards.put(page: [page(60, "assistant", "好", 1), card("row-61", "带个话", 2)], in: &chat) { $0 }
     check(chat.map(\.id) == ["a", "u", "row-61", "s"],
           "ID4. a reply known to be row 50 does not stand for row 60: \(chat.map(\.id))")
+}
+
+// R3-05: a turn Hermes started itself has the store read the transcript for what started it
+// (AppStore.followNotices): the newest 12 rows, then 50 at a time further up until the row the
+// turn's end names was read or passed. Hermes gives a tool call's row its call's id and no row_id,
+// so a page can hold rows and no row number: that is not the top.
+
+let bot = "shion", session = "sess-shion"
+let peerDM = "Message from 🤖 课程 (@study): 收到（CI）"
+
+/// A transcript as Hermes stores it, oldest first, and pages it newest first
+/// (gateway/session_stored_reads.py read_page): `limit` stored rows a page, and more while the
+/// oldest of them is a tool's result, which stays on the page of the call that made it. A page
+/// shows what tui_gateway/session_history.py _history_to_messages makes of its rows: a tool's
+/// result under its call's id with no row_id, nothing of an assistant's row with no words (one that
+/// only made calls). A stretch that shows nothing is read past, so only the top can be empty; past
+/// the oldest page there is no cursor.
+final class Transcript {
+    struct Row {
+        var id: Int
+        var role: String
+        var text = ""
+        var kind: String?
+        var display: String?
+        /// a tool's result: the call it answers
+        var call: String?
+
+        var shown: JSONValue? {
+            let at = JSONValue.number(Double(1_800_000_000 + id))
+            if role == "tool" {
+                return ["row_kind": "message", "role": "tool", "name": "terminal", "context": "make",
+                        "tool_call_id": .string(call ?? ""), "timestamp": at]
+            }
+            guard !text.isEmpty else { return nil }
+            var row: [String: JSONValue] = ["row_kind": "message", "role": .string(role), "text": .string(text),
+                                            "row_id": .number(Double(id)), "timestamp": at]
+            if let kind { row["display_kind"] = .string(kind) }
+            if let display { row["display_metadata"] = ["display_text": .string(display)] }
+            return .object(row)
+        }
+    }
+
+    var rows: [Row] = []
+    /// The row of what started the turn, as the turn's end names it (stored or not).
+    let notice: Int
+    /// The turn's tool calls, oldest first, and its reply.
+    var calls: [String] = []
+    let replied: String
+    /// The pages it gave, in order.
+    var given: [JSONValue] = []
+
+    /// `before` rows of conversation, then a turn Hermes started itself with `text` (stored as a
+    /// row unless `kept` is false: gone since), which made `tools` tool calls and then replied
+    /// `reply` (no words: a row that shows nothing).
+    init(before: Int = 0, text: String = peerDM, kind: String = "internal_notification", display: String? = nil,
+         kept: Bool = true, tools: Int, reply: String) {
+        notice = before + 1
+        replied = reply
+        for n in 1..<notice {
+            rows.append(Row(id: n, role: n % 2 == 1 ? "user" : "assistant", text: "第 \(n) 条"))
+        }
+        if kept {
+            rows.append(Row(id: notice, role: "user", text: text, kind: kind, display: display))
+        }
+        for k in 0..<tools {
+            calls.append("call-\(k + 1)")
+            rows.append(Row(id: notice + 2 * k + 1, role: "assistant"))
+            rows.append(Row(id: notice + 2 * k + 2, role: "tool", call: calls[k]))
+        }
+        rows.append(Row(id: notice + 2 * tools + 1, role: "assistant", text: reply))
+    }
+
+    /// The reply's row.
+    var reply: Int { notice + 2 * calls.count + 1 }
+
+    /// The chat at the turn's end, as it came live: a line for each tool call, under the id the
+    /// transcript gives its row, and the reply's bubble, which the end named as its row.
+    var chat: [ChatItem] {
+        let at = Date(timeIntervalSince1970: 1_900_000_000)
+        return calls.map { ChatItem(id: "tool-\($0)", role: .tool, at: at, text: "terminal") }
+            + (replied.isEmpty ? [] : [ChatItem(id: "live-reply", role: .assistant, at: at, text: replied)])
+    }
+
+    /// `session.transcript` with `order: latest`: one page.
+    func page(_ params: JSONValue) -> JSONValue {
+        let limit = params["limit"]?.int ?? 100
+        // a cursor says where the page before it began
+        var end = params["cursor"]?.string.flatMap { Int($0.dropFirst("before-".count)) } ?? rows.count
+        while true {
+            var start = max(0, end - limit)
+            while start > 0, rows[start].role == "tool" { start -= 1 }
+            let shown = rows[start..<end].compactMap(\.shown)
+            if !shown.isEmpty || start == 0 {
+                given.append(["rows": .array(shown), "next_cursor": start > 0 ? .string("before-\(start)") : .null])
+                return given[given.count - 1]
+            }
+            end = start
+        }
+    }
+
+    /// The pages it gave: how many rows each showed, how many of them with a row_id, and whether
+    /// it had a cursor.
+    var shapes: [String] {
+        given.map { page in
+            let rows = page["rows"]?.array ?? []
+            return "\(rows.count) rows, \(rows.compactMap { $0["row_id"]?.int }.count) numbered, "
+                + (page["next_cursor"]?.string == nil ? "the top" : "a cursor")
+        }
+    }
+}
+
+/// Rows of conversation as a page shows them, under these row ids.
+func numbered(_ ids: ClosedRange<Int>) -> JSONValue {
+    .array(ids.map { ["row_kind": "message", "role": "assistant", "text": .string("第 \($0) 条"), "row_id": .number(Double($0))] })
+}
+
+/// Tool calls' results as a page shows them: their call's id, no row_id.
+func toolResults(_ calls: ClosedRange<Int>) -> JSONValue {
+    .array(calls.map { ["row_kind": "message", "role": "tool", "name": "terminal", "tool_call_id": .string("call-\($0)")] })
+}
+
+/// A server that answers each cursor (none: the newest rows) with the page given for it, and
+/// anything else with nothing.
+func script(_ pages: [String?: JSONValue]) -> (JSONValue) -> JSONValue {
+    { params in pages[params["cursor"]?.string] ?? ["rows": [], "next_cursor": nil] }
+}
+
+struct GaveUp: Error {}
+
+/// 詩音's chat open on `chat` and attached, `rows` what came live is known to be, and the reads
+/// answered by `answer`, on a server that gives up after 40 of them (a reading that would not end
+/// shows as one that went on).
+func store(_ chat: [ChatItem], rows: [String: Int] = [:], answer: @escaping (JSONValue) -> JSONValue) -> AppStore {
+    let store = AppStore()
+    store.sessions[bot] = session
+    store.loadedChats = [bot]
+    store.chats[bot] = chat
+    store.control.storedRows = rows
+    let gateway = store.gateway
+    gateway.answer = { params in
+        guard gateway.asked.count <= 40 else { throw GaveUp() }
+        return answer(params)
+    }
+    return store
+}
+
+/// A turn's end (or start) as AppStore.apply has the store read for its notice, waited out: until
+/// a read has come, and then none for a while (a reading that goes on asks again at once). What
+/// the reads asked for: the limit of each.
+func follow(_ store: AppStore, row: Int?, atStart: Bool = false) async -> [Int] {
+    store.followNotices(bot, atStart: atStart, row: row)
+    for _ in 0..<150 where store.gateway.asked.isEmpty {
+        try? await Task.sleep(for: .milliseconds(20))
+    }
+    var seen = -1
+    while seen != store.gateway.asked.count {
+        seen = store.gateway.asked.count
+        try? await Task.sleep(for: .milliseconds(100))
+    }
+    return store.gateway.asked.map { $0["limit"]?.int ?? 0 }
+}
+
+/// The reads as a check says them: one that would not end by how many there were.
+func reads(_ limits: [Int]) -> String {
+    limits.count > 8 ? "\(limits.count) reads" : "\(limits)"
+}
+
+/// The chat's notice cards, in its order: a row's under its id, one that came as a frame and still
+/// has no row as "frame".
+func cards(_ store: AppStore) -> [String] {
+    (store.chats[bot] ?? []).filter { $0.event != nil }.map { NoticeCards.stage(of: $0.id) == nil ? $0.id : "frame" }
+}
+
+func order(_ store: AppStore) -> String {
+    (store.chats[bot] ?? []).map(\.id).joined(separator: " ")
+}
+
+do {
+    // the review's: a teammate's message (its turn's start says nothing; only the row does), 35
+    // tool calls and the reply: rows 1, 2 to 71 and 72
+    let hermes = Transcript(tools: 35, reply: "知道了（CI）。")
+    let s = store(hermes.chat, rows: ["live-reply": hermes.reply], answer: hermes.page)
+    let asked = await follow(s, row: hermes.notice)
+    check(hermes.shapes.prefix(2) == ["7 rows, 1 numbered, a cursor", "25 rows, 0 numbered, a cursor"],
+          "R3-05. as the review read them: six results and the reply, then 25 results, none with a row_id: \(hermes.shapes)")
+    check(asked == [12, 50, 50], "R3-05. a page of tool calls alone is not the top: read on to the row: \(reads(asked))")
+    check(cards(s) == ["row-1"], "R3-05. the message has its card: \(cards(s))")
+    check(order(s).hasPrefix("row-1 tool-call-1 tool-call-2 "), "R3-05. ahead of its turn's first tool call: \(order(s).prefix(60))")
+}
+
+do {
+    // the reply has no words (its row shows nothing): the newest twelve rows show six results alone
+    let hermes = Transcript(tools: 35, reply: "")
+    let s = store(hermes.chat, answer: hermes.page)
+    let asked = await follow(s, row: hermes.notice)
+    check(hermes.shapes.first == "6 rows, 0 numbered, a cursor", "R3-05. the newest rows: tool calls alone: \(hermes.shapes)")
+    check(asked == [12, 50, 50], "R3-05. read on from there to the row: \(reads(asked))")
+    check(cards(s) == ["row-1"], "R3-05. and the message has its card: \(cards(s))")
+}
+
+do {
+    // sixty rows of conversation above the message: the page that has it has a cursor
+    let hermes = Transcript(before: 60, tools: 35, reply: "知道了（CI）。")
+    let s = store(hermes.chat, rows: ["live-reply": hermes.reply], answer: hermes.page)
+    let asked = await follow(s, row: hermes.notice)
+    check(hermes.shapes.last == "46 rows, 42 numbered, a cursor" && asked == [12, 50, 50],
+          "R3-05. the row read, nothing more is read, though there is more above: \(reads(asked)), \(hermes.shapes)")
+    check(cards(s) == ["row-61"], "R3-05. the card is its row's: \(cards(s))")
+}
+
+do {
+    // the row is gone (rewound since, say): the third page has the rows before it
+    let hermes = Transcript(before: 60, kept: false, tools: 35, reply: "知道了（CI）。")
+    let s = store(hermes.chat, rows: ["live-reply": hermes.reply], answer: hermes.page)
+    let asked = await follow(s, row: hermes.notice)
+    check(asked == [12, 50, 50] && hermes.shapes.last?.hasSuffix("a cursor") == true,
+          "R3-05. a row older than it read: the row was passed, nothing more is read: \(reads(asked))")
+    // the row is gone and nothing older is stored: the reading ends at the top, a page of tool calls
+    let top = Transcript(kept: false, tools: 35, reply: "知道了（CI）。")
+    let t = store(top.chat, rows: ["live-reply": top.reply], answer: top.page)
+    let up = await follow(t, row: top.notice)
+    check(up == [12, 50, 50] && top.shapes.last == "4 rows, 0 numbered, the top",
+          "R3-05. a row read nowhere: the top ends the reading: \(reads(up)), \(top.shapes)")
+}
+
+do {
+    // an empty transcript: one read
+    let none = store([], answer: script([nil: ["rows": [], "next_cursor": nil]]))
+    check(await follow(none, row: 1) == [12], "R3-05. an empty transcript is read once")
+    // a page with no row on it is the top, whatever its cursor says
+    let empty = store([], answer: script([nil: ["rows": numbered(100...111), "next_cursor": "c1"],
+                                          "c1": ["rows": [], "next_cursor": "c2"], "c2": ["rows": numbered(1...50), "next_cursor": nil]]))
+    let asked = await follow(empty, row: 1)
+    check(asked == [12, 50], "R3-05. an empty page with a cursor is the top: \(reads(asked))")
+    // a cursor that keeps coming back: the same page again, the row never reached
+    let again = store([], answer: script([nil: ["rows": numbered(100...111), "next_cursor": "again"],
+                                          "again": ["rows": numbered(50...99), "next_cursor": "again"]]))
+    let twice = await follow(again, row: 1)
+    check(twice == [12, 50], "R3-05. a cursor read once is not read again: \(reads(twice))")
+    let results = store([], answer: script([nil: ["rows": toolResults(30...35), "next_cursor": "again"],
+                                            "again": ["rows": toolResults(5...29), "next_cursor": "again"]]))
+    let tools = await follow(results, row: 1)
+    check(tools == [12, 50], "R3-05. nor when its page is tool calls alone: \(reads(tools))")
+}
+
+do {
+    // the row among the newest twelve: nothing more
+    let near = Transcript(before: 60, tools: 2, reply: "知道了（CI）。")
+    let s = store(near.chat, rows: ["live-reply": near.reply], answer: near.page)
+    let asked = await follow(s, row: near.notice)
+    check(asked == [12] && cards(s) == ["row-61"], "R3-05. the row among the newest: one read: \(reads(asked)), \(cards(s))")
+    // a turn's start: the newest rows, whatever they hold
+    let started = Transcript(tools: 35, reply: "")
+    let t = store(started.chat, answer: started.page)
+    let first = await follow(t, row: nil, atStart: true)
+    check(first == [12], "R3-05. at a turn's start, the newest rows alone: \(reads(first))")
+}
+
+do {
+    // a turn that names no row (one that failed): one more page, only for a card its start made
+    // that still has no row; the newest twelve rows, tool calls alone, are not the top
+    let failed = "[IMPORTANT: Background process proc_9 exited with an error (exit code 1).\nCommand: ./backup.sh\nOutput:\nNo space left on device\n]"
+    let shown = "Background Process Failed: ./backup.sh"
+    func frame() -> ChatItem {
+        ChatItem(id: NoticeCards.id(.begun), role: .card, at: Date(timeIntervalSince1970: 1_900_000_000), text: shown,
+                 event: .background)
+    }
+    let plain = Transcript(tools: 35, reply: "")
+    let s = store(plain.chat, answer: plain.page)
+    let asked = await follow(s, row: nil)
+    check(asked == [12], "R3-05. no row named and no card waiting: one read: \(reads(asked))")
+    let near = Transcript(text: failed, kind: "process_complete", display: shown, tools: 20, reply: "")
+    let t = store([frame()] + near.chat, answer: near.page)
+    let more = await follow(t, row: nil)
+    check(more == [12, 50] && cards(t) == ["row-1"], "R3-05. a card waiting: one more page, which has its row: \(reads(more)), \(cards(t))")
+    let far = Transcript(text: failed, kind: "process_complete", display: shown, tools: 35, reply: "")
+    let u = store([frame()] + far.chat, answer: far.page)
+    let most = await follow(u, row: nil)
+    check(most == [12, 50] && cards(u) == ["frame"], "R3-05. and no more than one: \(reads(most)), \(cards(u))")
 }
 
 print(failures == 0 ? "all passed" : "\(failures) FAILED")

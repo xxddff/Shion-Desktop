@@ -79,9 +79,10 @@ extension AppStore {
     /// yours, and at the end of a turn that was not one of yours (the row is written as the turn
     /// begins, a moment after the start is announced). The end names the row (`row`:
     /// persisted_turn's user_row_id), and the transcript is read further up until that row was
-    /// read, however far that is: after a long time away each turn's notice is found, not only
-    /// the ones among the newest rows (the board's wake and a teammate's message start a turn
-    /// that says nothing, so no card that came as a frame asks for its row: the review's RR09).
+    /// read or passed, however far that is, or up to its top: after a long time away each turn's
+    /// notice is found, not only the ones among the newest rows (the board's wake and a teammate's
+    /// message start a turn that says nothing, so no card that came as a frame asks for its row:
+    /// the review's RR09), also behind a turn's many tool calls, whose rows have no number (R3-05).
     ///
     /// A page's rows are matched to the chat's items from the newest back (NoticeCards.put): a row
     /// takes the place of the card that came for it as a frame, live or replayed, and brings its
@@ -96,6 +97,8 @@ extension AppStore {
                 try? await Task.sleep(for: .milliseconds(600))
             }
             var cursor: String?
+            // the cursors read with so far: one that comes back would give the same page again
+            var cursors: Set<String> = []
             var above: String?
             var read: [Int] = []
             var pages = 0
@@ -109,13 +112,15 @@ extension AppStore {
                     Self.notice($0, rows: known)
                 }
                 pages += 1
-                let numbers = (page["rows"]?.array ?? []).compactMap { $0["row_id"]?.int }
-                read += numbers
-                // a page with no row on it is the top, whatever its cursor says
-                guard !atStart, !numbers.isEmpty, let older = page["next_cursor"]?.string,
+                let rows = page["rows"]?.array ?? []
+                read += rows.compactMap { $0["row_id"]?.int }
+                // a page with no row on it is the top, whatever its cursor says; one of tool calls
+                // alone is not (their rows have no row_id: it says nothing of where the row is)
+                guard !atStart, !rows.isEmpty, let older = page["next_cursor"]?.string, !cursors.contains(older),
                       NoticeCards.readsFurther(for: row, read: read, pages: pages,
                                                awaiting: NoticeCards.awaitsRow(chats[botId] ?? [], as: { Self.notice($0, rows: known) }))
                 else { return }
+                cursors.insert(older)
                 cursor = older
                 above = put.top ?? above
             }
