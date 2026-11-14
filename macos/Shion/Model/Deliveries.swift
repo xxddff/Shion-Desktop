@@ -26,6 +26,10 @@ final class Deliveries {
         /// off the chat later: by the time it is needed (no receipt came, and only the transcript
         /// can say whether it got there) the chat may have been read again and its item replaced.
         var before: DeliveryCheck.Before?
+        /// The messages said after it in the same words while Hermes had not said it has this
+        /// one, by their chat item's id: a row of one of them is not this message's
+        /// (DeliveryCheck.Others, AppStore.follow).
+        var later: Set<String> = []
     }
 
     private static let seenKept = 500
@@ -38,17 +42,31 @@ final class Deliveries {
     func track(_ id: String, botId: String, text: String, at: Date, drafts: [Draft] = [],
                before: DeliveryCheck.Before? = nil) {
         let before = before ?? sent[id]?.before
+        let later = sent[id]?.later ?? []
         sent[id] = seen.contains(id) ? nil
-            : Sent(botId: botId, text: text, at: at, state: .sending, drafts: drafts, before: before)
+            : Sent(botId: botId, text: text, at: at, state: .sending, drafts: drafts, before: before, later: later)
     }
 
     func set(_ id: String, _ state: Delivery) {
         sent[id]?.state = state
     }
 
-    /// What else in the chat reads the same as it, as it stands now (a message sent again).
+    /// What else in the chat reads the same as it, as it stands now, for a message that has no
+    /// such record yet.
     func aim(_ id: String, past before: DeliveryCheck.Before) {
         sent[id]?.before = before
+    }
+
+    /// Said again (重发, 再发一次): it is the newest message in its words now, so what else reads
+    /// the same is all before it, and nothing was said after it.
+    func saidAgain(_ id: String, past before: DeliveryCheck.Before) {
+        sent[id]?.before = before
+        sent[id]?.later = []
+    }
+
+    /// `later` was said in the same words while `id` was still not known to be on the server.
+    func said(_ later: String, after id: String) {
+        sent[id]?.later.insert(later)
     }
 
     /// It did not go out after all (no connection by the time it could): it waits again instead.

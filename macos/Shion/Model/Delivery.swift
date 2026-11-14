@@ -75,9 +75,29 @@ nonisolated enum DeliveryCheck {
     nonisolated struct Before: Equatable, Sendable {
         /// The transcript rows they are known to be stored as.
         var rows: Set<Int> = []
-        /// How many more Hermes may have whose row is not known yet: their turn has not ended, or
-        /// their own receipt is still out.
-        var unstored = 0
+        /// The others, by their chat item's id: Hermes had them, or might have, as a row not
+        /// known then (their turn had not ended, or their own receipt was still out). What became
+        /// of each is asked when the transcript is looked at (AppStore.others): by then its row
+        /// may be known, or it may be known never to have got there. A count taken once stayed
+        /// one too many when such a message was then refused, and the message it was counted for
+        /// could stay in doubt for good with its row in the transcript.
+        var others: Set<String> = []
+    }
+
+    /// What is known of the other messages in a message's words at the moment the transcript is
+    /// looked at for it: which rows are theirs, and how many of them Hermes may have as a row
+    /// nobody can name yet.
+    nonisolated struct Others: Equatable, Sendable {
+        /// Rows that are other messages': the ones it had before it (Before.rows), those of
+        /// messages whose row has become known since, and those that have confirmed another
+        /// message put into a turn.
+        var rows: Set<Int> = []
+        /// Said before it, and Hermes may have them: of the rows in its words that are nobody's,
+        /// the oldest are theirs.
+        var earlier = 0
+        /// Said after it while it was still in doubt, and Hermes may have them: the newest such
+        /// rows are theirs.
+        var later = 0
     }
 
     /// The row a chat item stands for, where its id says (`row-<id>`: it was read from the transcript).
@@ -85,20 +105,19 @@ nonisolated enum DeliveryCheck {
         id.hasPrefix("row-") ? Int(id.dropFirst(4)) : nil
     }
 
-    /// The rows of the transcript's newest page that a message put into a turn as the connection
-    /// went may be stored as, oldest first: rows of yours in the same words that are neither a
-    /// message the chat had in those words before it was sent (`before.rows`; the oldest of the
-    /// rest are the ones whose row was not known then), nor a row another such message has been
-    /// found in already (`taken`). None: the page does not show that it got there, and it stays
-    /// in doubt. So an earlier message in the same words never passes for it, and a row confirms
+    /// The row of the transcript's newest page (oldest first) that a message is stored as, when
+    /// the page shows it got there: a row of yours in its words that is no other message's.
+    /// The rows in its words that are known to be others' are left out (`others.rows`); of the
+    /// rest, as many as other messages may account for are theirs (`earlier` of the oldest,
+    /// `later` of the newest), and only one beyond those is this message's: the one after the
+    /// earlier ones. Nil: the page does not show that it got there, and it stays in doubt. So a
+    /// message in the same words, said before or after, never passes for it, and a row confirms
     /// one message, not two.
-    static func stored(_ text: String, before: Before, taken: Set<Int> = [], page: [StoredUserRow]) -> [StoredUserRow] {
-        let other = page.filter { row in
-            row.text == text && !(row.row.map { before.rows.contains($0) } ?? false)
+    static func stored(_ text: String, others: Others, page: [StoredUserRow]) -> StoredUserRow? {
+        let free = page.filter { row in
+            row.text == text && !(row.row.map { others.rows.contains($0) } ?? false)
         }
-        return other.dropFirst(before.unstored).filter { row in
-            !(row.row.map { taken.contains($0) } ?? false)
-        }
+        return free.count > others.earlier + others.later ? free[others.earlier] : nil
     }
 
     /// Hermes's refusal of a prompt, in words (`error.data.reason`). Nil: it says it in its own.

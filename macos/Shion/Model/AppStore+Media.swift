@@ -269,8 +269,7 @@ extension AppStore {
         chats[botId, default: []].append(ChatItem(id: id, role: .user, at: Date(), text: words,
                                                   media: drafts.map(\.media)))
         // followed from this moment, with what else in the chat reads the same now (AppStore.say)
-        deliveries.track(id, botId: botId, text: words, at: Date(), drafts: drafts,
-                         before: sameWords(as: id, in: botId))
+        follow(id, botId: botId, text: words, at: Date(), drafts: drafts)
         Task {
             // Hermes keeps a sent picture for about a day; the Mac keeps its own for good
             for hash in drafts.filter({ $0.kind == .image }).compactMap(\.sha256) {

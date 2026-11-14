@@ -40,8 +40,7 @@ extension AppStore {
             let text = sentence.line(sentAt: Date())
             chats[botId, default: []].append(Self.userItem(id: sentence.id, at: Date(), text: text))
             // followed as it is said, with what else in the chat reads the same now (`say`)
-            deliveries.track(sentence.id, botId: botId, text: text, at: Date(),
-                             before: sameWords(as: sentence.id, in: botId))
+            follow(sentence.id, botId: botId, text: text, at: Date())
             guard await submit(text, id: sentence.id, to: botId, sessionId: sessionId) else {
                 chats[botId]?.removeAll { $0.id == sentence.id }
                 return QuickAsk.shared.putBack(sentences)
@@ -67,7 +66,7 @@ extension AppStore {
         // followed from this moment, with what else in the chat reads the same now: it may wait
         // for the chat to be attached again before it goes, and the chat be read again meanwhile
         // (loadLatestPage), which must not take it for an older message in the same words
-        deliveries.track(id, botId: botId, text: text, at: written, before: sameWords(as: id, in: botId))
+        follow(id, botId: botId, text: text, at: written)
         Task {
             if await !submit(text, id: id, to: botId, sessionId: sessionId, sending: sending) {
                 requeue(id, text: text, at: written, to: botId)
@@ -138,7 +137,7 @@ extension AppStore {
         item.media = media
         chats[botId, default: []].append(item)
         // said again now: what else reads the same is what the chat has at this moment
-        deliveries.aim(id, past: sameWords(as: id, in: botId))
+        followAgain(id, in: botId)
         Task {
             if !sent.drafts.isEmpty {
                 await submit(sent.text, sent.drafts, botId: botId, sessionId: sessionId, submission: id, again: false)
@@ -321,7 +320,10 @@ extension AppStore {
     /// could not be read), it stays as it is, in doubt, and is never sent again by itself. A row
     /// that confirmed one message is that message's for as long as the session is the chat's
     /// (ChatControl.confirmedRows): at the next look it does not confirm another in the same
-    /// words, which was not there to be found the first time.
+    /// words, which was not there to be found the first time. The other messages in its words
+    /// are asked what became of them at each look (AppStore.others): one that was on its way
+    /// when this was said and was then refused is on no row, so it no longer keeps this one in
+    /// doubt; one said after this, and stored, has a row that is not this one's.
     private func settleCorrections(_ botId: String, _ sessionId: String) async {
         let unconfirmed = deliveries.unconfirmed(in: botId)
         guard !unconfirmed.isEmpty else { return }
@@ -338,8 +340,8 @@ extension AppStore {
         for (id, sent) in unconfirmed where deliveries.state(id) == .unconfirmed {
             // as a row shows it: a file's `@file:` line is not among its words
             let item = Self.userItem(id: id, at: sent.at, text: sent.text)
-            let found = DeliveryCheck.stored(item.text, before: sent.before ?? DeliveryCheck.Before(), taken: taken, page: page)
-            guard let stored = found.first else {
+            // the other messages in its words, as each stands now (AppStore.others)
+            guard let stored = DeliveryCheck.stored(item.text, others: others(of: id, in: botId, taken: taken), page: page) else {
                 // a page read in its place: it goes back at the bottom, still in doubt
                 if chats[botId]?.contains(where: { $0.id == id }) != true {
                     chats[botId, default: []].append(item)
@@ -350,12 +352,13 @@ extension AppStore {
             guard let row = stored.row else { continue }
             taken.insert(row)
             control.confirmedRows[sessionId, default: []].insert(row)
+            // its row is known from here on, to the messages that counted it among theirs too
+            control.storedRows[id] = row
             if chats[botId]?.contains(where: { $0.id == "row-\(row)" }) == true {
                 // the chat was read again and has the row: this is the same message
                 chats[botId]?.removeAll { $0.id == id }
             } else if let index = chats[botId]?.firstIndex(where: { $0.id == id }) {
                 chats[botId]?[index].midTurn = true
-                control.storedRows[id] = row
             }
         }
     }
@@ -364,30 +367,37 @@ extension AppStore {
     /// chat's place (loadLatestPage): true where a row of the page is that message, so the page's
     /// copy stands for it; false where none can be, so its bubble stays under the page with what
     /// it says about getting there. A row that names the submission is it (Hermes keeps a
-    /// prompt's `submission_id` on its row), and Hermes has it. Without one, a row of yours in the
-    /// same words that the chat did not have in those words when the message was said, and that
-    /// no other message has (DeliveryCheck.stored, as `settleCorrections` looks): never a row
-    /// that was there before, which reads the same and is another message. One Hermes refused,
-    /// or a turn did not take, is on no row.
+    /// prompt's `submission_id` on its row), and Hermes has it; its row is known from then on.
+    /// Without one, a row of yours in the same words that is no other message's
+    /// (DeliveryCheck.stored, with the others in those words as each stands now: `others`, as
+    /// `settleCorrections` looks): never a row that was there before, nor one of a message said
+    /// since, which read the same and are other messages. One Hermes refused, or a turn did not
+    /// take, is on no row.
     func onPage(_ held: [ChatItem], page: JSONValue, rows: [ChatItem], botId: String) -> [String: Bool] {
-        let named = Set((page["rows"]?.array ?? []).compactMap { $0["display_metadata"]?["submission_id"]?.string })
+        var named: [String: Int] = [:]
+        for row in page["rows"]?.array ?? [] {
+            if let submission = row["display_metadata"]?["submission_id"]?.string, let number = row["row_id"]?.int {
+                named[submission] = number
+            }
+        }
         let stored = rows.filter { $0.role == .user }
             .map { StoredUserRow(text: $0.text, at: $0.at, row: DeliveryCheck.row(of: $0.id)) }
         var taken = sessions[botId].flatMap { control.confirmedRows[$0] } ?? []
         var there: [String: Bool] = [:]
         for item in held where item.role == .user {
             guard let sent = deliveries.sent[item.id] else { continue }
-            if named.contains(item.id) {
+            if let number = named[item.id] {
                 there[item.id] = true
                 deliveries.arrived(item.id)
+                // which row it is, for the messages that counted it among the ones in their words
+                control.storedRows[item.id] = number
                 continue
             }
             switch sent.state {
             case .unsent, .declined:
                 there[item.id] = false
             case .sending, .unsure, .unconfirmed:
-                let before = sent.before ?? sameWords(as: item.id, in: botId)
-                let row = DeliveryCheck.stored(item.text, before: before, taken: taken, page: stored).first
+                let row = DeliveryCheck.stored(item.text, others: others(of: item.id, in: botId, taken: taken), page: stored)
                 there[item.id] = row != nil
                 if let number = row?.row {
                     taken.insert(number)

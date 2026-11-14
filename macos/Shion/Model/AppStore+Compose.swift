@@ -129,16 +129,14 @@ extension AppStore {
     }
 
     /// The chat's other messages in the same words as item `id` that Hermes has or may have, as
-    /// they stand now (DeliveryCheck.Before): those stored as a known row, and how many more are
-    /// not known not to be there (said and not stored yet, or their own receipt still out). The
-    /// words are the item's, or (the item gone from the chat) the ones it was sent with, as a
+    /// they stand now (DeliveryCheck.Before): those stored as a known row, and (by their ids) the
+    /// ones not known not to be there, said and not stored yet or their own receipt still out.
+    /// The words are the item's, or (the item gone from the chat) the ones it was sent with, as a
     /// row shows them.
     func sameWords(as id: String, in botId: String) -> DeliveryCheck.Before {
         var before = DeliveryCheck.Before()
         let items = chats[botId] ?? []
-        guard let words = items.first(where: { $0.id == id })?.text
-            ?? deliveries.sent[id].map({ Self.userItem(id: id, at: $0.at, text: $0.text).text })
-        else { return before }
+        guard let words = words(of: id, in: botId) else { return before }
         for item in items where item.role == .user && item.id != id && item.text == words {
             switch deliveries.state(item.id) {
             case .unsent?, .unconfirmed?:
@@ -148,11 +146,91 @@ extension AppStore {
                 if let row = DeliveryCheck.row(of: item.id) ?? control.storedRows[item.id] {
                     before.rows.insert(row)
                 } else {
-                    before.unstored += 1
+                    before.others.insert(item.id)
                 }
             }
         }
         return before
+    }
+
+    /// A message's words as a row shows them: the chat's item's, or the ones it was sent with.
+    private func words(of id: String, in botId: String) -> String? {
+        chats[botId]?.first(where: { $0.id == id })?.text
+            ?? deliveries.sent[id].map { Self.userItem(id: id, at: $0.at, text: $0.text).text }
+    }
+
+    /// A message is said, as the chat's item `id` (already in the chat): followed from this
+    /// moment, before anything is awaited, with what else in the chat reads the same now on its
+    /// record. It may wait for the chat to be attached again before it goes, and the chat be read
+    /// again meanwhile (loadLatestPage), which must not take it for an older message in the same
+    /// words. The messages in its words that Hermes has not said it has learn of it too: it was
+    /// said after them (`noteSaid`).
+    func follow(_ id: String, botId: String, text: String, at: Date, drafts: [Draft] = []) {
+        deliveries.track(id, botId: botId, text: text, at: at, drafts: drafts, before: sameWords(as: id, in: botId))
+        noteSaid(id, in: botId)
+    }
+
+    /// A message said again (重发, 再发一次), moved to the bottom of the chat: what else reads the
+    /// same is what the chat has at this moment, all of it before this one.
+    func followAgain(_ id: String, in botId: String) {
+        deliveries.saidAgain(id, past: sameWords(as: id, in: botId))
+        noteSaid(id, in: botId)
+    }
+
+    /// The messages in `id`'s words that the server has not said it has are told `id` was said
+    /// after them: should Hermes store it, its row is not theirs (DeliveryCheck.Others.later).
+    private func noteSaid(_ id: String, in botId: String) {
+        guard let words = words(of: id, in: botId) else { return }
+        for (other, sent) in deliveries.sent where other != id && sent.botId == botId
+            && Self.userItem(id: other, at: sent.at, text: sent.text).text == words {
+            deliveries.said(id, after: other)
+        }
+    }
+
+    /// What is known now of the other messages in the words of message `id`, for looking at the
+    /// transcript for it (DeliveryCheck.stored). The messages its record names (the ones that
+    /// read the same when it was said, and the ones said after it) are asked one by one what
+    /// became of them: one whose row is known by now is that row; one Hermes does not have
+    /// counts for nothing; one Hermes may still have, as a row nobody can name, counts as one.
+    /// `taken` are rows that have confirmed other messages put into a turn.
+    func others(of id: String, in botId: String, taken: Set<Int> = []) -> DeliveryCheck.Others {
+        let sent = deliveries.sent[id]
+        let before = sent?.before ?? sameWords(as: id, in: botId)
+        var known = DeliveryCheck.Others(rows: before.rows.union(taken))
+        known.earlier = unknown(before.others, in: botId, rows: &known.rows)
+        known.later = unknown(sent?.later ?? [], in: botId, rows: &known.rows)
+        return known
+    }
+
+    /// Of these messages, how many Hermes may have as a row not known. The rows of the ones
+    /// whose row is known by now go into `rows`.
+    private func unknown(_ ids: Set<String>, in botId: String, rows: inout Set<Int>) -> Int {
+        var count = 0
+        for id in ids {
+            if let row = control.storedRows[id] {
+                rows.insert(row)
+            } else if !absent(id, in: botId) {
+                count += 1
+            }
+        }
+        return count
+    }
+
+    /// A message that has no row to be mistaken for another's. Hermes refused it or it was found
+    /// not to have got there (没发出去), or the turn it was put into did not take it (most
+    /// assistants then never saw it; one that runs on Codex may have, and Hermes does not say
+    /// which, so this is the likelier reading and not a certainty). It never went out, and waits
+    /// with what is said while not connected. Or it is in doubt itself: it is looked for by
+    /// itself, ahead of a later one, and a row found for it is taken.
+    private func absent(_ id: String, in botId: String) -> Bool {
+        switch deliveries.state(id) {
+        case .unsent?, .declined?, .unconfirmed?:
+            return true
+        case .sending?, .unsure?:
+            return false
+        case nil:
+            return QuickAsk.shared.sentences(for: botId).contains { $0.id == id }
+        }
     }
 
     /// Why a message did not reach Hermes, or may not have, on the message.
