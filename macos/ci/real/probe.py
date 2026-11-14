@@ -12,12 +12,19 @@ Runs inside the container (inside.sh), beside a gateway that serves three Bot Mo
   python probe.py behind <capture.json>       a session read again (session.resume) while a turn runs, its
                                               answer held after Hermes took the snapshot (hold_gateway.py)
                                               until the turn has ended: the end reaches the viewer first
+  python probe.py compact <capture.json>      「继续」 put into a turn while its command runs (stored as a
+                                              row of its own), then the session compacted (session.mutate
+                                              compress), twice: in place, and into a new session (通勤's
+                                              config says compression.in_place false). The newest page and
+                                              the store's rows before and after each; the pages also go to
+                                              compaction.json beside the capture, for ../logic/send
 
 Each prints what a viewer gets, frame by frame, and writes it as JSON for the Mac's own code to be
-run over (read_notices.sh, read_behind.sh)."""
+run over (read_notices.sh, read_behind.sh, ../logic/send)."""
 import json
 import os
 import socket
+import sqlite3
 import subprocess
 import sys
 import time
@@ -370,6 +377,119 @@ elif STAGE == "behind":
     capture.update(session=session, submission=submission, receipt=receipt, opened=opened, overtaken=overtaken,
                    frames_before=a.frames[mark:at_call], frames_between=between, frames_after=a.frames[at_answer:],
                    held=held, again=again, page=rows_of(a, "default", session, quiet=True))
+
+elif STAGE == "compact":
+    def stored(profile):
+        """The profile's store as it is, every row of it (active, archived, the parent's of a rotation),
+        unprojected: what a compaction did to the rows' numbers, and what it kept of them."""
+        home = os.environ["HERMES_HOME"] if profile == "default" else os.path.join(os.environ["HERMES_HOME"], "profiles", profile)
+        db = sqlite3.connect(f"file:{home}/state.db?mode=ro", uri=True)
+        db.row_factory = sqlite3.Row
+        rows = [dict(row) for row in db.execute(
+            "SELECT id, session_id, role, active, compacted, timestamp, message_uid, display_kind, display_metadata,"
+            " substr(content, 1, 120) AS content FROM messages ORDER BY id")]
+        issued = db.execute("SELECT seq FROM sqlite_sequence WHERE name = 'messages'").fetchone()
+        db.close()
+        for row in rows:
+            say("   stored", short(row, 360))
+        say("   the highest row number ever issued:", issued[0] if issued else None)
+        return {"rows": rows, "issued": issued[0] if issued else None}
+
+    def moved(before, after):
+        """Each row of yours on the page before, and the row on the page after with its time and words."""
+        later = {(row.get("timestamp"), row.get("text")): row.get("row_id")
+                 for row in after.get("rows") or [] if row.get("role") == "user"}
+        for row in before.get("rows") or []:
+            if row.get("role") == "user":
+                say("   ", row.get("text"), row.get("display_kind") or "", (row.get("display_metadata") or {}).get("submission_id", ""),
+                    "row", row.get("row_id"), "->", later.get((row.get("timestamp"), row.get("text")), "not on the page"))
+
+    def turn(viewer, profile, chat, words):
+        mark = len(viewer.frames)
+        submission = str(uuid.uuid4()).upper()
+        viewer.call("prompt.submit", {"profile": profile, "session_id": chat, "text": words, "submission_id": submission})
+        say("the turn", "ended" if viewer.listen(90, until="message.complete", after=mark) else "DID NOT END in 90 s")
+        viewer.listen(1)
+        return submission
+
+    def steered(viewer, profile, chat, words, steer):
+        """A prompt whose turn runs a command for a few seconds (mock_model.py: 慢慢做), and `steer` put into
+        that turn while it runs, named by the run its frames carry, as Shion sends it: Hermes delivers it
+        after the command's result, as a row of its own (display_kind steer)."""
+        mark = len(viewer.frames)
+        submission = str(uuid.uuid4()).upper()
+        viewer.call("prompt.submit", {"profile": profile, "session_id": chat, "text": words, "submission_id": submission})
+        if not viewer.listen(60, until="tool.start", after=mark):
+            say("the command did not start in 60 s")
+            raise SystemExit(1)
+        generation = next(f.get("execution_generation") for f in reversed(viewer.frames) if f.get("type") == "tool.start")
+        answer = viewer.call("session.steer", {"profile": profile, "session_id": chat, "text": steer,
+                                               "execution_generation": generation})
+        say("the turn", "ended" if viewer.listen(90, until="message.complete", after=mark) else "DID NOT END in 90 s")
+        viewer.listen(1)
+        return submission, answer
+
+    def compress(viewer, profile, chat):
+        """session.mutate compress, fenced by the session's revision and run as a resume gives them; the
+        frames it published."""
+        snapshot = viewer.call("session.resume", {"profile": profile, "session_id": chat, "omit_messages": True}, quiet=True)
+        revision, generation = snapshot.get("revision"), snapshot.get("execution_generation")
+        mark = len(viewer.frames)
+        answer = {}
+        for _ in range(2):
+            answer = viewer.call("session.mutate", {"profile": profile, "session_id": chat, "request_id": str(uuid.uuid4()),
+                                                    "expected_revision": revision, "expected_generation": generation,
+                                                    "operation": "compress", "payload": {}}, timeout=180)
+            refused = ((answer.get("error") or {}).get("data") or {})
+            if refused.get("reason") not in ("revision_conflict", "stale_generation"):
+                break
+            revision, generation = refused.get("revision", revision), refused.get("execution_generation", generation)
+        viewer.listen(3)
+        return answer, [f for f in viewer.frames[mark:] if f.get("type") != "message.delta"]
+
+    pages = {}
+    for profile, path in (("default", "in place"), ("commute", "rotation")):
+        say(f"######## {path} ({profile})")
+        v = Socket(profile[:2], profile=None if profile == "default" else profile)
+        chat = bot_chat(v, profile)
+        prompts = [turn(v, profile, chat, "你好（探测）"), turn(v, profile, chat, "第二句（探测）")]
+        first, steer = steered(v, profile, chat, "慢慢做（探测）", "继续")
+        say("--- the newest page, before the session is compacted")
+        before = rows_of(v, profile, chat, limit=50)
+        before_stored = stored(profile)
+        say("--- compacted")
+        compacted, frames = compress(v, profile, chat)
+        say("--- the newest page after it")
+        after = rows_of(v, profile, chat, limit=50)
+        after_stored = stored(profile)
+        moved(before, after)
+        say("--- a prompt in the steer's words, the same words put into a turn again, and compacted once more")
+        again = turn(v, profile, chat, "继续")
+        second, steer2 = steered(v, profile, chat, "慢慢做（探测）", "继续")
+        before2 = rows_of(v, profile, chat, limit=50)
+        compacted2, frames2 = compress(v, profile, chat)
+        after2 = rows_of(v, profile, chat, limit=50)
+        after2_stored = stored(profile)
+        moved(before2, after2)
+        capture[path] = {"profile": profile, "session": chat, "prompts": [*prompts, first, again, second],
+                         "steers": [steer, steer2], "before": before, "before_stored": before_stored,
+                         "compacted": compacted, "frames": frames, "after": after, "after_stored": after_stored,
+                         "before2": before2, "compacted2": compacted2, "frames2": frames2, "after2": after2,
+                         "after2_stored": after2_stored}
+        pages[path] = {"before": before, "after": after, "before2": before2, "after2": after2}
+        v.close()
+
+    def page_text(page):
+        """A page as it came, a compaction's summary cut short, a row to a line."""
+        rows = [{**row, "text": row["text"][:40] + "…"} if row.get("row_kind") == "compaction" else row
+                for row in page.get("rows") or []]
+        head = json.dumps({key: value for key, value in page.items() if key != "rows"}, ensure_ascii=False)
+        return head[:-1] + ', "rows": [\n' + ",\n".join("   " + json.dumps(row, ensure_ascii=False) for row in rows) + "]}"
+    # what ../logic/send reads
+    paths = [f" {json.dumps(path)}: {{\n" + ",\n".join(f"  {json.dumps(name)}: {page_text(page)}" for name, page in named.items())
+             + "}" for path, named in pages.items()]
+    with open(os.path.join(os.path.dirname(OUT), "compaction.json"), "w", encoding="utf-8") as out:
+        out.write("{\n" + ",\n".join(paths) + "\n}\n")
 
 with open(OUT, "w", encoding="utf-8") as out:
     json.dump(capture, out, ensure_ascii=False, indent=1)

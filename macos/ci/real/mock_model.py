@@ -10,6 +10,8 @@ is decided by the last message of the request:
   "让课程别回"                               -> a message 课程's side answers with [SILENT]
   "问课程和通勤"                             -> one call to two teammates, with constraints
   "后台跑一下"     (terminal offered)        -> a terminal call in the background, told to notify
+  "慢慢做"         (terminal offered)        -> a terminal call that takes three seconds: something can be
+                                               put into the turn while it runs
   "说很多"                                   -> a reply of several megabytes in LONG_PARTS parts
   "慢慢说"                                   -> 第一段。 and, once the file GO is there, 第二段。: a reply
                                                that ends when a probe says so
@@ -79,6 +81,8 @@ def decide(body):
     if "后台跑一下" in said and "terminal" in offered:
         return "tool", ("terminal", {"command": "sleep 4; echo mock-background-finished", "background": True,
                                      "notify_on_complete": True})
+    if "慢慢做" in said and "terminal" in offered:
+        return "tool", ("terminal", {"command": "sleep 3; echo mock-slow-finished"})
     if "说很多" in said:
         return "long", None
     if "慢慢说" in said:

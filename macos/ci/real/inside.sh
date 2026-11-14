@@ -15,6 +15,9 @@ bot() { printf 'description: %s\ndescription_auto: false\nui_meta:\n  hermes-bot
 bot "$HERMES_HOME" "总秘书（mock）" "詩音"
 bot "$HERMES_HOME/profiles/study" "课程助手（mock）" "课程"
 bot "$HERMES_HOME/profiles/commute" "通勤助手（mock）" "通勤"
+# 通勤 compacts a session by rotating it into a new one; the others compact it in place, as Hermes
+# does by default (stage compact)
+printf 'compression:\n  in_place: false\n' >> "$HERMES_HOME/profiles/commute/config.yaml"
 # the gateway refuses a home others can write to
 chmod -R go-w "$HOME"
 
@@ -28,7 +31,7 @@ for _ in $(seq 1 60); do
 done
 [ -n "$ready" ] || { echo "the gateway did not come up"; tail -20 /out/gateway.log; exit 1; }
 
-for stage in ${STAGES:-plain peer peer2 background gap behind}; do
+for stage in ${STAGES:-plain peer peer2 background gap behind compact}; do
     echo "######## $stage"
     python /real/probe.py "$stage" "/out/capture-$stage.json" > "/out/$stage.txt" 2>&1 || { tail -20 "/out/$stage.txt"; exit 1; }
     # the frames that say little are left out of what is shown (they are in the .txt); stage behind

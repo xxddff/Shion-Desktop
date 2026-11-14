@@ -11,6 +11,9 @@
 # reader, and its review talk over a turn's end that overtook the answer to session.resume:
 #   ./read_notices.sh captures/capture-peer.json captures/capture-peer2.json captures/capture-background.json
 #   ./read_behind.sh captures/capture-behind.json
+# and the pages read before and after a compaction (stage compact) are what the logic checks of
+# sending run over:
+#   cp captures/compaction.json ../logic/send/
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 image="${HERMES_TEST_IMAGE:-shion-hermes-test}"
