@@ -70,30 +70,36 @@ struct ChatView: View {
                         // while the reader is at the end. Opening or closing a run changes none of
                         // this, so the transcript keeps its top and the run's line stays put.
                         .onChange(of: TranscriptEnd(lines, retry: store.retryTarget(botId),
-                                                    delivery: lines.last.flatMap { store.deliveries.state($0.id) })) {
-                            FollowTrace.log("end changed \(tag(lines)) on=\(follow.on)")
+                                                    delivery: lines.last.flatMap { store.deliveries.state($0.id) })) { old, new in
+                            FollowTrace.log("end changed \(tag(lines)) on=\(follow.on) new line=\(old.last != new.last)")
                             guard follow.on, let last = lines.last else { return }
                             follow.until = Date().addingTimeInterval(1)
+                            // another line is the newest now: watched as it is laid out (below)
+                            if old.last != new.last {
+                                follow.watched = Date().addingTimeInterval(0.3)
+                            }
                             reader.scrollTo(last.id, anchor: .bottom)
                         }
                         // a turn ended: its calls fold into one line. For a moment the newest line
-                        // is watched as it is laid out (in the rows, below). Only then: any other
-                        // change of the lines (a chat opening on the message a notification was
-                        // about, an older page) is placed by what asked for it, and a reply taller
-                        // than what shows, gone to from its top, was pulled to its end (run 185)
+                        // is watched as it is laid out (in the rows, below), as it is for a moment
+                        // after it came (above). Only then: any other change of the lines (a chat
+                        // opening on the message a notification was about, an older page) is
+                        // placed by what asked for it, and a reply taller than what shows, gone to
+                        // from its top, was pulled to its end (run 185)
                         .onChange(of: store.replying.contains(botId)) { _, replying in
                             FollowTrace.log("replying=\(replying) \(tag(lines))")
                             if !replying {
-                                follow.folded = Date().addingTimeInterval(0.3)
+                                follow.watched = Date().addingTimeInterval(0.3)
                             }
                         }
                         // the reader scrolled: to the end, or away from it. When the content's
                         // height changed it was not the reader: the newest rows taking their real
                         // heights, followed for a moment after a message, or a run opening
                         .onScrollGeometryChange(for: EndGap.self) { geometry in
-                            EndGap(below: geometry.contentSize.height - geometry.visibleRect.maxY,
-                                   height: geometry.contentSize.height,
-                                   container: geometry.containerSize.height)
+                            FollowTrace.logChange("geometry offset \(FollowTrace.n(geometry.contentOffset.y)) content \(FollowTrace.n(geometry.contentSize.height)) visible \(FollowTrace.n(geometry.visibleRect.minY))..\(FollowTrace.n(geometry.visibleRect.maxY)) container \(FollowTrace.n(geometry.containerSize.height))")
+                            return EndGap(below: geometry.contentSize.height - geometry.visibleRect.maxY,
+                                          height: geometry.contentSize.height,
+                                          container: geometry.containerSize.height)
                         } action: { old, new in
                             // not the reader either: the visible part changed height (the window,
                             // the composer, the page's host). Followed, it goes back to the end. A
@@ -203,17 +209,20 @@ struct ChatView: View {
                         } action: { frame in
                             place.laidOut(line.id, at: frame)
                             if index >= lines.count - 3 {
-                                FollowTrace.log("row \(line.id.suffix(6)) index \(index)/\(lines.count) y \(FollowTrace.n(frame.minY))..\(FollowTrace.n(frame.maxY)) viewport \(FollowTrace.n(place.viewport)) on=\(follow.on) folded=\(Date() < follow.folded)")
+                                FollowTrace.log("row \(line.id.suffix(6)) index \(index)/\(lines.count) y \(FollowTrace.n(frame.minY))..\(FollowTrace.n(frame.maxY)) viewport \(FollowTrace.n(place.viewport)) on=\(follow.on) watched=\(Date() < follow.watched)")
                             }
-                            // the newest line, laid out ending below what shows just after a turn
-                            // ended, while the end is followed: the scroll asked for in the update
-                            // that folded the turn's calls landed short, by the height of the line
-                            // they folded into (run 181: a reply's last words under the composer;
-                            // the 重试 every finished turn used to have was what hid there). To its
-                            // end again, now that the rows are where they are
-                            if follow.on, index == lines.count - 1, Date() < follow.folded,
+                            // the newest line, laid out ending below what shows while the end is
+                            // followed, just after it came or just after a turn ended: the scroll
+                            // asked for in that update landed short. By the height of the line a
+                            // turn's calls folded into (run 181: a reply's last words under the
+                            // composer; the 重试 every finished turn used to have was what hid
+                            // there); or by the whole of a line that came as its turn ended (runs
+                            // 208 and 209: the reply under the composer, the call before it at the
+                            // bottom of what shows). To its end again, now that the rows are where
+                            // they are
+                            if follow.on, index == lines.count - 1, Date() < follow.watched,
                                frame.maxY > place.viewport + 1 {
-                                FollowTrace.log("row \(line.id.suffix(6)) below what shows after a turn: to its end")
+                                FollowTrace.log("row \(line.id.suffix(6)) ends below what shows: to its end")
                                 place.proxy?.scrollTo(line.id, anchor: .bottom)
                             }
                         }
@@ -332,9 +341,10 @@ struct ChatView: View {
 final class Follow {
     var on = true
     var until = Date.distantPast
-    /// A turn ended a moment ago, its calls folding into one line: until then the newest line,
-    /// laid out short of where it was scrolled to, is gone to again.
-    var folded = Date.distantPast
+    /// The newest line came a moment ago, or a turn ended a moment ago, its calls folding into
+    /// one line: until then the newest line, laid out short of where it was scrolled to, is gone
+    /// to again.
+    var watched = Date.distantPast
     /// Put at its newest message since it was made: until then no older page is asked for.
     var placed = false
 }
