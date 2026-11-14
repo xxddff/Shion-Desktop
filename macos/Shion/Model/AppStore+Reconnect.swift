@@ -374,12 +374,15 @@ extension AppStore {
     /// could not be read), it stays as it is, in doubt, and is never sent again by itself. A row
     /// that confirmed one message is that message's for as long as the session is the chat's
     /// (ChatControl.confirmedRows): at the next look it does not confirm another in the same
-    /// words, which was not there to be found the first time. The other messages in its words
-    /// are asked what became of them at each look (AppStore.others): one that was on its way
-    /// when this was said and was then refused is on no row, so it no longer keeps this one in
-    /// doubt; one said after this, and stored, has a row that is not this one's; a prompt is
-    /// known by the row that names it once a page has shown it (transcriptPage), its turn's end
-    /// seen or not.
+    /// words, which was not there to be found the first time. Rows that are other messages' are
+    /// known by their time and words too (StoredUserRow.Identity), not only by their numbers:
+    /// compacted, the session has the messages it kept under new numbers, and an older 「继续」
+    /// under its new one was taken for one just said that never got there. The other messages in
+    /// its words are asked what became of them at each look (AppStore.others): one that was on
+    /// its way when this was said and was then refused is on no row, so it no longer keeps this
+    /// one in doubt; one said after this, and stored, has a row that is not this one's; a prompt
+    /// is known by the row that names it once a page has shown it (transcriptPage), its turn's
+    /// end seen or not.
     private func settleCorrections(_ botId: String, _ sessionId: String) async {
         let unconfirmed = deliveries.unconfirmed(in: botId)
         guard !unconfirmed.isEmpty else { return }
@@ -405,9 +408,9 @@ extension AppStore {
                 continue
             }
             deliveries.arrived(id)
+            taken.insert(stored.identity)
+            control.confirmedRows[sessionId, default: []].insert(stored.identity)
             guard let row = stored.row else { continue }
-            taken.insert(row)
-            control.confirmedRows[sessionId, default: []].insert(row)
             // its row is known from here on, to the messages that counted it among theirs too
             control.storedRows[id] = row
             if chats[botId]?.contains(where: { $0.id == "row-\(row)" }) == true {
@@ -453,8 +456,8 @@ extension AppStore {
             case .sending, .unsure, .unconfirmed:
                 let row = DeliveryCheck.stored(item.text, others: others(of: item.id, in: botId, taken: taken), page: stored)
                 there[item.id] = row != nil
-                if let number = row?.row {
-                    taken.insert(number)
+                if let row {
+                    taken.insert(row.identity)
                 }
             }
         }

@@ -129,10 +129,10 @@ extension AppStore {
     }
 
     /// The chat's other messages in the same words as item `id` that Hermes has or may have, as
-    /// they stand now (DeliveryCheck.Before): those stored as a known row, and (by their ids) the
-    /// ones not known not to be there, said and not stored yet or their own receipt still out.
-    /// The words are the item's, or (the item gone from the chat) the ones it was sent with, as a
-    /// row shows them.
+    /// they stand now (DeliveryCheck.Before): those stored as a known row (read from the
+    /// transcript, also by their time and words), and (by their ids) the ones not known not to be
+    /// there, said and not stored yet or their own receipt still out. The words are the item's,
+    /// or (the item gone from the chat) the ones it was sent with, as a row shows them.
     func sameWords(as id: String, in botId: String) -> DeliveryCheck.Before {
         var before = DeliveryCheck.Before()
         let items = chats[botId] ?? []
@@ -143,7 +143,12 @@ extension AppStore {
                 // not there, or in doubt itself: it is looked for apart (settleCorrections)
                 continue
             case nil, .sending?, .unsure?, .declined?:
-                if let row = DeliveryCheck.row(of: item.id) ?? control.storedRows[item.id] {
+                if let row = DeliveryCheck.row(of: item.id) {
+                    before.rows.insert(row)
+                    // a row read from the transcript has Hermes's time, which stays with it when a
+                    // compaction stores it again under a new number
+                    before.identities.insert(StoredUserRow(text: item.text, at: item.at).identity)
+                } else if let row = control.storedRows[item.id] {
                     before.rows.insert(row)
                 } else {
                     before.others.insert(item.id)
@@ -192,11 +197,11 @@ extension AppStore {
     /// read the same when it was said, and the ones said after it) are asked one by one what
     /// became of them: one whose row is known by now is that row; one Hermes does not have
     /// counts for nothing; one Hermes may still have, as a row nobody can name, counts as one.
-    /// `taken` are rows that have confirmed other messages put into a turn.
-    func others(of id: String, in botId: String, taken: Set<Int> = []) -> DeliveryCheck.Others {
+    /// `taken` are rows that have confirmed other messages put into a turn, by their time and words.
+    func others(of id: String, in botId: String, taken: Set<StoredUserRow.Identity> = []) -> DeliveryCheck.Others {
         let sent = deliveries.sent[id]
         let before = sent?.before ?? sameWords(as: id, in: botId)
-        var known = DeliveryCheck.Others(rows: before.rows.union(taken))
+        var known = DeliveryCheck.Others(rows: before.rows, identities: before.identities.union(taken))
         known.earlier = unknown(before.others, in: botId, rows: &known.rows)
         known.later = unknown(sent?.later ?? [], in: botId, rows: &known.rows)
         return known

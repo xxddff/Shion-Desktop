@@ -23,7 +23,9 @@ final class ChatControl {
     /// end: its reply's bubble, the cards its start made (AppStore.noteTurnRows).
     @ObservationIgnored var storedRows: [String: Int] = [:]
     /// session id → the transcript rows known to name a submission (DeliveryCheck.named): each is
-    /// that prompt's, so none of them says a message in the same words got there.
+    /// that prompt's, so none of them says a message in the same words got there. Numbers are
+    /// enough here: Hermes never gives one twice, and a page names a compaction's copy of such a
+    /// row under its new number.
     @ObservationIgnored var namedRows: [String: Set<Int>] = [:]
     /// Assistant id → the cards the turn under way began with (a frame said what started it),
     /// until its end names their row.
@@ -32,8 +34,9 @@ final class ChatControl {
     /// turn as the connection went (AppStore.settleCorrections). Such a message has no receipt,
     /// so a row of yours in its words is all that says it got there, and a row says so of one
     /// message only: kept for as long as the session is the chat's, so a later look does not
-    /// give the same row to another message in the same words.
-    @ObservationIgnored var confirmedRows: [String: Set<Int>] = [:]
+    /// give the same row to another message in the same words. By their time and words
+    /// (StoredUserRow.Identity): compacted, the session has such a row under a new number.
+    @ObservationIgnored var confirmedRows: [String: Set<StoredUserRow.Identity>] = [:]
 
     struct Fence {
         var generation: Int?

@@ -7,15 +7,17 @@
 # compiled with AppStore+Compose.swift, Deliveries.swift, Delivery.swift, Compose.swift,
 # NoticeCards.swift, Rejoin.swift, JSONValue.swift and EventCursors.swift whole, against stand-ins
 # for the rest of the app (stubs.swift). main.swift runs them against a server it scripts and says
-# what it expects, line by line. Exits non-zero when a check fails or the sources no longer compile
-# with the stand-ins.
+# what it expects, line by line; where the server's pages are Hermes's own (read before and after a
+# compaction: compaction.json, from ../../real, stage compact), it serves them as they came. Exits
+# non-zero when a check fails or the sources no longer compile with the stand-ins.
 #
 #   ./run.sh                    the checks, against the sources this file sits among
 #   SWIFTC=/path/to/swiftc      another compiler than `swiftc`
 #   SHION_ROOT=/another/copy    the production files of another copy of the repository
-#   SHION_BEFORE=1              with SHION_ROOT at a copy from before the boundary named its
-#                               messages (5e58a20 or older): leaves out the checks that name them,
-#                               so the rest can be seen failing there
+#   SHION_BEFORE=1              with SHION_ROOT at a copy from before rows were known by their time
+#                               and words as well as their numbers (e03731f or older): leaves out
+#                               the checks that name the parts it lacks, and gives the stand-ins
+#                               its shape, so the rest can be seen failing there (R4-01, compacted)
 #
 # What ReconnectTests has the stand-in do for the same cases end to end is checked apart, from
 # Shion's side of the socket: ../../check_fake_reconnect.py.
@@ -34,4 +36,4 @@ python3 "$here/extract.py" "$root" "$work/extracted.swift"
     "$model/AppStore+Compose.swift" "$model/Deliveries.swift" "$model/Delivery.swift" "$model/Compose.swift" \
     "$model/NoticeCards.swift" "$model/Rejoin.swift" "$root/macos/Shion/Gateway/JSONValue.swift" \
     "$root/macos/Shion/Gateway/EventCursors.swift"
-"$work/checks"
+"$work/checks" "$here/compaction.json"

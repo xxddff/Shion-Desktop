@@ -95,3 +95,4 @@ cp captures/compaction.json ../logic/send/
 - 页本身不说压缩过：`session_id` 还是请求的那个对话（换成新会话以后也是），没有别的谱系字段；不带游标读第一页时 `reset` 每次都是 `true`。只有连着的观看者收到一帧 `session.updated`（`operation: compress`，带 `target_session_id`、`previous_target_session_id`）。
 - 行号不会重复用：`messages.id` 是 `AUTOINCREMENT`，`sqlite_sequence` 从 9 到 17 到 33，新行号总比以前发过的都大，换成新会话时也接着排。记下的旧行号不会变成另一条消息的，只可能不在页上了。
 - 所以跨压缩认得出一行的，是它的时间和文字：Hermes 自己显示时，也是按角色、内容和时间把一条消息压缩出的几份合成一行（`hermes_state_messages.py` 的 `_dedupe_display_generations`）。
+- `../logic/send` 拿这几页跑应用自己的代码：改之前，压缩以后，那句没送到的「继续」被第 16 行（旧的那句）确认成送到了，补全了事件的标成送进了这一轮，重读了对话的气泡被换掉；同样的话说两遍、一行确认了一句之后，压缩过的那一行又确认了另一句。改之后这些都还是「不确定有没有送到」，真送到了的照样由它自己的那一行确认。

@@ -78,7 +78,12 @@ final class ChatControl {
     struct Fence { var generation: Int?; var revision: Int? }
     var fences: [String: Fence] = [:]
     var storedRows: [String: Int] = [:]
+    #if BEFORE
+    // sources from before rows were known by their time and words keep these by their numbers
     var confirmedRows: [String: Set<Int>] = [:]
+    #else
+    var confirmedRows: [String: Set<StoredUserRow.Identity>] = [:]
+    #endif
     var namedRows: [String: Set<Int>] = [:]
 }
 
@@ -166,12 +171,17 @@ final class AppStore {
         ChatItem(id: id, role: .user, at: at, text: text)
     }
 
-    /// A page as the stand-in server gives it: rows with row_id, role, text, and display_kind.
+    /// A page as the stand-in server gives it: rows with row_id, role, text, and display_kind. A
+    /// compaction row is the line the production one makes of it (a tool's row, which has no
+    /// row_id, is left out).
     func transcriptItems(_ page: JSONValue) -> [ChatItem] {
         (page["rows"]?.array ?? []).compactMap { row in
             guard let id = row["row_id"]?.int, let text = row["text"]?.string else { return nil }
-            var item = ChatItem(id: "row-\(id)", role: row["role"]?.string == "user" ? .user : .assistant,
-                                at: Date(timeIntervalSince1970: row["timestamp"]?.number ?? 0), text: text)
+            let at = Date(timeIntervalSince1970: row["timestamp"]?.number ?? 0)
+            if row["row_kind"]?.string == "compaction" {
+                return ChatItem(id: "compaction-\(id)", role: .system, at: at, text: "更早的对话压缩成了摘要")
+            }
+            var item = ChatItem(id: "row-\(id)", role: row["role"]?.string == "user" ? .user : .assistant, at: at, text: text)
             item.midTurn = row["display_kind"]?.string == "steer"
             return item
         }

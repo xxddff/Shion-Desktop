@@ -760,7 +760,7 @@ for promptFirst in [true, false] {
         await comeBack(s, replayed: false)
         check("R3-02 (\(order)) look \(look): the one put into the turn got there, as its own row, not the prompt's",
               s.deliveries.state(correction) == nil && s.control.storedRows[correction] == own
-                && !(s.control.confirmedRows[session] ?? []).contains(named))
+                && s.control.confirmedRows[session]?.count == 1)
         check("R3-02 (\(order)) look \(look): two messages, two bubbles, both the page's: \(yours(s))",
               yours(s) == ["row-\(min(named, own))", "row-\(max(named, own))"])
     }
@@ -827,17 +827,194 @@ do {
     }
 }
 
+// ---- the fourth review: R4-01 -------------------------------------------------------------------
+// A compaction stores the messages it keeps again, as new rows: in place (archive_and_compact) or
+// in a new session (publish_compression_child), each copy with all of its original but the number.
+// The pages here are Hermes's own (compaction.json: ../../real, stage compact), the newest page
+// before and after each of two compactions, on each path. The first time, the 「继续」 put into the
+// turn as row 8 is row 16 after it, at the same time and in the same words; a message the
+// compaction summarized keeps its number (row 5). The second time, the prompt 「继续」 (row 18) is
+// row 27, still naming its submission, and the 「继续」 put into the next turn (row 23) is row 32,
+// while the first one, summarized now, stays row 16. Whatever its number, a row that was another
+// message's is not the one that says a message put into a turn got there.
+
+let compaction = try JSONValue.parse(String(contentsOfFile: CommandLine.arguments[1], encoding: .utf8))
+
+/// The rows of the newest page Hermes gave (`before`, `after`, `before2`, `after2`) on a path
+/// (`in place`, `rotation`), oldest first.
+func captured(_ path: String, _ page: String) -> [JSONValue] { compaction[path]?[page]?["rows"]?.array ?? [] }
+
+/// The rows before the one numbered `number`: the transcript as it was when that row's message was said.
+func rows(_ rows: [JSONValue], before number: Int) -> [JSONValue] { Array(rows.prefix { $0["row_id"]?.int != number }) }
+
+/// The row numbered `number` on a page.
+func numbered(_ number: Int, in rows: [JSONValue]) -> JSONValue? { rows.first { $0["row_id"]?.int == number } }
+
+/// 詩音's chat read from `rows`, with a turn under way (generation 1) to put things into, and the
+/// server giving those rows until it is told otherwise.
+func readChat(_ rows: [JSONValue]) -> (AppStore, Server) {
+    let s = store(.steer)
+    s.loadedChats = [bot]
+    let server = Server(for: s)
+    server.rows = rows
+    s.chats[bot] = s.transcriptItems(["rows": .array(rows)])
+        + [ChatItem(id: "reply", role: .assistant, at: then, text: "从前有座山", streaming: true)]
+    s.streaming[bot] = "reply"
+    return (s, server)
+}
+
+/// Still 不确定有没有送到: its bubble once in the chat, not marked as part of the turn, and no row its.
+func inDoubt(_ id: String, in s: AppStore) -> Bool {
+    s.deliveries.state(id) == .unconfirmed && ids(s).filter { $0 == id }.count == 1 && s.control.storedRows[id] == nil
+        && s.chats[bot]?.first { $0.id == id }?.midTurn == false
+}
+
+/// Where a message stands, in words: how it is getting there, the row taken for it, its bubble.
+func standing(_ id: String, in s: AppStore) -> String {
+    let bubble = s.chats[bot]?.first { $0.id == id }
+    return "\(s.deliveries.state(id).map { "\($0)" } ?? "Hermes has it"), row \(s.control.storedRows[id].map { "\($0)" } ?? "none"), "
+        + (bubble.map { $0.midTurn ? "its bubble part of the turn" : "its bubble" } ?? "no bubble")
+}
+
+let paths = ["in place", "rotation"]
+
+for path in paths {
+    let (before, after) = (captured(path, "before"), captured(path, "after"))
+    let (old, copy) = (numbered(8, in: before), numbered(16, in: after))
+    check("R4-01 (\(path)) Hermes's pages: the 「继续」 put into the turn as row 8 is row 16 once compacted, at the same time, in the same words",
+          old?["display_kind"] == "steer" && copy?["display_kind"] == "steer" && old?["timestamp"] == copy?["timestamp"]
+            && old?["text"] == copy?["text"] && numbered(8, in: after) == nil)
+    check("R4-01 (\(path)) …a message summarized keeps its number, a prompt kept is a new row naming its submission still",
+          numbered(5, in: after)?["timestamp"] == numbered(5, in: before)?["timestamp"]
+            && numbered(10, in: after)?["display_metadata"]?["submission_id"] == numbered(1, in: before)?["display_metadata"]?["submission_id"]
+            && numbered(10, in: after)?["timestamp"] == numbered(1, in: before)?["timestamp"])
+    let (before2, after2) = (captured(path, "before2"), captured(path, "after2"))
+    check("R4-01 (\(path)) …and the second time: the prompt 「继续」 row 18 is row 27, the next 「继续」 put into a turn row 23 is row 32, the first stays row 16",
+          numbered(27, in: after2)?["display_metadata"]?["submission_id"] == numbered(18, in: before2)?["display_metadata"]?["submission_id"]
+            && numbered(32, in: after2)?["timestamp"] == numbered(23, in: before2)?["timestamp"]
+            && numbered(16, in: after2)?["timestamp"] == numbered(16, in: before2)?["timestamp"])
+}
+
+// the review's case: 「继续」 is in the history as row 8, and said again into a running turn, its
+// answer lost with the connection, Hermes never having had it. Back before the session is
+// compacted, it is in doubt; after, row 16 is the old one, and it is in doubt still
+for path in paths {
+    for replayed in [true, false] {
+        let how = "\(path), \(replayed ? "frames replayed" : "newest page read")"
+        let (s, server) = readChat(captured(path, "before"))
+        _ = typed("继续", in: s)
+        let lost = s.chats[bot]?.last?.id ?? ""
+        await until { s.deliveries.state(lost) == .unconfirmed }
+        check("R4-01 (\(how)) put into the turn and lost: in doubt, row 8 in its words before it: \(shape(s.deliveries.sent[lost]?.before))",
+              s.deliveries.state(lost) == .unconfirmed && shape(s.deliveries.sent[lost]?.before) == "rows [8], 0 more")
+        await comeBack(s, replayed: replayed)
+        check("R4-01 (\(how)) back, not compacted: in doubt, with its bubble and no row: \(standing(lost, in: s))", inDoubt(lost, in: s))
+        server.rows = captured(path, "after")
+        for look in 1...2 {
+            await comeBack(s, replayed: replayed)
+            check("R4-01 (\(how)) compacted, look \(look): row 16 is the old 「继续」, not it: in doubt, with its bubble and no row: \(standing(lost, in: s))",
+                  inDoubt(lost, in: s))
+        }
+    }
+}
+
+// a message that got there: said before row 8 was stored, that row is its own, and once compacted,
+// row 16 is; said after the first compaction and stored as row 23, row 32 is, the old 「继续」
+// (row 16) and the prompt in its words (row 27) not
+for path in paths {
+    for replayed in [true, false] {
+        let how = "\(path), \(replayed ? "frames replayed" : "newest page read")"
+        let (s, server) = readChat(rows(captured(path, "before"), before: 8))
+        _ = typed("继续", in: s)
+        let stored = s.chats[bot]?.last?.id ?? ""
+        await until { s.deliveries.state(stored) == .unconfirmed }
+        server.rows = captured(path, "after")
+        await comeBack(s, replayed: replayed)
+        check("R4-01 (\(how)) stored as row 8, and compacted since: row 16 is its own, and says it got there",
+              s.deliveries.state(stored) == nil && s.control.storedRows[stored] == 16)
+        check("R4-01 (\(how)) …shown once: \(ids(s))",
+              replayed ? ids(s).contains(stored) && !ids(s).contains("row-16") : ids(s).contains("row-16") && !ids(s).contains(stored))
+        let (later, laterServer) = readChat(rows(captured(path, "before2"), before: 23))
+        _ = typed("继续", in: later)
+        let again = later.chats[bot]?.last?.id ?? ""
+        await until { later.deliveries.state(again) == .unconfirmed }
+        check("R4-01 (\(how)) said after the first compaction, rows 16 and 18 in its words before it: \(shape(later.deliveries.sent[again]?.before))",
+              shape(later.deliveries.sent[again]?.before) == "rows [16, 18], 0 more")
+        laterServer.rows = captured(path, "after2")
+        await comeBack(later, replayed: replayed)
+        check("R4-01 (\(how)) stored as row 23, and compacted again: row 32 says it got there, not row 16 or the prompt's row 27",
+              later.deliveries.state(again) == nil && later.control.storedRows[again] == 32)
+    }
+}
+
+// the same words put into the turn twice and lost, one of them stored as row 8: it confirms one
+// of them. Compacted, it is row 16, and still that message's, not the other's
+for path in paths {
+    for replayed in [true, false] {
+        let how = "\(path), \(replayed ? "frames replayed" : "newest page read")"
+        let (s, server) = readChat(rows(captured(path, "before"), before: 8))
+        _ = typed("继续", in: s)
+        let first = s.chats[bot]?.last?.id ?? ""
+        await until { s.deliveries.state(first) == .unconfirmed }
+        _ = typed("继续", in: s)
+        let second = s.chats[bot]?.last?.id ?? ""
+        await until { s.deliveries.state(second) == .unconfirmed }
+        server.rows = captured(path, "before")
+        await comeBack(s, replayed: replayed)
+        check("R4-01 (\(how)) twice, one stored as row 8: it confirms the first, the second is in doubt",
+              s.deliveries.state(first) == nil && s.control.storedRows[first] == 8 && inDoubt(second, in: s))
+        server.rows = captured(path, "after")
+        for look in 1...2 {
+            await comeBack(s, replayed: replayed)
+            check("R4-01 (\(how)) compacted, look \(look): row 16 is the first's row, not the second's: in doubt still: \(standing(second, in: s))",
+                  inDoubt(second, in: s))
+            check("R4-01 (\(how)) compacted, look \(look): …and the first shows once: \(ids(s))",
+                  ids(s).filter { [first, "row-8", "row-16"].contains($0) }.count == 1)
+        }
+    }
+}
+
+// a prompt whose receipt the connection took is found by the submission its row names, compacted
+// or not: 「继续」 said after the first compaction, stored as row 18, which is row 27 once compacted.
+// On the newest page read in the chat's place, as when the frames cannot be had (replayed, the
+// frames say it was admitted)
+for path in paths {
+    let (s, server) = readChat(rows(captured(path, "before2"), before: 18))
+    s.running = []
+    server.running = false
+    server.prompt = { throw GatewayError.offline }
+    s.busyMode = .queue
+    _ = typed("继续", in: s)
+    let prompt = s.chats[bot]?.last?.id ?? ""
+    await until { s.deliveries.state(prompt) == .unsure }
+    // the row that names it, as Hermes keeps it: under this message's submission
+    server.rows = captured(path, "after2").map { row in
+        guard row["row_id"]?.int == 27, case .object(var fields) = row else { return row }
+        fields["display_metadata"] = ["submission_id": .string(prompt), "gateway_input_owner": "ci"]
+        return .object(fields)
+    }
+    await comeBack(s, replayed: false)
+    check("R4-01 (\(path)) a prompt's receipt lost, and compacted since: row 27 names it, and stands for it, once: \(ids(s))",
+          s.deliveries.state(prompt) == nil && s.control.storedRows[prompt] == 27 && ids(s).contains("row-27") && !ids(s).contains(prompt))
+}
+
 #if !BEFORE
+/// The row of yours in 「继续」 that Hermes stored `seconds` after `then`, whatever its number.
+func continued(_ seconds: Int) -> StoredUserRow.Identity {
+    StoredUserRow(text: "继续", at: then.addingTimeInterval(Double(seconds))).identity
+}
+
 // what the transcript is looked at with, message by message (AppStore.others)
 do {
     let s = store(.steer)
-    s.deliveries.track("L", botId: bot, text: "继续", at: Date(), before: DeliveryCheck.Before(rows: [5], others: ["E"]))
+    s.deliveries.track("L", botId: bot, text: "继续", at: Date(),
+                       before: DeliveryCheck.Before(rows: [5], identities: [continued(5)], others: ["E"]))
     check("others: one that may be there, as a row nobody can name, counts as one",
-          s.others(of: "L", in: bot) == DeliveryCheck.Others(rows: [5], earlier: 1, later: 0))
+          s.others(of: "L", in: bot) == DeliveryCheck.Others(rows: [5], identities: [continued(5)], earlier: 1, later: 0))
     // it never went out: it waits with what is said while not connected
     QuickAsk.shared.putBack([QuickAskWaiting(id: "E", text: "继续", at: Date(), botId: bot)])
     check("others: one that never went out, and waits, counts for nothing",
-          s.others(of: "L", in: bot) == DeliveryCheck.Others(rows: [5], earlier: 0, later: 0))
+          s.others(of: "L", in: bot) == DeliveryCheck.Others(rows: [5], identities: [continued(5)], earlier: 0, later: 0))
     QuickAsk.shared.waiting = []
     s.deliveries.track("E", botId: bot, text: "继续", at: Date())
     check("others: on its way counts as one", s.others(of: "L", in: bot).earlier == 1)
@@ -849,8 +1026,9 @@ do {
     check("others: in doubt itself is looked for by itself", s.others(of: "L", in: bot).earlier == 0)
     s.deliveries.arrived("E")
     s.control.storedRows["E"] = 9
-    check("others: once its row is known it is that row, and counts no more",
-          s.others(of: "L", in: bot, taken: [7]) == DeliveryCheck.Others(rows: [5, 7, 9], earlier: 0, later: 0))
+    check("others: once its row is known it is that row, and counts no more; a row taken is known by its time and words",
+          s.others(of: "L", in: bot, taken: [continued(7)])
+            == DeliveryCheck.Others(rows: [5, 9], identities: [continued(5), continued(7)], earlier: 0, later: 0))
     // said after it while it is still out
     s.chats[bot] = [ChatItem(id: "L", role: .user, at: Date(), text: "继续"), ChatItem(id: "M", role: .user, at: Date(), text: "继续")]
     s.follow("M", botId: bot, text: "继续", at: Date())
@@ -872,6 +1050,11 @@ do {
     func rows(_ ids: [Int]) -> [StoredUserRow] { ids.map { StoredUserRow(text: "继续", at: Date(), row: $0) } }
     func found(_ ids: [Int], _ others: DeliveryCheck.Others) -> Int? { DeliveryCheck.stored("继续", others: others, page: rows(ids))?.row }
     check("stored: a row that is another's is not it", found([1], .init(rows: [1])) == nil)
+    // stored eight seconds after `then` as row 8, and as row 16 once the session is compacted
+    let copy = [StoredUserRow(text: "继续", at: then.addingTimeInterval(8), row: 16)]
+    check("stored: nor under the number a compaction gave it, known by its time and words",
+          DeliveryCheck.stored("继续", others: .init(rows: [8], identities: [continued(8)]), page: copy) == nil)
+    check("stored: …which its old number alone does not say", DeliveryCheck.stored("继续", others: .init(rows: [8]), page: copy)?.row == 16)
     check("stored: nor the oldest free rows, as many as were said before it and may be there", found([1, 2], .init(earlier: 2)) == nil)
     check("stored: the row after those is it", found([1, 2, 3], .init(earlier: 2)) == 3)
     check("stored: the newest free rows are those said after it", found([1, 2], .init(later: 1)) == 1 && found([1], .init(later: 1)) == nil)

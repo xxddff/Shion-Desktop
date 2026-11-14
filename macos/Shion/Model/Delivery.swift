@@ -88,6 +88,9 @@ nonisolated enum DeliveryCheck {
     nonisolated struct Before: Equatable, Sendable {
         /// The transcript rows they are known to be stored as.
         var rows: Set<Int> = []
+        /// The ones of them read from the transcript, by their time and words: compacted since,
+        /// the session may have them under other numbers (StoredUserRow.Identity).
+        var identities: Set<StoredUserRow.Identity> = []
         /// The others, by their chat item's id: Hermes had them, or might have, as a row not
         /// known then (their turn had not ended, or their own receipt was still out). What became
         /// of each is asked when the transcript is looked at (AppStore.others): by then its row
@@ -101,10 +104,13 @@ nonisolated enum DeliveryCheck {
     /// looked at for it: which rows are theirs, and how many of them Hermes may have as a row
     /// nobody can name yet.
     nonisolated struct Others: Equatable, Sendable {
-        /// Rows that are other messages': the ones it had before it (Before.rows), those of
-        /// messages whose row has become known since, and those that have confirmed another
-        /// message put into a turn.
+        /// Rows that are other messages', by number: the ones it had before it (Before.rows), and
+        /// those of messages whose row has become known since. Hermes gives no number twice.
         var rows: Set<Int> = []
+        /// Rows that are other messages', by their time and words, which a row keeps when a
+        /// compaction stores it again under a new number: the ones it had read before it
+        /// (Before.identities), and those that have confirmed another message put into a turn.
+        var identities: Set<StoredUserRow.Identity> = []
         /// Said before it, and Hermes may have them: of the rows in its words that are nobody's,
         /// the oldest are theirs.
         var earlier = 0
@@ -120,15 +126,17 @@ nonisolated enum DeliveryCheck {
 
     /// The row of the transcript's newest page (oldest first) that a message is stored as, when
     /// the page shows it got there: a row of yours in its words that is no other message's.
-    /// The rows in its words that are known to be others' are left out (`others.rows`); of the
-    /// rest, as many as other messages may account for are theirs (`earlier` of the oldest,
-    /// `later` of the newest), and only one beyond those is this message's: the one after the
-    /// earlier ones. Nil: the page does not show that it got there, and it stays in doubt. So a
-    /// message in the same words, said before or after, never passes for it, and a row confirms
-    /// one message, not two.
+    /// The rows in its words that are known to be others' are left out, by number or by their
+    /// time and words (`others`: under the new number a compaction gave it, such a row is
+    /// still known); of the rest, as many as other messages may account for are theirs
+    /// (`earlier` of the oldest, `later` of the newest), and only one beyond those is this
+    /// message's: the one after the earlier ones. Nil: the page does not show that it got there,
+    /// and it stays in doubt. So a message in the same words, said before or after, never passes
+    /// for it, and a row confirms one message, not two.
     static func stored(_ text: String, others: Others, page: [StoredUserRow]) -> StoredUserRow? {
         let free = page.filter { row in
             row.text == text && !(row.row.map { others.rows.contains($0) } ?? false)
+                && !others.identities.contains(row.identity)
         }
         return free.count > others.earlier + others.later ? free[others.earlier] : nil
     }
@@ -150,4 +158,17 @@ nonisolated struct StoredUserRow: Equatable, Sendable {
     var text: String
     var at: Date
     var row: Int? = nil
+
+    /// Which row it is from one read of the transcript to the next: its words, and when Hermes
+    /// stored it (the row's own `timestamp`, not this Mac's clock). A number names one row for
+    /// good, Hermes never gives it twice, but not one message: a compaction stores the messages
+    /// it keeps again, in place or in a new session, each under a new number and with everything
+    /// else of its original, its time and words too (by which, with its role, Hermes's own
+    /// display shows a message's copies once).
+    var identity: Identity { Identity(text: text, at: at) }
+
+    nonisolated struct Identity: Hashable, Sendable {
+        var text: String
+        var at: Date
+    }
 }
