@@ -46,6 +46,16 @@ which (diary, errand) compact a session by themselves.
                                               and the store before and after each compaction, what each turn's
                                               start said and what each run began and ended with; the pages
                                               also go to copies-notices.json and copies-send.json
+  python probe.py long <capture.json>         a turn that checks files one by one (mock_model.py: 逐个检查), its
+                                              newest page read while the first command runs, compacted by
+                                              Hermes itself once that command's result is back (diary in
+                                              place, errand into a new session), then a command a file, 28
+                                              of them, stopped in the last; taken back, then the same with 3
+                                              (in the same Bot Chat: a profile has one). Every page
+                                              after its end, newest first, as Shion reads them (50 rows, each
+                                              next_cursor followed), the store, and what a rewind to the
+                                              prompt's row as the page showed it answers, then one to the row
+                                              the turn's end names; the pages also go to longturn-send.json
 
 Each prints what a viewer gets, frame by frame, and writes it as JSON for the Mac's own code to be
 run over (read_notices.sh, read_behind.sh, ../logic/send, ../logic/notices)."""
@@ -319,16 +329,28 @@ def stopped(viewer, profile, chat, words):
     return submission, end
 
 
+def paged(value):
+    return isinstance(value, dict) and isinstance(value.get("rows"), list)
+
+
 def text(value, indent):
     """`value` as JSON, a page's rows one to a line, a compaction's summary and a reply of thousands of
-    characters (mock_model.py: 长长地回) cut short, alike on every page."""
-    if isinstance(value, dict) and isinstance(value.get("rows"), list):
+    characters (mock_model.py: 长长地回) cut short, alike on every page; pages inside it (stage long's
+    pages after a turn's end, a list) as pages too."""
+    if paged(value):
         rows = [{**row, "text": row["text"][:40] + "…"}
                 if row.get("row_kind") == "compaction" or len(row.get("text") or "") > 1000 else row
                 for row in value["rows"]]
         head = json.dumps({key: item for key, item in value.items() if key != "rows"}, ensure_ascii=False)
         return head[:-1] + ', "rows": [\n' + ",\n".join(" " * (indent + 1) + json.dumps(row, ensure_ascii=False)
                                                         for row in rows) + "]}"
+    items = value.values() if isinstance(value, dict) else value if isinstance(value, list) else []
+    if any(paged(item) or (isinstance(item, list) and any(paged(each) for each in item)) for item in items):
+        pad = " " * (indent + 1)
+        if isinstance(value, list):
+            return "[\n" + ",\n".join(pad + text(item, indent + 1) for item in value) + "]"
+        return "{\n" + ",\n".join(f"{pad}{json.dumps(key, ensure_ascii=False)}: {text(item, indent + 1)}"
+                                   for key, item in value.items()) + "}"
     return json.dumps(value, ensure_ascii=False)
 
 
@@ -965,6 +987,98 @@ elif STAGE == "copies":
                        "send": {"steered": slow, "runs1": runs1, "before1": before1, "after1": after1}}
         v.close()
     write_pages(pages, "copies")
+
+elif STAGE == "long":
+    def checked(viewer, profile, chat, words, calls):
+        """`words` begins a turn that checks files one by one, `calls` commands (mock_model.py: 逐个检查): the
+        newest page read while the first runs (three seconds), Hermes compacting the session once its result
+        is back (the request that began the turn says 满了), then a command a file, and the turn stopped
+        (session.interrupt for the run its frames carry) while the last runs. The prompt's submission, the
+        page read mid-run, and what the frames said."""
+        mark = len(viewer.frames)
+        submission = str(uuid.uuid4()).upper()
+        viewer.call("prompt.submit", {"profile": profile, "session_id": chat, "text": words, "submission_id": submission})
+        if not viewer.listen(60, until="tool.start", after=mark):
+            say("the first command did not start in 60 s")
+            raise SystemExit(1)
+        say("--- the newest page while the first command runs")
+        during = rows_of(viewer, profile, chat, limit=50)
+        if not viewer.listen(180, until="tool.start", after=mark, count=calls):
+            say(f"the {calls}th command did not start in 180 s:",
+                sum(1 for f in viewer.frames[mark:] if f.get("type") == "tool.start"), "did")
+            raise SystemExit(1)
+        generation = next(f.get("execution_generation") for f in reversed(viewer.frames) if f.get("type") == "tool.start")
+        viewer.call("session.interrupt", {"profile": profile, "session_id": chat, "execution_generation": generation})
+        say("the turn", "ended" if viewer.listen(90, until="message.complete", after=mark) else "DID NOT END in 90 s")
+        viewer.listen(1)
+        frames = viewer.frames[mark:]
+        end = next((f.get("payload") or {} for f in reversed(frames) if f.get("type") == "message.complete"), {})
+        said = {"tool_starts": sum(1 for f in frames if f.get("type") == "tool.start"),
+                "status": [(f.get("payload") or {}).get("text") for f in frames if f.get("type") == "status.update"],
+                "updated": [f.get("payload") for f in frames if f.get("type") == "session.updated"],
+                "persisted_turn": end.get("persisted_turn"), "end_status": end.get("status")}
+        say("   commands", said["tool_starts"], "| status", said["status"], "| end", end.get("status"),
+            "| persisted_turn", short(said["persisted_turn"], 300))
+        return submission, during, said
+
+    def every_page(viewer, profile, chat):
+        """Every page of the transcript, newest first, as Shion reads them: 50 rows, each next_cursor followed."""
+        pages, cursor = [], None
+        for _ in range(20):
+            params = {"profile": profile, "session_id": chat, "order": "latest", "limit": 50}
+            if cursor:
+                params["cursor"] = cursor
+            page = viewer.call("session.transcript", params, quiet=True)
+            pages.append(page)
+            say(f"   page {len(pages)}: {len(page.get('rows') or [])} rows, reset {page.get('reset')}, more: {bool(page.get('next_cursor'))},",
+                "yours", [(r.get("row_id"), (r.get("text") or "")[:12], ((r.get("display_metadata") or {}).get("submission_id") or "")[:8])
+                          for r in page.get("rows") or [] if r.get("role") == "user"])
+            cursor = page.get("next_cursor")
+            if not cursor:
+                break
+        return pages
+
+    pages = {}
+    for profile, path in (("diary", "in place"), ("errand", "rotation")):
+        say(f"######## {path} ({profile})")
+        v = Socket(profile[:2], profile=profile)
+        capture[path] = {}
+        chat = bot_chat(v, profile)
+        # what the compaction summarizes: turns of a long reply ahead of the one it keeps (with fewer, it
+        # finds nothing it may summarize, and leaves the session be)
+        for name, warm, words, calls in (("long", ("第一句", "第二句", "第三句", "第四句"), "逐个检查这些文件，满了（长轮）", 28),
+                                         ("short", ("第五句", "第六句"), "逐个检查三个文件，满了（短轮）", 3)):
+            say(f"=== {name}: {calls} commands")
+            for opening in warm:
+                turn(v, profile, chat, f"{opening}，长长地回（长轮）")
+            submission, during, said = checked(v, profile, chat, words, calls)
+            say("--- every page after its end")
+            after = every_page(v, profile, chat)
+            after_stored = stored(profile)
+            old = next((r.get("row_id") for r in during.get("rows") or []
+                        if (r.get("display_metadata") or {}).get("submission_id") == submission), None)
+            now = (said.get("persisted_turn") or {}).get("user_row_id")
+            where = next((n for n, page in enumerate(after) for r in page.get("rows") or []
+                          if (r.get("display_metadata") or {}).get("submission_id") == submission), None)
+            say(f"--- the prompt: row {old} on the page read mid-run, row {now} by the turn's end;",
+                f"on page {where + 1 if where is not None else None} of {len(after)} after it",
+                "" if old != now else "| NOT COMPACTED IN THE TURN")
+            refused = mutate(v, profile, chat, "rewind", {"target_message_id": old}) if old else {}
+            say(f"   rewind to {old} (the row the page read mid-run showed):", short(refused, 400))
+            taken = mutate(v, profile, chat, "rewind", {"target_message_id": now}) if now else {}
+            say(f"   rewind to {now} (the row the turn's end names):", short(taken, 400))
+            rewinding = rows_of(v, profile, chat, limit=50, quiet=True)
+            capture[path][name] = {"profile": profile, "session": chat, "submission": submission, "during": during,
+                                   "said": said, "after": after, "after_stored": after_stored,
+                                   "rewinds": {"old": {"row": old, "answer": refused}, "now": {"row": now, "answer": taken}},
+                                   "rewinding": rewinding}
+            # what ../logic/send reads: the page read mid-run, every page after the end, the prompt's
+            # submission, the rows the end named, and what Hermes answered each rewind
+            pages.setdefault(path, {"send": {}})["send"][name] = {
+                "submission": submission, "during": during, "after": after, "persisted_turn": said.get("persisted_turn"),
+                "rewinds": {"old": {"row": old, "answer": refused}, "now": {"row": now, "answer": taken}}}
+        v.close()
+    write_pages(pages, "longturn")
 
 with open(OUT, "w", encoding="utf-8") as out:
     json.dump(capture, out, ensure_ascii=False, indent=1)

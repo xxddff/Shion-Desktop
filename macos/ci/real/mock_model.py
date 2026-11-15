@@ -4,7 +4,11 @@ Hermes is pointed at it (model.provider custom, base_url http://127.0.0.1:9911/v
 a real gateway runs whole turns, tool calls included, with no network and no key. What it answers
 is decided by the last message of the request:
 
-  the result of a tool                      -> a short closing sentence
+  "逐个检查"       (terminal offered)        -> a terminal call a file, CHECKS of them (CHECKS_FEW when the
+                                               words say 三个): the first takes three seconds (a page can be
+                                               read while it runs), the last until the turn is stopped
+  the result of a tool                      -> a short closing sentence (the next call, in a turn that
+                                               checks files one by one)
   a compaction's request for a summary      -> 前面聊过的事都记下了（mock 摘要）。, whatever the turns it
                                                summarizes say
   "给课程带个话"   (message_agent offered)   -> a message_agent call to @study
@@ -38,6 +42,7 @@ Every request is noted in LOG (one JSON line: what was asked with, what was answ
 import json
 import os
 import random
+import re
 import sys
 import threading
 import time
@@ -57,6 +62,9 @@ LONG_PARTS = 3000
 LONG_PAUSE = 0.001
 LONG_REPLY = 3000
 FULL = 6000
+# 「逐个检查」: how many terminal calls the turn makes, the last one left running until the turn is stopped
+CHECKS = 28
+CHECKS_FEW = 3
 
 
 def filler(index):
@@ -79,9 +87,16 @@ def decide(body):
     messages = body.get("messages") or []
     offered = {(tool.get("function") or {}).get("name") for tool in body.get("tools") or []}
     last = messages[-1] if messages else {}
+    # a turn that checks files one by one: each result names the call it answers, and how many there are
+    checked = re.search(r"mock-check-(\d+)-of-(\d+)", text_of(last.get("content"))) if last.get("role") == "tool" else None
+    if checked and "terminal" in offered and int(checked[1]) < int(checked[2]):
+        number, calls = int(checked[1]) + 1, int(checked[2])
+        return "tool", ("terminal", {"command": ("sleep 20; " if number == calls else "") + f"echo mock-check-{number}-of-{calls}"})
     if last.get("role") == "tool":
         return "text", "交代出去了（mock）。"
     said = text_of(last.get("content")) if last.get("role") == "user" else ""
+    if "逐个检查" in said and "terminal" in offered:
+        return "tool", ("terminal", {"command": f"sleep 3; echo mock-check-1-of-{CHECKS_FEW if '三个' in said else CHECKS}"})
     # a compaction's summary (agent/context_compressor.py): the turns it summarizes are in it, words
     # a rule below goes by among them
     if not offered and said.startswith("You are a summarization agent"):

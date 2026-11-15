@@ -41,6 +41,7 @@ gateway 是经 `hold_gateway.py` 起的：Hermes 的文件一个不改，只在�
 | `auto` | Hermes 自己压缩：两句要长回复的话，一句普通的「继续」，一轮里引导进去一句「继续」，一条后台命令和它的结果起的一轮，一句「满了」（它的回复说上下文满了）。下一轮一开始 Hermes 就压缩（preflight）；再来一条后台结果；再一轮里命令的结果回来时上下文又满了，Hermes 在这一轮中间压缩（post_tool），命令跑着时读一次最新一页；再来第三条后台结果。按压缩前的行号收回每一句你说的、留下来的或总结掉的话，最后按新的行号收回中间压缩的那一轮。`diary` 原地压缩，`errand` 换成新的会话。每次压缩前后读最新一页和 `state.db` 里所有的行，压缩前读最新六行，压缩后拿它的游标往上读；检查用的页和回答另外存成 `autocompaction-send.json`、`autocompaction-notices.json` |
 | `queued` | 一轮在跑（「慢慢做」）时，像 Shion 那样先发两句排队的话（`prompt.submit`，Hermes 排在这一轮后面），再把「继续」引导进这一轮；再说两句要长回复的话和一句「满了」，下一轮一开始 Hermes 压缩，这一轮里再引导进一句「继续」；最后一条后台结果。`diary` 原地压缩，`errand` 换成新的会话。读每次的最新一页和库里的行，记下每次运行的帧里 `pending` 说的是哪一条提交；页另外存成 `queued-send.json` |
 | `copies` | Hermes 自己压缩时，Bot Chat 里替你存的每一种行变成什么（`diary` 原地压缩，`errand` 换成新会话）：两句要长回复的话；然后一条后台结果，一轮里引导进去的「继续」，两条后台结果合并成的一轮（两条命令在后台跑着时，另一轮跑一条八秒的命令），詩音用 `message_agent` 给它带的话（她的 Bot Chat 在另一条连接上），它给课程带话、课程的回话作为后台结果回来；一句「满了」，下一轮一开始 Hermes 压缩。再来出错的一轮（假模型回 400），说到一半被停掉的回复，发的时候标成隐藏的一句（`display_kind: hidden`）；再「满了」，再压缩。每次压缩前后读最新一页、读库，记下每一轮开始帧带了什么、每次运行是哪一条提交、结束时存成了哪几行 |
+| `long` | 一轮里压缩、工具调用很多、停下来以后重试要找的那一行（`diary` 原地压缩，`errand` 换成新会话）：四句要长回复的话，然后「逐个检查这些文件，满了」：假模型一个文件调一次命令，头一次跑三秒，跑着时像 Shion 那样读最新一页；这句话说了「满了」，头一条命令的结果回来时 Hermes 在这一轮中间压缩；一共 28 次，最后一次跑着时停掉（`session.interrupt`）。结束后像 Shion 那样一页 50 行、顺着每页的 `next_cursor` 把每一页读完，读库，按中途读到的行号、再按结束帧说的行号收回这句话（`session.mutate` 的 `rewind`）。收回以后再两句长回复、一句只调三次命令的「逐个检查三个文件，满了」，照样走一遍。检查用的页和回答另外存成 `longturn-send.json` |
 
 结果在 `captures/`（不进仓库）：每个阶段一份 `capture-*.json` 和打印的 `*.txt`，还有 `gateway.log`、`mock-model.log`。
 
@@ -60,7 +61,7 @@ gateway 是经 `hold_gateway.py` 起的：Hermes 的文件一个不改，只在�
 
 这个把审核会话的 `Shion/Model/SkillReviewTalk.swift` 和 `Shion/Gateway/EventCursors.swift` 原样编进去（应用的其余部分用 `ci/logic/talk/stubs.swift` 顶替），按抓到的顺序把帧和快照喂给它，逐项检查，有不对的以非零退出。走两遍：一遍照实际发生的（旧快照之后再问一次，拿到新的）；一遍假设每次再问拿到的都和第一份一样旧（把抓到的那份旧快照重复给它），看它只靠旧快照和帧能不能把话显示对。第二个参数可以换一份 `SkillReviewTalk.swift`，比如改动之前的，看它在哪一项上不对。
 
-`compact`、`auto`、`copies` 几个阶段存下的页和回答是 `../logic/send`、`../logic/notices` 的检查的数据，放过去就行（`queued` 阶段的页不再用：用它的检查随送进一轮的话按对话记录确认一起去掉了，见最后一节）：
+`compact`、`auto`、`copies`、`long` 几个阶段存下的页和回答是 `../logic/send`、`../logic/notices` 的检查的数据，放过去就行（`queued` 阶段的页不再用：用它的检查随送进一轮的话按对话记录确认一起去掉了，见「送进一轮的话不再按对话记录确认」一节）：
 
 ```bash
 cp captures/compaction-send.json ../logic/send/compaction.json
@@ -69,6 +70,7 @@ cp captures/autocompaction-send.json ../logic/send/autocompaction.json
 cp captures/autocompaction-notices.json ../logic/notices/autocompaction.json
 cp captures/copies-send.json ../logic/send/copies.json
 cp captures/copies-notices.json ../logic/notices/copies.json
+cp captures/longturn-send.json ../logic/send/longturn.json
 ../logic/run.sh send notices
 ```
 
@@ -170,4 +172,15 @@ cp captures/copies-notices.json ../logic/notices/copies.json
 ## 2026-11-15：送进一轮的话不再按对话记录确认
 
 送进一轮的话（引导、打断）没等到回答时，Shion 原来读最新一页，按页上有没有一行同样的话来判断它送没送到；上面 `compact`、`auto`、`queued`、`copies` 几节里「`../logic/send` 拿这几页跑应用自己的代码：改之前…改之后…」说的就是这套判断，以及为它补的那些边界（按时间和文字认压缩后的副本、按 `pending` 认这次运行开头那一行）。仓库所有者决定照 Hermes 自己桌面端的做法，不再这样判断：这样的话标成「没等到回音」，一直标着，「再发一次」作为新的一句排在这一轮后面。用这几页确认它的那些检查随之去掉了，`queued` 阶段的页也不再给 `../logic/send` 用；`compact`、`auto`、`copies` 的页还给普通消息的回执、重试和读副本的检查用。Hermes 的这些行为本身没变，这几节记下的仍然是它的样子。
+
+## 2026-11-15 这一次看到的：一轮里压缩、几十次工具调用以后重试（`long`，Hermes `611bf53`）
+
+跑了两次。第一次每句「逐个检查」前面只有两句长回复，第二次照现在的样子（前面四句，第二句前面再两句），两种压缩的行号都是下面这些（只有收回被拒的说法不一样）。
+
+- 一个 profile 的 Bot Chat 只有一个会话：照 Shion 那样建（`session.create`，隐藏，标题 Bot Chat），每次拿到的都是同一个。所以两句「逐个检查」是在同一个会话里先后走的，先 28 次的那一句，收回了，再 3 次的那一句。
+- 前面只有两句长回复时，Hermes 在这一轮中间要压缩（状态行 `🗜️ Compacting context — summarizing earlier conversation so I can continue...`），gateway 的日志却是 `Compression made no progress … skipping boundary rewrite`：开头几行照原样留着，这一轮自己的行也留着，中间没有能总结的，什么都没改，行号不变，也没有 `✓ Context compaction complete` 那一行。前面四句时就压缩了（日志里 `messages=11->7`）。
+- 28 次的那一轮：第一条命令跑着时读的那一页上，这句话是第 9 行，写着它的提交编号。结果回来时 Hermes 压缩，状态行先后是 `🗜️ Compacting context …` 和 `✓ Context compaction complete — continuing turn...`。开头两句（1、3）的副本是 12、14，时间不变，没有编号了；第三、四句（5、7）总结掉了，还按原来的行号、写着编号在页上；摘要那一行是 15（`row_kind: compaction`）；这句话的副本是 16，时间和文字不变，还写着提交编号。停下来以后结束帧是 `status: interrupted`，`persisted_turn` 的 `user_row_id` 是 16，`row_ids` 从 16 到 73 一共 58 行，`complete: false`。
+- 结束以后一页 50 行地读：最新一页 25 行，全是工具调用（一次调用和它的结果显示成一行，`limit` 数的是库里的行），带着 `next_cursor`，一行你说的话都没有；拿它的游标读的第二页（`reset: false`）14 行（换成新会话时 13 行），16 在这一页，没有 `next_cursor` 了。
+- 收回：按中途读到的 9，原地压缩时回 `target user message is no longer in session history`，换成新会话时回 `compacted: target user message was summarized when the session was compressed`，都是 `invalid_params`，什么都没收回；按结束帧说的 16 照常收回，`rewound_count` 是 58。
+- 3 次的那一轮：前面又两句长回复（74、76），这句话中途是 78，压缩以后是 83（还写着编号），结束帧说 83；结束以后只有一页（19 行，换成新会话时 18 行），83 在上面。按 78 收回和上面一样被拒，按 83 收回了 8 行。
 
