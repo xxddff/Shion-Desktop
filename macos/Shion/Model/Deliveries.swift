@@ -2,8 +2,10 @@ import Foundation
 import Observation
 
 /// The messages you sent that the server has not said it has (AppStore+Reconnect.swift): on their
-/// way, unsure because the connection took their receipt with it, or not sent. What you say while
-/// not connected is not here: it waits with the ⌥Space window's sentences (QuickAsk.swift).
+/// way, unsure because the connection took their receipt with it, or not sent; and those put into
+/// a running turn whose answer never came, which nothing later settles (Delivery.unconfirmed).
+/// What you say while not connected is not here: it waits with the ⌥Space window's sentences
+/// (QuickAsk.swift).
 @Observable
 final class Deliveries {
     /// chat item id (also its submission id) → a message sent and not known to be on the server
@@ -11,6 +13,10 @@ final class Deliveries {
     /// submission ids the server has named, the last few hundred
     @ObservationIgnored private(set) var seen: Set<String> = []
     @ObservationIgnored private var seenOrder: [String] = []
+    /// Told whenever the messages put into a running turn whose answer never came change, so that
+    /// they are kept across launches (AppStore.keepUnanswered); nil keeps them in memory only.
+    @ObservationIgnored var keepUnanswered: (([Unanswered]) -> Void)?
+    @ObservationIgnored private var kept: [Unanswered] = []
 
     struct Sent: Equatable {
         let botId: String
@@ -21,63 +27,35 @@ final class Deliveries {
         /// The pictures and files that went with the words, up on the server already: 重发 sends
         /// them again.
         var drafts: [Draft] = []
-        /// The chat's other messages in the same words as it was said (DeliveryCheck.Before): what
-        /// Hermes had, or may have had, that reads the same. Taken then and kept here, not read
-        /// off the chat later: by the time it is needed (no receipt came, and only the transcript
-        /// can say whether it got there) the chat may have been read again and its item replaced.
-        var before: DeliveryCheck.Before?
-        /// The messages said after it in the same words while Hermes had not said it has this
-        /// one, by their chat item's id: a row of one of them is not this message's
-        /// (DeliveryCheck.Others, AppStore.follow).
-        var later: Set<String> = []
+    }
+
+    /// A message put into a running turn whose answer never came, as it is kept across launches.
+    nonisolated struct Unanswered: Codable, Equatable, Sendable {
+        var id: String
+        var botId: String
+        var text: String
+        var at: Date
     }
 
     private static let seenKept = 500
 
     func state(_ id: String) -> Delivery? { sent[id]?.state }
 
-    /// Sent now, as the chat's item `id`; the server has not said it has it yet. `before` is what
-    /// else in the chat read the same as it was said; a message already followed keeps the one
-    /// it has (it is said once, and may go out a moment later).
-    func track(_ id: String, botId: String, text: String, at: Date, drafts: [Draft] = [],
-               before: DeliveryCheck.Before? = nil) {
-        let before = before ?? sent[id]?.before
-        let later = sent[id]?.later ?? []
-        sent[id] = seen.contains(id) ? nil
-            : Sent(botId: botId, text: text, at: at, state: .sending, drafts: drafts, before: before, later: later)
+    /// Sent now, as the chat's item `id`; the server has not said it has it yet.
+    func track(_ id: String, botId: String, text: String, at: Date, drafts: [Draft] = []) {
+        sent[id] = seen.contains(id) ? nil : Sent(botId: botId, text: text, at: at, state: .sending, drafts: drafts)
+        noteUnanswered()
     }
 
     func set(_ id: String, _ state: Delivery) {
         sent[id]?.state = state
-    }
-
-    /// What else in the chat reads the same as it, as it stands now, for a message that has no
-    /// such record yet.
-    func aim(_ id: String, past before: DeliveryCheck.Before) {
-        sent[id]?.before = before
-    }
-
-    /// It goes into a running turn whose run `starter` began (DeliveryCheck.Before.turn), or one
-    /// whose beginning is not known (nil).
-    func put(_ id: String, intoRunBegunBy starter: String?) {
-        sent[id]?.before?.turn = starter
-    }
-
-    /// Said again (重发, 再发一次): it is the newest message in its words now, so what else reads
-    /// the same is all before it, and nothing was said after it.
-    func saidAgain(_ id: String, past before: DeliveryCheck.Before) {
-        sent[id]?.before = before
-        sent[id]?.later = []
-    }
-
-    /// `later` was said in the same words while `id` was still not known to be on the server.
-    func said(_ later: String, after id: String) {
-        sent[id]?.later.insert(later)
+        noteUnanswered()
     }
 
     /// It did not go out after all (no connection by the time it could): it waits again instead.
     func untrack(_ id: String) {
         sent[id] = nil
+        noteUnanswered()
     }
 
     /// The server named it (a receipt, the pending list, a turn's end): it is there.
@@ -89,6 +67,7 @@ final class Deliveries {
             }
         }
         sent[id] = nil
+        noteUnanswered()
     }
 
     /// The messages of a chat whose receipt the connection took with it, oldest first.
@@ -96,8 +75,8 @@ final class Deliveries {
         those(in: botId, .unsure)
     }
 
-    /// The messages of a chat put into a running turn as the connection went, oldest first.
-    func unconfirmed(in botId: String) -> [(id: String, sent: Sent)] {
+    /// The messages of a chat put into a running turn whose answer never came, oldest first.
+    func unanswered(in botId: String) -> [(id: String, sent: Sent)] {
         those(in: botId, .unconfirmed)
     }
 
@@ -110,5 +89,31 @@ final class Deliveries {
     /// A chat Shion stops following: its messages are not followed any more.
     func forget(_ botId: String) {
         sent = sent.filter { $0.value.botId != botId }
+        noteUnanswered()
+    }
+
+    // MARK: across launches
+
+    /// The messages put into a running turn whose answer never came, as kept before a relaunch:
+    /// they are so still.
+    func restore(_ messages: [Unanswered]) {
+        for message in messages where sent[message.id] == nil {
+            sent[message.id] = Sent(botId: message.botId, text: message.text, at: message.at, state: .unconfirmed)
+        }
+        kept = unansweredNow
+    }
+
+    private var unansweredNow: [Unanswered] {
+        sent.filter { $0.value.state == .unconfirmed }
+            .map { Unanswered(id: $0.key, botId: $0.value.botId, text: $0.value.text, at: $0.value.at) }
+            .sorted { ($0.at, $0.id) < ($1.at, $1.id) }
+    }
+
+    private func noteUnanswered() {
+        guard let keepUnanswered else { return }
+        let now = unansweredNow
+        guard now != kept else { return }
+        kept = now
+        keepUnanswered(now)
     }
 }

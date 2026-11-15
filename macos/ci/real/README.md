@@ -60,20 +60,19 @@ gateway 是经 `hold_gateway.py` 起的：Hermes 的文件一个不改，只在�
 
 这个把审核会话的 `Shion/Model/SkillReviewTalk.swift` 和 `Shion/Gateway/EventCursors.swift` 原样编进去（应用的其余部分用 `ci/logic/talk/stubs.swift` 顶替），按抓到的顺序把帧和快照喂给它，逐项检查，有不对的以非零退出。走两遍：一遍照实际发生的（旧快照之后再问一次，拿到新的）；一遍假设每次再问拿到的都和第一份一样旧（把抓到的那份旧快照重复给它），看它只靠旧快照和帧能不能把话显示对。第二个参数可以换一份 `SkillReviewTalk.swift`，比如改动之前的，看它在哪一项上不对。
 
-`compact`、`auto`、`queued`、`copies` 几个阶段存下的页和回答是 `../logic/send`、`../logic/notices` 的检查的数据，放过去就行：
+`compact`、`auto`、`copies` 几个阶段存下的页和回答是 `../logic/send`、`../logic/notices` 的检查的数据，放过去就行（`queued` 阶段的页不再用：用它的检查随送进一轮的话按对话记录确认一起去掉了，见最后一节）：
 
 ```bash
 cp captures/compaction-send.json ../logic/send/compaction.json
 cp captures/compaction-notices.json ../logic/notices/compaction.json
 cp captures/autocompaction-send.json ../logic/send/autocompaction.json
 cp captures/autocompaction-notices.json ../logic/notices/autocompaction.json
-cp captures/queued-send.json ../logic/send/queued.json
 cp captures/copies-send.json ../logic/send/copies.json
 cp captures/copies-notices.json ../logic/notices/copies.json
 ../logic/run.sh send notices
 ```
 
-`send` 把应用自己发送、重新接上和重试的方法原样编进去，替身服务器照抓到的样子给出压缩前后的页和收回的回答，看一句引导进去、回答丢了的话，压缩以后会不会被认成送到了，重试收回的是不是那条消息现在的行；`notices` 把读通知的方法和把页上的行读成对话里各项的方法原样编进去，看压缩前读过的一条后台结果，压缩以后在对话里还是不是一张卡，Hermes 自己压缩存下的副本读成什么。
+`send` 把应用自己发送、重新接上和重试的方法原样编进去，替身服务器照抓到的样子给出压缩前后的页和收回的回答，看一句引导进去、回答丢了的话，压缩以后也还是标着、没有哪一行被当成它，重试收回的是不是那条消息现在的行；`notices` 把读通知的方法和把页上的行读成对话里各项的方法原样编进去，看压缩前读过的一条后台结果，压缩以后在对话里还是不是一张卡，Hermes 自己压缩存下的副本读成什么。
 
 ## 2026-11-13 这一次看到的（Hermes `611bf53`）
 
@@ -167,3 +166,8 @@ cp captures/copies-notices.json ../logic/notices/copies.json
 - `../logic/send` 拿这几页跑应用自己的代码：「继续（副本）」从这台 Mac 引导进「慢慢做（副本）」那次运行，送到了（14）、回答丢了，重连时 Hermes 已经压缩过：改之前一直是「不确定有没有送到」，改之后由副本 53（54）确认。之后再引导一次同样的话、没送到：那句旧的副本读出来也是「继续（副本）」，不管旧的那句是从对话记录读来的（按它的时间和文字认），还是这台 Mac 发的、只知道行号 14（按「第三句」那次运行开头那一行的时间认），都不拿来确认这一句，改前改后都一样。后台结果或课程的回话起的一轮停下来、对话是压缩以后读的：改之前这一轮下面有「重试」（起它的那个副本算成你说的话，点了会把 Hermes 给模型的那段原文当成你的话收回再发一遍），改之后没有。
 - 认不出来的，照样留着：隐藏的那一句副本显示成你说的；停掉的回复副本没有「已停止」；出错那一行还是出错，但原因和详情没了，只写 Hermes 那句固定说明的中文（这一轮出错了：这次没有处理，还要做的话再发一次）。这几种行上没有 Hermes 写给模型、人不会打的字可认。
 - 没改、也没变坏的两件事：原地压缩以后，被总结掉的长回复还按原来的行号在页上，它的副本（换成压缩那一刻的时间）也在，同一段回复显示两遍（`auto` 也是这样）；压缩前拿到的游标，原地压缩以后往上读给的是另一段（`auto` 的游标那一条）。
+
+## 2026-11-15：送进一轮的话不再按对话记录确认
+
+送进一轮的话（引导、打断）没等到回答时，Shion 原来读最新一页，按页上有没有一行同样的话来判断它送没送到；上面 `compact`、`auto`、`queued`、`copies` 几节里「`../logic/send` 拿这几页跑应用自己的代码：改之前…改之后…」说的就是这套判断，以及为它补的那些边界（按时间和文字认压缩后的副本、按 `pending` 认这次运行开头那一行）。仓库所有者决定照 Hermes 自己桌面端的做法，不再这样判断：这样的话标成「没等到回音」，一直标着，「再发一次」作为新的一句排在这一轮后面。用这几页确认它的那些检查随之去掉了，`queued` 阶段的页也不再给 `../logic/send` 用；`compact`、`auto`、`copies` 的页还给普通消息的回执、重试和读副本的检查用。Hermes 的这些行为本身没变，这几节记下的仍然是它的样子。
+

@@ -609,8 +609,8 @@ extension AppStore {
         let mark = min(attachMarks.removeValue(forKey: botId) ?? 0, held.count)
         // a turn that finished between the attach and this read is in both: keep the page's copy
         let recent = rows.suffix(8)
-        // a message of yours still on its way, in doubt or not sent: not what an older row in
-        // the same words stands for (AppStore+Reconnect.swift)
+        // a message of yours still on its way, not sent, or put into a turn with no answer: only
+        // the row that names its submission stands for it (AppStore+Reconnect.swift)
         let own = onPage(held, page: page, rows: rows, botId: botId)
         // nor a card put in from the newest rows meanwhile (followNotices), which the page has under the same id
         let streamed = held[mark...].filter { item in
@@ -625,7 +625,15 @@ extension AppStore {
         }
         // one said before the attach is not on the page either: it stays, ahead of what came since
         let waiting = held[..<mark].filter { own[$0.id] == false }
-        chats[botId] = rows + uniqued(waiting + streamed, besides: rows)
+        let kept = uniqued(waiting + streamed, besides: rows)
+        // one put into a running turn whose answer never came stays where the chat had it
+        // (AppStore+Reconnect.swift), and one the chat had lost comes back
+        let unanswered = Set(deliveries.unanswered(in: botId).map(\.id))
+        chats[botId] = Self.keepingUnanswered(kept.filter { unanswered.contains($0.id) }, held: held,
+                                              in: rows + kept.filter { !unanswered.contains($0.id) }, rows: control.storedRows)
+        for id in unanswered {
+            putBack(id, in: botId)
+        }
         olderPages[botId] = page["next_cursor"]?.string
         olderErrors[botId] = nil
     }
@@ -662,10 +670,8 @@ extension AppStore {
     /// `submission_id` on its row: DeliveryCheck.named) is that prompt's from then on
     /// (ChatControl.storedRows, namedRows), the prompt followed here or not. One whose receipt
     /// came is followed no more, and with its turn's end missed only a page says which row it is.
-    /// Not known, it was counted twice by a message in the same words looked for on the
-    /// transcript: its row left out as a prompt's, and the prompt still counted as one that may
-    /// have a row nobody can name (AppStore.others), which kept that message in doubt with its
-    /// own row on the page.
+    /// Not known, that row could be taken for another prompt in the same words whose receipt the
+    /// connection took (AppStore.reconcile).
     func transcriptPage(_ botId: String, _ sessionId: String, limit: Int, cursor: String? = nil) async throws -> JSONValue {
         var params: [String: JSONValue] = [
             "profile": .string(botId), "session_id": .string(sessionId),

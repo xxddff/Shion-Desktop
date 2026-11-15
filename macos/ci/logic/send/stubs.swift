@@ -61,15 +61,13 @@ final class ChatControl {
     var retrying: Set<String> = []
     var fences: [String: Fence] = [:]
     var storedRows: [String: Int] = [:]
-    #if BEFORE
-    // sources from before rows were known by their time and words keep these by their numbers
-    var confirmedRows: [String: Set<Int>] = [:]
-    #else
-    var confirmedRows: [String: Set<StoredUserRow.Identity>] = [:]
-    #endif
     var namedRows: [String: Set<Int>] = [:]
+    #if BEFORE
+    // what sources that read the transcript for a message put into a running turn keep (f41701d)
+    var confirmedRows: [String: Set<StoredUserRow.Identity>] = [:]
     struct Began { var generation: Int; var by: String }
     var began: [String: Began] = [:]
+    #endif
 
     /// As the production one: never backwards, but for a refusal's fresh fences.
     func note(_ sessionId: String, generation: Int?, revision: Int?, replacing: Bool = false) {

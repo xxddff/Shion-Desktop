@@ -79,7 +79,8 @@ before saying so does not take the rest of the test with it:
   引导两遍   a reply that waits for what is put into it (`session.steer`). The first such message is
              stored (a row of the turn, as Hermes keeps a steer) and not answered; at the second the
              socket drops, so neither has an answer. The reply ends while Shion is away. One row
-             for two messages in the same words: it can say that one of them got there, never both
+             for two messages in the same words, which Shion takes for neither: both stay marked as
+             having had no answer, and the row shows beside them once a page is read
   又说一遍   the first time, a short reply, then the socket drops and the session's frames start
              over under another epoch, as after a restart of the server: once back, the replay
              cannot be had and the newest page is read instead. That `session.resume` is not

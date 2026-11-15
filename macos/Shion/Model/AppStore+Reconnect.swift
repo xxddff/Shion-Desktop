@@ -9,7 +9,9 @@ import Foundation
 /// - a chat Hermes will not attach again keeps what it shows, says so over its composer with
 ///   再试一次, and is tried again by itself a few times (`notRejoined`, Rejoin.swift);
 /// - what went out just before the connection went is checked: Hermes has it, or it shows 没发出去
-///   with 重发, which sends it again under the same submission id (Delivery.swift);
+///   with 重发, which sends it again under the same submission id (Delivery.swift); what was put
+///   into a running turn and got no answer is not checked, there being nothing to check it by: it
+///   says so for good, with 再发一次 (Delivery.unconfirmed);
 /// - what you said while not connected waited under the chat, with the ⌥Space window's sentences
 ///   (QuickAsk.swift), and goes out in order, saying when it was written when that was long ago.
 /// The sidebar says 重新连接中… and when the next try is (Gateway.nextRetry); waking from sleep or a
@@ -127,9 +129,11 @@ extension AppStore {
     /// all, it answers with that admission and runs nothing twice; its pictures and files by the
     /// same references (a picture the server cleared meanwhile goes up again, under a new id:
     /// AppStore+Media.swift). The message moves to the bottom, after what Hermes has, as Hermes
-    /// puts it. 再发一次, under a message a running turn did not take (Delivery.declined), is the
-    /// same call: a message of its own, behind the turn. That one was never a submission, so
-    /// Hermes cannot tell it from the first: it is for you to press, never done by itself.
+    /// puts it. 再发一次, under a message put into a running turn that the turn did not take
+    /// (Delivery.declined) or whose answer never came (Delivery.unconfirmed), is the same call: a
+    /// message of its own, behind the turn. That one was never a submission, so Hermes cannot tell
+    /// it from the first, and if the first got there after all it is said twice: it is for you to
+    /// press, never done by itself.
     func resend(_ id: String, in botId: String) {
         guard let sent = deliveries.sent[id], sent.state.resendable, canResend(botId), let sessionId = sessions[botId]
         else { return }
@@ -139,8 +143,6 @@ extension AppStore {
         var item = Self.userItem(id: id, at: written, text: sent.text)
         item.media = media
         chats[botId, default: []].append(item)
-        // said again now: what else reads the same is what the chat has at this moment
-        followAgain(id, in: botId)
         Task {
             if !sent.drafts.isEmpty {
                 await submit(sent.text, sent.drafts, botId: botId, sessionId: sessionId, submission: id, again: false)
@@ -270,7 +272,6 @@ extension AppStore {
             }
         }
         reconcile(botId, caughtUp: caughtUp, snapshot: snapshot)
-        await settleCorrections(botId, sessionId)
     }
 
     /// Hermes would not attach the chat again (`rejoin`, refused `refused` times in a row). The chat
@@ -335,7 +336,7 @@ extension AppStore {
 
     /// What went out just before the connection went, now that the server can say: there (an
     /// ordinary message again), or 没发出去 with 重发 (DeliveryCheck). What was put into a running
-    /// turn then has no receipt to go by: `settleCorrections`.
+    /// turn then has no receipt to go by, and nothing here settles it (Delivery.unconfirmed).
     private func reconcile(_ botId: String, caughtUp: Bool, snapshot: JSONValue) {
         let doubtful = deliveries.unsure(in: botId)
         guard !doubtful.isEmpty else { return }
@@ -364,123 +365,27 @@ extension AppStore {
         }
     }
 
-    /// What was put into a running turn as the connection went (引导, 打断), now that the server
-    /// can be asked. No receipt names such a message, so only the transcript can say it got
-    /// there: the newest page is read for a row of yours in the same words that is not a message
-    /// the chat had before it was sent (DeliveryCheck.stored). The rows the chat holds cannot say:
-    /// with the frames replayed they are the ones from before, where the same words can only be
-    /// an earlier message. Found, it is an ordinary message again: the page's row where the chat
-    /// was read again, else the item itself, marked as part of that turn. Not found (or the page
-    /// could not be read), it stays as it is, in doubt, and is never sent again by itself. A row
-    /// that confirmed one message is that message's for as long as the session is the chat's
-    /// (ChatControl.confirmedRows): at the next look it does not confirm another in the same
-    /// words, which was not there to be found the first time. Rows that are other messages' are
-    /// known by their time and words too (StoredUserRow.Identity), not only by their numbers:
-    /// compacted, the session has the messages it kept under new numbers, and an older 「继续」
-    /// under its new one was taken for one just said that never got there. The other messages in
-    /// its words are asked what became of them at each look (AppStore.others): one that was on
-    /// its way when this was said and was then refused is on no row, so it no longer keeps this
-    /// one in doubt; one said after this, and stored, has a row that is not this one's; a prompt
-    /// is known by the row that names it once a page has shown it (transcriptPage), its turn's
-    /// end seen or not.
-    private func settleCorrections(_ botId: String, _ sessionId: String) async {
-        let unconfirmed = deliveries.unconfirmed(in: botId)
-        guard !unconfirmed.isEmpty else { return }
-        var page: [StoredUserRow] = []
-        var read: JSONValue = [:]
-        if pagesTranscripts, let newest = try? await transcriptPage(botId, sessionId, limit: Self.pageSize) {
-            read = newest
-            // a row that names a submission is a prompt's, not what was put into a turn
-            let named = Set(DeliveryCheck.named(in: read).values)
-            page = transcriptItems(read).filter { $0.role == .user }
-                .map { StoredUserRow(text: $0.text, at: $0.at, row: DeliveryCheck.row(of: $0.id)) }
-                .filter { !($0.row.map(named.contains) ?? false) }
-        }
-        guard sessions[botId] == sessionId else { return }
-        var taken = control.confirmedRows[sessionId] ?? []
-        for (id, sent) in unconfirmed where deliveries.state(id) == .unconfirmed {
-            // as a row shows it: a file's `@file:` line is not among its words
-            let item = Self.userItem(id: id, at: sent.at, text: sent.text)
-            // the other messages in its words, as each stands now (AppStore.others), and when the
-            // turn it was put into began
-            var known = others(of: id, in: botId, taken: taken)
-            known.since = began(sent.before?.turn, page: read)
-            guard let stored = DeliveryCheck.stored(item.text, others: known, page: page) else {
-                // a page read in its place: it goes back at the bottom, still in doubt
-                if chats[botId]?.contains(where: { $0.id == id }) != true {
-                    chats[botId, default: []].append(item)
-                }
-                continue
-            }
-            deliveries.arrived(id)
-            taken.insert(stored.identity)
-            control.confirmedRows[sessionId, default: []].insert(stored.identity)
-            guard let row = stored.row else { continue }
-            // its row is known from here on, to the messages that counted it among theirs too
-            control.storedRows[id] = row
-            if chats[botId]?.contains(where: { $0.id == "row-\(row)" }) == true {
-                // the chat was read again and has the row: this is the same message
-                chats[botId]?.removeAll { $0.id == id }
-            } else if let index = chats[botId]?.firstIndex(where: { $0.id == id }) {
-                chats[botId]?[index].midTurn = true
-            }
-        }
-    }
-
     /// The messages of yours in `held` that Hermes has not said it has, when a page is read in the
     /// chat's place (loadLatestPage): true where a row of the page is that message, so the page's
-    /// copy stands for it; false where none can be, so its bubble stays under the page with what
-    /// it says about getting there. A row that names the submission is it (Hermes keeps a
-    /// prompt's `submission_id` on its row), and Hermes has it; such a row is known as its
+    /// copy stands for it; false where none is, so its bubble stays under the page with what it
+    /// says about getting there. Only the row that names its submission is it (Hermes keeps a
+    /// prompt's `submission_id` on its row), and Hermes has it: such a row is known as its
     /// prompt's from the moment the page was read (transcriptPage), the prompt followed here or
-    /// not. Without one, a row of yours in the same words that is no other message's
-    /// (DeliveryCheck.stored, with the others in those words as each stands now: `others`, as
-    /// `settleCorrections` looks): never a row that was there before, nor one of a message said
-    /// since, which read the same and are other messages. One Hermes refused, or a turn did not
-    /// take, is on no row.
+    /// not, and never stands for another message because it reads the same. A row in the same
+    /// words that names nothing is no message's here: a message put into a running turn whose
+    /// answer never came keeps its bubble whatever the page has (Delivery.unconfirmed), and one
+    /// Hermes refused, or a turn did not take, is on no row.
     func onPage(_ held: [ChatItem], page: JSONValue, rows: [ChatItem], botId: String) -> [String: Bool] {
         let named = DeliveryCheck.named(in: page)
-        let prompts = Set(named.values)
-        // a row that names a submission is that prompt, found by its name just below: it never
-        // stands for another message because it reads the same
-        let stored = rows.filter { $0.role == .user }
-            .map { StoredUserRow(text: $0.text, at: $0.at, row: DeliveryCheck.row(of: $0.id)) }
-            .filter { !($0.row.map(prompts.contains) ?? false) }
-        var taken = sessions[botId].flatMap { control.confirmedRows[$0] } ?? []
         var there: [String: Bool] = [:]
-        for item in held where item.role == .user {
-            guard let sent = deliveries.sent[item.id] else { continue }
-            if named[item.id] != nil {
-                there[item.id] = true
+        for item in held where item.role == .user && deliveries.sent[item.id] != nil {
+            let found = named[item.id] != nil
+            there[item.id] = found
+            if found {
                 deliveries.arrived(item.id)
-                continue
-            }
-            switch sent.state {
-            case .unsent, .declined:
-                there[item.id] = false
-            case .sending, .unsure, .unconfirmed:
-                var known = others(of: item.id, in: botId, taken: taken)
-                known.since = began(sent.before?.turn, page: page)
-                let row = DeliveryCheck.stored(item.text, others: known, page: stored)
-                there[item.id] = row != nil
-                if let row {
-                    taken.insert(row.identity)
-                }
             }
         }
         return there
-    }
-
-    /// Hermes's time of the row that began the run a message was put into
-    /// (DeliveryCheck.Before.turn): the message is stored after it. An admission is the row on
-    /// `page` that names its submission (whoever sent it), or, sent from here, the row its turn's
-    /// end named (ChatControl.storedRows), when that row is on the page. Nil when neither is: then
-    /// only numbers, names and rows' times and words tell other messages' rows apart.
-    private func began(_ turn: String?, page: JSONValue) -> Date? {
-        guard let turn, let number = DeliveryCheck.named(in: page)[turn] ?? control.storedRows[turn],
-              let row = (page["rows"]?.array ?? []).first(where: { $0["row_id"]?.int == number })
-        else { return nil }
-        return row["timestamp"]?.number.map { Date(timeIntervalSince1970: $0) }
     }
 
     // MARK: the sidebar
@@ -520,6 +425,7 @@ extension AppStore {
     func startReconnect() {
         if !LaunchOptions.current.snapshot {
             ConnectionWatch.shared.start(gateway)
+            keepUnanswered()
         }
         guard Self.reconnectDemo, let demo else { return }
         chats[chiefId, default: []] += demo.reconnectChat
@@ -530,5 +436,79 @@ extension AppStore {
         for sentence in demo.reconnectWaiting {
             QuickAsk.shared.wait(sentence.text, for: chiefId, at: sentence.at)
         }
+    }
+
+    // MARK: what was put into a turn and never answered, across launches
+
+    private static let unansweredKey = "ShionUnanswered"
+
+    /// A message put into a running turn whose answer never came (Delivery.unconfirmed), as kept
+    /// in this Mac's preferences, and for which server.
+    nonisolated struct KeptUnanswered: Codable, Sendable {
+        var server: String
+        var message: Deliveries.Unanswered
+    }
+
+    /// The messages put into a running turn whose answer never came are kept on this Mac, per
+    /// server: what was kept before this launch is in doubt still, its bubble where the chat has
+    /// it (the last data) or at its end, and what changes from now on is kept as it changes.
+    /// Nothing read from the server takes them away; 再发一次 does.
+    func keepUnanswered(in defaults: UserDefaults = .standard) {
+        let server = serverKey
+        let mine = Self.keptUnanswered(in: defaults).filter { $0.server == server }.map(\.message)
+        deliveries.restore(mine)
+        for message in mine {
+            putBack(message.id, in: message.botId)
+        }
+        deliveries.keepUnanswered = { [weak self] now in
+            guard let self else { return }
+            let server = self.serverKey
+            let others = Self.keptUnanswered(in: defaults).filter { $0.server != server }
+            let all = others + now.map { KeptUnanswered(server: server, message: $0) }
+            if all.isEmpty {
+                defaults.removeObject(forKey: Self.unansweredKey)
+            } else if let data = try? JSONEncoder().encode(all) {
+                defaults.set(data, forKey: Self.unansweredKey)
+            }
+        }
+    }
+
+    private static func keptUnanswered(in defaults: UserDefaults) -> [KeptUnanswered] {
+        guard let data = defaults.data(forKey: unansweredKey),
+              let kept = try? JSONDecoder().decode([KeptUnanswered].self, from: data)
+        else { return [] }
+        return kept
+    }
+
+    /// The chat a page read in its place comes to (`items`), with the messages put into a running
+    /// turn whose answer never came among it (`unanswered`, in the order the chat had them): each
+    /// after the nearest item before it in the chat (`held`) that `items` has too, by its id or,
+    /// for what came live, by the row its turn's end or a page named (`rows`: ChatControl.
+    /// storedRows); at the end when none has. Not merged with a row in its words, which may be its
+    /// own (it got there after all) or another message's: both show.
+    static func keepingUnanswered(_ unanswered: [ChatItem], held: [ChatItem], in items: [ChatItem],
+                                  rows: [String: Int]) -> [ChatItem] {
+        var result = items
+        for item in unanswered {
+            let before = held.firstIndex { $0.id == item.id }.map { held[..<$0] } ?? []
+            let anchor = before.reversed().lazy.compactMap { earlier -> Int? in
+                let ids = [earlier.id] + (rows[earlier.id].map { ["row-\($0)"] } ?? [])
+                return result.lastIndex { ids.contains($0.id) }
+            }.first
+            result.insert(item, at: anchor.map { $0 + 1 } ?? result.endIndex)
+        }
+        return result
+    }
+
+    /// A message put into a running turn whose answer never came, back in its chat if the chat has
+    /// lost it (a page read in its place that had no room for it, a relaunch whose last data did
+    /// not keep it): at the end, part of the turn it was put into.
+    func putBack(_ id: String, in botId: String) {
+        guard deliveries.state(id) == .unconfirmed, chats[botId]?.contains(where: { $0.id == id }) != true,
+              let sent = deliveries.sent[id]
+        else { return }
+        var item = Self.userItem(id: id, at: sent.at, text: sent.text)
+        item.midTurn = true
+        chats[botId, default: []].append(item)
     }
 }

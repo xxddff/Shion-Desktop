@@ -23,35 +23,17 @@ final class ChatControl {
     /// end: its reply's bubble, the cards its start made (AppStore.noteTurnRows).
     @ObservationIgnored var storedRows: [String: Int] = [:]
     /// session id → the transcript rows known to name a submission (DeliveryCheck.named): each is
-    /// that prompt's, so none of them says a message in the same words got there. Numbers are
-    /// enough here: Hermes never gives one twice, and a page names a compaction's copy of such a
-    /// row under its new number.
+    /// that prompt's, so none of them says another prompt in the same words got there
+    /// (AppStore.reconcile). Numbers are enough here: Hermes never gives one twice, and a page
+    /// names a compaction's copy of such a row under its new number.
     @ObservationIgnored var namedRows: [String: Set<Int>] = [:]
     /// Assistant id → the cards the turn under way began with (a frame said what started it),
     /// until its end names their row.
     @ObservationIgnored var turnCards: [String: [String]] = [:]
-    /// session id → the transcript rows that have each confirmed a message put into a running
-    /// turn as the connection went (AppStore.settleCorrections). Such a message has no receipt,
-    /// so a row of yours in its words is all that says it got there, and a row says so of one
-    /// message only: kept for as long as the session is the chat's, so a later look does not
-    /// give the same row to another message in the same words. By their time and words
-    /// (StoredUserRow.Identity): compacted, the session has such a row under a new number.
-    @ObservationIgnored var confirmedRows: [String: Set<StoredUserRow.Identity>] = [:]
-    /// session id → the newest run Hermes said had begun, and the admission it runs, by its
-    /// submission id (`pending` of a session.info or a snapshot: an entry's `execution_generation`
-    /// is that run's once it runs, null while it waits). A message put into that run is stored
-    /// after that admission's row (DeliveryCheck.Before.turn). A turn Hermes begins itself is an
-    /// admission of its own, named for a background process's completion, which no row names.
-    @ObservationIgnored var began: [String: Began] = [:]
 
     struct Fence {
         var generation: Int?
         var revision: Int?
-    }
-
-    struct Began {
-        var generation: Int
-        var by: String
     }
 
     /// Never backwards: a frame that comes late cannot undo a newer one. A refusal's fresh fences
@@ -132,13 +114,6 @@ extension AppStore {
             revision = payload["revision"]?.int ?? revision
         }
         control.note(sessionId, generation: generation, revision: revision)
-        // which admission a run is: a snapshot's own `pending`, or a session.info's
-        for entry in (type == "session.info" ? payload["pending"] : frame["pending"])?.array ?? [] {
-            if let run = entry["execution_generation"]?.int, let id = entry["input_id"]?.string,
-               run > control.began[sessionId]?.generation ?? 0 {
-                control.began[sessionId] = ChatControl.Began(generation: run, by: id)
-            }
-        }
         guard type == "message.complete" else { return }
         // `submission_id` is whose turn it was: a prompt sent from here is named by its item's id
         let turn = payload["persisted_turn"]

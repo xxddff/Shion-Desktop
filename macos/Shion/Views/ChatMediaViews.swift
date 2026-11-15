@@ -9,6 +9,7 @@ extension EnvironmentValues {
 
 /// Your message: its pictures, its files, then the words in the bubble.
 struct UserMessage: View {
+    @Environment(AppStore.self) private var store
     let item: ChatItem
 
     var body: some View {
@@ -50,8 +51,9 @@ struct UserMessage: View {
                     .padding(.vertical, 8)
                     .background(Palette.accent, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 }
-                if item.midTurn {
-                    // it went into the turn that was running, and started none (BusyMode)
+                if item.midTurn, store.deliveries.state(item.id) == nil {
+                    // it went into the turn that was running, and started none (BusyMode); one
+                    // whose answer never came says so under it instead (DeliveryMark)
                     Label("送进了正在进行的这一轮", systemImage: "arrow.turn.down.right")
                         .font(.t11)
                         .foregroundStyle(.secondary)

@@ -3,8 +3,10 @@ import SwiftUI
 /// A message of yours the server does not have yet, as a chat shows it: lighter, with a line under
 /// it saying where it is. Waiting for a connection (and since when: it goes out saying so when it
 /// is late, QuickAskWaiting.swift); sent as the connection went, until the server can say whether
-/// it has it; 没发出去, with 重发 (AppStore+Reconnect.swift); or, put into a running turn that did
-/// not take it, saying so without saying it never got there, with 再发一次 (Delivery.declined).
+/// it has it; 没发出去, with 重发 (AppStore+Reconnect.swift); put into a running turn that did not
+/// take it, saying so without saying it never got there, with 再发一次 (Delivery.declined); or put
+/// into a running turn with no answer, saying that nothing will tell whether it got there, with
+/// 再发一次, which may then say it twice (Delivery.unconfirmed).
 struct DeliveryMark: ViewModifier {
     @Environment(AppStore.self) private var store
     let item: ChatItem
@@ -35,8 +37,20 @@ struct DeliveryMark: ViewModifier {
                 Label("\(QuickAskWaiting.written(waiting, now: clock)) 写的 · 等连上服务器后发出", systemImage: "clock")
                     .accessibilityIdentifier("waiting")
             } else if state == .unconfirmed {
-                Label("不确定有没有送到，看看\(store.bot(botId)?.name ?? "助手")接下来怎么说", systemImage: "questionmark.circle")
-                    .accessibilityIdentifier("unconfirmed")
+                // put into the running turn and no answer came: nothing later says whether it got there
+                HStack(spacing: 10) {
+                    Label(Delivery.unansweredNote, systemImage: "questionmark.circle")
+                        .accessibilityIdentifier("unconfirmed")
+                    Button {
+                        store.resend(item.id, in: botId)
+                    } label: {
+                        Label("再发一次", systemImage: "arrow.clockwise")
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!store.canResend(botId))
+                    .help(Delivery.unansweredResend(to: store.bot(botId)?.name ?? "助手"))
+                    .accessibilityIdentifier("resend")
+                }
             } else if state == .declined {
                 HStack(spacing: 10) {
                     Label("这一轮没有接下这句话，也可能已经看到了", systemImage: "questionmark.circle")

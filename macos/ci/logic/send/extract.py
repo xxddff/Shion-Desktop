@@ -24,16 +24,23 @@ WANTED = {
         "func storedRow(", "?func rowNow(", "func rewind(to row:", "static func failedTurn("],
     "macos/Shion/Model/AppStore+Reconnect.swift": [
         "func say(", "func submit(_ text: String, id:", "func waitForChat(", "func requeue(", "func resend(",
-        "func canResend(", "func rejoin(", "func keepReply(", "func reconcile(", "func settleCorrections(",
-        "?func onPage(", "?func began("],
+        "func canResend(", "func rejoin(", "func keepReply(", "func reconcile(", "?func onPage(",
+        # what keeps a message put into a turn whose answer never came (f41701d and older have none)
+        "?static func keepingUnanswered(", "?func putBack(", "?func keepUnanswered(", "?static func keptUnanswered(",
+        "?static let unansweredKey", "?nonisolated struct KeptUnanswered",
+        # what f41701d and older read the transcript with for such a message (SHION_BEFORE)
+        "?func settleCorrections(", "?func began("],
     # what 3e1c409 and a4c1a83 read an item's row from, to see them fail (SHION_ROOT)
     "macos/Shion/Model/AppStore+Events.swift": ["?static func rowNumber("],
 }
 
 
 def cut(lines, start):
-    """The method that starts at `start` (its line), to its closing brace at the same indent."""
+    """The declaration that starts at `start` (its line): that line alone for a constant, else to
+    its closing brace at the same indent."""
     first = start - 1 if lines[start - 1].strip() == "@discardableResult" else start
+    if lines[start].strip().removeprefix("private ").startswith(("static let ", "let ")) and not lines[start].endswith("{"):
+        return lines[start:start + 1]
     for end in range(start, len(lines)):
         if lines[end] == "    }":
             return lines[first:end + 1]
@@ -52,7 +59,8 @@ for path, wanted in WANTED.items():
         if len(found) != 1:
             raise SystemExit(f"{path}: {signature!r} found {len(found)} times")
         body = cut(lines, found[0])
-        body = [line.replace("    private func ", "    func ", 1) if line.startswith("    private func ") else line for line in body]
+        body = [line.replace("    private ", "    ", 1) if line.startswith(("    private func ", "    private static "))
+                else line for line in body]
         parts += [f"    // {path}"] + body + [""]
 parts.append("}")
 out.write_text("\n".join(parts) + "\n")

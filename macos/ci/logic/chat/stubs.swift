@@ -108,6 +108,8 @@ final class AppStore {
     }
     func loadLatestPage(_ botId: String) async throws { pagesRead += 1 }
     func reconcile(_ botId: String, caughtUp: Bool, snapshot: JSONValue) {}
+    /// What the rejoin of an older tree also calls (it read the transcript for a message put into
+    /// a running turn); today's does not.
     func settleCorrections(_ botId: String, _ sessionId: String) async {}
 
     // a password or key Hermes asks for (AppStore+Secrets.swift), as far as a resume touches it
