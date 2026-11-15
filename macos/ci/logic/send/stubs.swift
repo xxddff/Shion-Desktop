@@ -129,6 +129,14 @@ final class AppStore {
     @ObservationIgnored let media = MediaStub()
 
     func turnRunning(_ botId: String) -> Bool { live && sessions[botId] != nil && running.contains(botId) }
+    /// bot ids whose session Hermes is compacting now, as the test says (the production one asks
+    /// ChatStatus, checked in ../cards)
+    var compactingBots: Set<String> = []
+    func compacting(_ botId: String) -> Bool { live && compactingBots.contains(botId) }
+    #if STATUS_CARDS
+    /// The app's own (StatusCards.swift): a page read settles a compaction seen live.
+    @ObservationIgnored let status = ChatStatus()
+    #endif
 
     // what rejoin and loadLatestPage lean on
     var serverCapabilities: Set<String> = ["event-replay-v1", "session-transcript-v1"]

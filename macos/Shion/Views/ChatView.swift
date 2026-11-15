@@ -836,6 +836,8 @@ struct Composer: View {
     var stopping = false
     /// While a turn runs: how what is sent now reaches the assistant (BusyModeMenu).
     var busy: Binding<BusyMode>?
+    /// Hermes is compacting the session: 打断 cannot be chosen (BusyModeMenu).
+    var compacting = false
     /// Bumped to give it the keys: the chat does as its find bar closes.
     var keys = 0
 
@@ -853,7 +855,7 @@ struct Composer: View {
                 // Return sends; ⇧Return breaks the line (KeyField.swift)
                 .background(LineBreakKey())
             if let busy {
-                BusyModeMenu(mode: busy)
+                BusyModeMenu(mode: busy, compacting: compacting)
             }
             if let stop {
                 StopButton(stopping: stopping, action: stop)

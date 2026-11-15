@@ -66,8 +66,18 @@ final class Gateway {
     func replay(_ sessionId: String, profile: String) async -> Bool { replayAnswer }
 }
 
+/// What an attach tells the chat's live cards (StatusCards.swift, checked in ../cards): the rows it
+/// brought, and whether the session runs.
+final class ChatStatus {
+    var settled: [String] = []
+    var running: [String: Bool] = [:]
+    func settle(_ botId: String, rows: [ChatItem]) { settled.append(botId) }
+    func attached(_ botId: String, running: Bool) { self.running[botId] = running }
+}
+
 final class AppStore {
     let gateway = Gateway()
+    let status = ChatStatus()
     var serverCapabilities: Set<String> = ["event-replay-v1", "session-transcript-v1"]
     var pagesTranscripts = true
     var live = true

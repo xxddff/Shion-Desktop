@@ -4,7 +4,7 @@ import Foundation
 // (AppStore.followNotices, transcriptItems, chatItems, talkBefore and what they call, cut out by
 // extract.py), so it compiles and runs away from the app, on Linux or a Mac. Only what they touch;
 // NoticeCards.swift, Notices.swift, Silence.swift, TurnFailure.swift, ChatMedia.swift,
-// SkillReview.swift, Delivery.swift and JSONValue.swift are the app's own, and so are ChatItem and
+// SkillReview.swift, Delivery.swift, StatusCards.swift and JSONValue.swift are the app's own, and so are ChatItem and
 // ChatRole (cut from Models.swift by run.sh).
 
 final class ChatControl {
@@ -27,6 +27,10 @@ final class Gateway {
 }
 
 final class AppStore {
+    #if STATUS_CARDS
+    /// The app's own (StatusCards.swift): a page read settles a compaction seen live.
+    let status = ChatStatus()
+    #endif
     var pagesTranscripts = true
     var loadedChats: Set<String> = []
     var sessions: [String: String] = [:]

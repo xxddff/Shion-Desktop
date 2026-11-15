@@ -659,8 +659,11 @@ func reads(_ limits: [Int]) -> String {
 
 /// The chat's notice cards, in its order: a row's under its id, one that came as a frame and still
 /// has no row as "frame".
+/// The notices' cards in the chat: a compaction's card (its row's, `compaction-<n>`) is no notice
+/// (StatusCards.swift, ../cards).
 func cards(_ store: AppStore) -> [String] {
-    (store.chats[bot] ?? []).filter { $0.event != nil }.map { NoticeCards.stage(of: $0.id) == nil ? $0.id : "frame" }
+    (store.chats[bot] ?? []).filter { $0.event != nil && !$0.id.hasPrefix("compaction-") }
+        .map { NoticeCards.stage(of: $0.id) == nil ? $0.id : "frame" }
 }
 
 func order(_ store: AppStore) -> String {
@@ -795,6 +798,19 @@ do {
 // one is a card of its own, though it says the same.
 
 let compaction = try JSONValue.parse(String(contentsOfFile: CommandLine.arguments[1], encoding: .utf8))
+
+// A compaction row of the page is that compaction's card (StatusCards.swift; its rules in ../cards):
+// a card, not a line, whose words are the summary Hermes gives for reading (`text`), in place of
+// the fixed sentence the line had. Hermes's own rows, read after a compaction.
+for path in ["in place", "rotation"] {
+    let rows = (compaction[path]?["after3"]?["rows"]?.array ?? []).filter { $0["row_kind"]?.string == "compaction" }
+    let items = AppStore().transcriptItems(["rows": .array(rows)])
+    check(rows.count == 3 && items.count == 3 && items.allSatisfy { $0.role == .card && $0.event != nil },
+          "compaction rows. (\(path)) each a card of its compaction, not a line: \(items.map { "\($0.role)" })")
+    check(zip(rows, items).allSatisfy { row, item in
+        item.text == (row["text"]?.string ?? "").trimmingCharacters(in: .whitespacesAndNewlines) && item.text.hasPrefix("## Historical Task Snapshot")
+    }, "compaction rows. (\(path)) …with the summary Hermes gives for reading as its words")
+}
 
 /// The newest `limit` rows of `rows` (oldest first), or the `limit` before a cursor, as Hermes pages
 /// a transcript newest first.

@@ -75,10 +75,12 @@ extension AppStore {
     // MARK: during a turn
 
     /// How a message typed into this chat's composer goes, settled now: the way chosen for a busy
-    /// assistant, and the turn running at this moment (Sending). The ⌥Space window, a shortcut,
-    /// 今天's field and a notification's reply never ask: theirs is `Sending.queued`.
+    /// assistant (打断 as 排队 while Hermes compacts the session: BusyMode.now), and the turn running
+    /// at this moment (Sending). The ⌥Space window, a shortcut, 今天's field and a notification's
+    /// reply never ask: theirs is `Sending.queued`.
     func settled(_ mode: BusyMode, to botId: String, sessionId: String) -> Sending {
-        Sending(mode: mode, generation: turnRunning(botId) ? control.fences[sessionId]?.generation : nil)
+        Sending(mode: mode.now(compacting: compacting(botId)),
+                generation: turnRunning(botId) ? control.fences[sessionId]?.generation : nil)
     }
 
     /// Hands Hermes a message it has not seen, the item `id` of the chat. Normally a prompt
@@ -87,7 +89,8 @@ extension AppStore {
     /// (`session.steer`, `session.redirect`), as Hermes's own clients send it: named for the run
     /// it was meant for, and words only (pictures travel with a prompt). A turn that began since
     /// (the chat had to be attached again first) is not interrupted for it: it goes as a prompt.
-    /// What Hermes then says decides:
+    /// Nor is a turn in which Hermes is compacting the session now: 打断 goes as a prompt then,
+    /// whenever it was settled (Sending.correction). What Hermes then says decides:
     /// - taken (`queued`, `redirected`): the item is marked as part of that turn;
     /// - refused outright, or `rejected` with `delivered: false` (the turn was just over, nothing
     ///   live could take it): no assistant saw it, so it goes as a prompt after all;
@@ -97,7 +100,8 @@ extension AppStore {
     func deliver(_ params: [String: JSONValue], id: String, to botId: String, sessionId: String,
                  sending: Sending) async throws {
         if params["attachments"] == nil, let text = params["text"],
-           let correction = sending.correction(running: turnRunning(botId), generation: control.fences[sessionId]?.generation) {
+           let correction = sending.correction(running: turnRunning(botId), generation: control.fences[sessionId]?.generation,
+                                               compacting: compacting(botId)) {
             // should the connection go before the answer: what else in the chat read the same
             // when it was said (`say`). Not asked of the chat now: it may have been read again
             // while this waited to go, and its item taken for an older row in the same words

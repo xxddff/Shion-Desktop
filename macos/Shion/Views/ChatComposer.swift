@@ -34,6 +34,7 @@ struct ChatComposer: View {
                          stop: running ? { store.stopReply(botId) } : nil,
                          stopping: store.control.stopping.contains(botId),
                          busy: running ? busyMode : nil,
+                         compacting: store.compacting(botId),
                          keys: keys)
             }
         }
@@ -129,27 +130,38 @@ struct ReplyChip: View {
 }
 
 /// Beside the send button while the assistant is in a turn: how what is sent now reaches it.
-/// The choice is kept (Settings has it too).
+/// The choice is kept (Settings has it too). While Hermes compacts the session only 排队 and 引导
+/// can be chosen: 打断 is there, greyed, saying why, and the way shown is the one a message goes
+/// now, 排队 where 打断 was chosen; what was chosen stays chosen for after (BusyMode.now).
 struct BusyModeMenu: View {
     @Binding var mode: BusyMode
+    var compacting = false
 
     var body: some View {
+        let now = mode.now(compacting: compacting)
         Menu {
-            Picker("助手还在忙时", selection: $mode) {
-                ForEach(BusyMode.allCases) { mode in
+            Picker("助手还在忙时", selection: Binding { now } set: { mode = $0 }) {
+                ForEach(BusyMode.allCases.filter { $0.offered(compacting: compacting) }) { mode in
                     Text("\(mode.label)：\(mode.explanation)").tag(mode)
                 }
             }
             .pickerStyle(.inline)
+            if compacting {
+                ForEach(BusyMode.allCases.filter { !$0.offered(compacting: true) }) { mode in
+                    Button("\(mode.label)：\(BusyMode.compactingNote)") {}
+                        .disabled(true)
+                }
+            }
         } label: {
-            Text(mode.label)
+            Text(now.label)
                 .font(.t12)
         }
         .menuStyle(.button)
         .buttonStyle(.glass)
         .fixedSize()
-        .help("助手还在忙：这句话\(mode.explanation)")
+        .help(now == mode ? "助手还在忙：这句话\(now.explanation)" : "正在压缩对话，打断不了：这句话\(now.explanation)")
         .accessibilityIdentifier("busy-mode")
+        .accessibilityValue(now.label)
     }
 }
 

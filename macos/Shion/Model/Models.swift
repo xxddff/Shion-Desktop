@@ -157,13 +157,46 @@ nonisolated enum ChatEvent: Hashable, Codable, Sendable {
     case learned
     /// A skill it wrote or changed by itself, for you to look at: the review's id (SkillReviews.swift).
     case skill(String)
+    /// Hermes compacting the session: earlier turns folded into a summary. From its status lines
+    /// while it runs; the transcript's compaction row once a page has it, with how many messages it
+    /// folded (`messages`) and the summary as the item's words (StatusCards.swift).
+    case compaction(Compacting, messages: Int?)
+    /// Hermes moved the turn to the fallback model; its words say from which to which.
+    case fallback
+    /// A /goal verdict after a turn, in Hermes's words.
+    case goal
+    /// Hermes waits on the model provider, in its words: while the wait lasts.
+    case providerWait
+    /// One of Hermes's out-of-band notices (`notification.show`): how it is meant (info, warn,
+    /// error, success), its key (a notice said again under it is the same card), and whether Hermes
+    /// took it back since (`notification.clear`).
+    case notice(level: String, key: String?, cleared: Bool)
+    /// The answer to a side question (/btw: `btw.complete`); `question` as it was asked.
+    case aside(question: String)
+    /// What a side task came back with (/bg: `background.complete`).
+    case sideTask
+    /// Hermes picks up a turn a crash or a restart cut off ("Resuming interrupted turn…"); the
+    /// turn itself follows.
+    case resumed
+
+    /// How far a compaction has got.
+    enum Compacting: String, Codable, Hashable, Sendable {
+        /// Hermes said it is compacting, and not yet that it is done.
+        case running
+        /// Hermes said it is done, or the transcript has the summary it made.
+        case done
+        /// It stopped without Hermes saying it is done (the turn went on, ended or failed): most
+        /// likely it folded nothing, Hermes giving up on a compaction without a word.
+        case ended
+    }
 
     /// Whether Hermes gave it to the assistant as a turn, in your name: such a card starts the
     /// turn that follows it, as a message of yours would.
     var startsTurn: Bool {
         switch self {
         case .board, .received, .background: return true
-        case .sent, .learned, .skill: return false
+        case .sent, .learned, .skill, .compaction, .fallback, .goal, .providerWait, .notice, .aside, .sideTask, .resumed:
+            return false
         }
     }
 }

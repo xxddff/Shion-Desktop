@@ -17,6 +17,10 @@ model="$root/macos/Shion/Model"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 python3 "$here/extract.py" "$root" "$work/extracted.swift"
+# what Hermes says on its own (StatusCards.swift), where the tree has it: a copy from before it
+# (SHION_ROOT) runs the checks without it, to see which fail there
+status_cards=()
+if [ -f "$model/StatusCards.swift" ]; then status_cards=(-D STATUS_CARDS "$model/StatusCards.swift"); fi
 # ChatEvent, ChatRole and ChatItem alone out of Models.swift, which needs SwiftUI for its other types
 { echo "import Foundation"; awk '/^nonisolated enum ChatEvent/,/^}/' "$model/Models.swift"
   awk '/^enum ChatRole/,/^}/' "$model/Models.swift"; awk '/^struct ChatItem:/,/^}/' "$model/Models.swift"; } > "$work/event.swift"
@@ -25,6 +29,7 @@ grep -q "var midTurn" "$work/event.swift"
 "${SWIFTC:-swiftc}" -swift-version 6 -default-isolation MainActor -o "$work/check" \
     "$here/main.swift" "$here/stubs.swift" "$work/extracted.swift" "$work/event.swift" \
     "$model/NoticeCards.swift" "$model/Notices.swift" "$model/Delivery.swift" "$model/Silence.swift" \
+    ${status_cards[@]+"${status_cards[@]}"} \
     "$model/TurnFailure.swift" "$model/ChatMedia.swift" "$model/SkillReview.swift" \
     "$root/macos/Shion/Gateway/JSONValue.swift"
 "$work/check" "$here/compaction.json" "$here/autocompaction.json" "$here/copies.json"
