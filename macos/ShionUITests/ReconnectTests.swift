@@ -32,14 +32,18 @@ import XCTest
 ///    cleared the picture meanwhile, so the same submission is refused, and the picture goes up
 ///    again from the Mac under a new one; answered once, with both;
 /// 9. as the same words are put into a running turn for the second time (引导), neither call
-///    answered and one of the two stored: both say 不确定有没有送到 while down; once back the one
-///    row confirms one of them, marked as part of the turn, and the other stays in doubt, also
-///    after the two reconnects of the next step;
+///    answered and one of the two stored: both say that no answer came, while down and once back
+///    (no row of the transcript is taken for such a message, so the stored one's settles neither);
+///    再发一次 under one sends it as a message of its own, answered, and the other stays marked,
+///    also after the two reconnects of the next step;
 /// 10. after a reply, with the session's frames of another epoch once back (the replay cannot be
 ///    had, the newest page is read in the chat's place): the same words said again while the chat
 ///    is being attached again (the stand-in keeps that answer back until StandIn.attach), and that
 ///    request lost. The page's row in those words is the first saying's, so the message said again
-///    stays under the page with 等连上后确认, then 没发出去 with 重发, which sends it, once;
+///    stays under the page with 等连上后确认, then 没发出去 with 重发, which sends it, once. The page
+///    has step 9's rows too (the one Hermes stored of the two, part of its turn, and the one sent
+///    again): they show beside the message still marked, none taken for another, and 不发了 under
+///    that one takes it out of the chat and nothing else;
 /// 11. half way through a reply, and once back Hermes will not attach the chat again (its store
 ///    busy, the socket kept) until StandIn.attach: the chat keeps the reply it had, says what
 ///    failed with Hermes's reason and 再试一次 where both can be read and pressed, the rest of the
@@ -349,8 +353,9 @@ final class ReconnectTests: XCTestCase {
         }
 
         // 9. the same words put into the running turn twice (引导) as the connection goes: neither
-        // call is answered, and Hermes stored one of them. Once back, its one row says that one
-        // got there, and never that both did, however often the transcript is looked at again
+        // call is answered, and Hermes stored one of them. Nothing says which: no row of the
+        // transcript is taken for either, and both stay marked as never answered, with 再发一次 and
+        // 不发了, however often the transcript is looked at again
         XCTAssertTrue(waitUntil(timeout: 20) { !self.element("stop", in: app).exists }, "the turn before is still replying")
         say("断线：引导两遍", in: app)
         XCTAssertTrue(waitForText("听着呢（CI）。", in: app, timeout: 10), "the turn did not start")
@@ -370,19 +375,30 @@ final class ReconnectTests: XCTestCase {
         say(correction, in: app)
         say(correction, in: app)
         XCTAssertTrue(waitForText("重新连接中…", in: app, timeout: 10), "the socket did not drop under the second message")
-        let bothInDoubt = waitUntil(timeout: 10) { self.marks("unconfirmed", in: app) == 2 }
-        keep(app.windows.firstMatch.screenshot(), "reconnect-14-both-in-doubt")
-        XCTAssertTrue(bothInDoubt, "the two messages put into the turn do not both say 不确定有没有送到: \(marks("unconfirmed", in: app))")
+        let bothMarked = waitUntil(timeout: 10) { self.marks("unconfirmed", in: app) == 2 }
+        keep(app.windows.firstMatch.screenshot(), "reconnect-14-both-unanswered")
+        XCTAssertTrue(bothMarked, "the two messages put into the turn do not both say that no answer came: \(marks("unconfirmed", in: app))")
         StandIn.tunnelUp("9. the same words into a turn, twice")
         XCTAssertTrue(waitUntil(timeout: 40) { !self.hasText("重新连接中…", in: app) }, "the connection did not come back")
-        let oneConfirmed = waitUntil(timeout: 20) {
-            self.marks("unconfirmed", in: app) == 1 && self.marks("mid-turn", in: app) == 1
-        }
-        keep(app.windows.firstMatch.screenshot(), "reconnect-15-one-confirmed")
-        XCTAssertTrue(oneConfirmed, "one row did not confirm just one of the two messages: "
-                      + "\(marks("unconfirmed", in: app)) in doubt, \(marks("mid-turn", in: app)) in the turn")
-        XCTAssertEqual(places(correction, in: app).count, 2, "the two messages are not both in the chat")
         XCTAssertTrue(waitForText("按新的时间来（CI）。", in: app, timeout: 15), "the reply did not end")
+        // back, the frames replayed and the turn over: the row Hermes stored settles neither
+        let settled = waitUntil(timeout: 5) { self.marks("unconfirmed", in: app) != 2 }
+        keep(app.windows.firstMatch.screenshot(), "reconnect-15-both-still-unanswered")
+        XCTAssertFalse(settled, "once back, the two messages are not both still marked: \(marks("unconfirmed", in: app))")
+        XCTAssertEqual(marks("mid-turn", in: app), 0, "a message whose answer never came says it went into the turn")
+        XCTAssertEqual(places(correction, in: app).count, 2, "the two messages are not both in the chat, once each")
+        // 再发一次 under one of them: a message of its own, answered; the other stays as it is
+        let oneAgain = element("resend", in: app)
+        if oneAgain.waitForExistence(timeout: 5), waitUntil(timeout: 10, { oneAgain.isEnabled }) {
+            oneAgain.click()
+            XCTAssertTrue(waitForText("收到：" + correction, in: app, timeout: 15), "再发一次 got no answer")
+            XCTAssertTrue(waitUntil(timeout: 5) { self.marks("unconfirmed", in: app) == 1 },
+                          "after 再发一次 under one, not just the other is marked: \(marks("unconfirmed", in: app))")
+            XCTAssertEqual(places(correction, in: app).count, 2, "the one sent again and the other are not in the chat once each")
+        } else {
+            XCTFail("no 再发一次 under a message whose answer never came")
+        }
+        keep(app.windows.firstMatch.screenshot(), "reconnect-15b-one-sent-again")
 
         // 10. said again in the words of a message just stored, while the chat is being attached
         // again (the replay cannot be had, so the newest page is read in the chat's place), and
@@ -411,10 +427,16 @@ final class ReconnectTests: XCTestCase {
         keep(app.windows.firstMatch.screenshot(), "reconnect-17-said-again-unsent")
         XCTAssertTrue(lost, "the message Hermes never got does not say 没发出去")
         XCTAssertEqual(places(repeated, in: app).count, 2, "the message said again is not in the chat once back")
-        // two more looks at the transcript since step 9, one of them a page read in the chat's place
-        XCTAssertEqual(marks("unconfirmed", in: app), 1, "the message no row confirmed is not the one still in doubt")
-        let sendAgain = element("resend", in: app)
-        if sendAgain.waitForExistence(timeout: 5), waitUntil(timeout: 10, { sendAgain.isEnabled }) {
+        // two more looks at the transcript since step 9, one of them a page read in the chat's place:
+        // the message of step 9 not sent again is marked still, and the page's rows in its words
+        // (the one Hermes stored of the two, part of its turn, and the one sent again) show beside
+        // it, none taken for another
+        XCTAssertEqual(marks("unconfirmed", in: app), 1, "the message of step 9 not sent again is not still marked as never answered")
+        XCTAssertEqual(marks("mid-turn", in: app), 1, "the row Hermes stored of step 9's two does not show as part of its turn")
+        XCTAssertEqual(places(correction, in: app).count, 3,
+                       "step 9's words are not there three times: the stored row, the one sent again, the one still marked")
+        // two messages offer to go again now: 重发 is the one on 没发出去's line
+        if let sendAgain = button("resend", beside: "unsent", in: app), waitUntil(timeout: 10, { sendAgain.isEnabled }) {
             sendAgain.click()
             XCTAssertTrue(waitForText("收到：断线：又说一遍", in: app, timeout: 15), "重发 got no answer")
             XCTAssertTrue(waitUntil(timeout: 5) { !self.element("unsent", in: app).exists }, "it still says 没发出去")
@@ -423,6 +445,17 @@ final class ReconnectTests: XCTestCase {
             XCTFail("no 重发 to press")
         }
         keep(app.windows.firstMatch.screenshot(), "reconnect-18-said-again-resent")
+        // 不发了 under step 9's message still marked: it leaves the chat, nothing is sent, and the
+        // two rows in its words stay
+        let giveUp = element("give-up", in: app)
+        if giveUp.waitForExistence(timeout: 5) {
+            giveUp.click()
+            XCTAssertTrue(waitUntil(timeout: 5) { self.marks("unconfirmed", in: app) == 0 }, "不发了 left the message marked")
+            XCTAssertEqual(places(correction, in: app).count, 2, "不发了 did not take just the marked message out of the chat")
+        } else {
+            XCTFail("no 不发了 under a message whose answer never came")
+        }
+        keep(app.windows.firstMatch.screenshot(), "reconnect-18b-given-up")
 
         // 11. half way through a reply, and once back every session.resume of the chat is refused
         // (storage_unavailable, as Hermes answers when its store is busy; the socket kept) until
@@ -785,6 +818,18 @@ final class ReconnectTests: XCTestCase {
             }
         }
         return lines.count
+    }
+
+    /// The `identifier` button on the line that carries the mark `mark` (`unsent`, `unconfirmed`):
+    /// more than one message can offer to go again at once (重发, 再发一次).
+    @MainActor
+    private func button(_ identifier: String, beside mark: String, in app: XCUIApplication) -> XCUIElement? {
+        let line = element(mark, in: app)
+        guard line.waitForExistence(timeout: 5) else { return nil }
+        let frame = line.frame
+        return app.descendants(matching: .any).matching(identifier: identifier).allElementsBoundByIndex.first { found in
+            found.exists && found.frame.height > 0 && found.frame.minY < frame.maxY && frame.minY < found.frame.maxY
+        }
     }
 
     @MainActor
