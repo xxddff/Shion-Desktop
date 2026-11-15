@@ -13,8 +13,9 @@
 # scripts and says what it expects, line by line; the server pages its transcript as Hermes does
 # (`limit`, `next_cursor`, `reset`), and where its pages and answers are Hermes's own (read before
 # and after a compaction: compaction.json, from ../../real, stage compact; autocompaction.json,
-# copies.json and longturn.json, stages auto, copies and long), it serves them as they came. Exits
-# non-zero when a check fails or the sources no longer compile with the stand-ins.
+# copies.json and longturn.json, stages auto, copies and long; explicit.json, stage explicit, a
+# prompt in the words of Hermes's wrapper), it serves them as they came. Exits non-zero when a
+# check fails or the sources no longer compile with the stand-ins.
 #
 #   ./run.sh                    the checks, against the sources this file sits among
 #   SWIFTC=/path/to/swiftc      another compiler than `swiftc`
@@ -47,4 +48,5 @@ grep -q "var midTurn" "$work/event.swift"
     "$model/NoticeCards.swift" "$model/Notices.swift" "$model/Silence.swift" "$model/ChatMedia.swift" \
     "$model/Rejoin.swift" "$model/TurnFailure.swift" \
     "$root/macos/Shion/Gateway/JSONValue.swift" "$root/macos/Shion/Gateway/EventCursors.swift"
-"$work/checks" "$here/compaction.json" "$here/autocompaction.json" "$here/copies.json" "$here/longturn.json"
+"$work/checks" "$here/compaction.json" "$here/autocompaction.json" "$here/copies.json" "$here/longturn.json" \
+    "$here/explicit.json"

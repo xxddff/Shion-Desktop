@@ -73,11 +73,23 @@ nonisolated enum DeliveryCheck {
     static func named(in page: JSONValue) -> [String: Int] {
         var named: [String: Int] = [:]
         for row in page["rows"]?.array ?? [] {
-            if let submission = row["display_metadata"]?["submission_id"]?.string, let number = row["row_id"]?.int {
+            if let submission = submission(of: row), let number = row["row_id"]?.int {
                 named[submission] = max(number, named[submission] ?? number)
             }
         }
         return named
+    }
+
+    /// The submission a transcript row was stored for, where it names one: a prompt someone's
+    /// client sent (prompt.submit), as Hermes keeps the client's `submission_id` on its row
+    /// (display_metadata, from the admission it ran: gateway/session_display.py
+    /// `submission_turn_scope`), whatever its words. Nothing Hermes writes itself names one: not a
+    /// notice it gives the assistant, nor what was put into a running turn (macos/ci/real, stages
+    /// copies and explicit). Its own compaction's copies name none either, but the prompt of the
+    /// turn it compacted in (stages auto and long).
+    static func submission(of row: JSONValue) -> String? {
+        guard let submission = row["display_metadata"]?["submission_id"]?.string, !submission.isEmpty else { return nil }
+        return submission
     }
 
     /// Whether Hermes has a message that went out before the connection went, once it is back.

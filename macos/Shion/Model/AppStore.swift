@@ -740,9 +740,12 @@ extension AppStore {
             let body = text(of: row)
             // the plugin's focus-check line that woke 詩音: for her, not for the transcript
             guard !body.hasPrefix("［专注检查］") else { return [] }
+            // a prompt someone's client sent names its submission: it starts a turn of its own and
+            // is not a notice, whatever its words look like (Hermes's wrapper pasted, its footer quoted)
+            let submitted = DeliveryCheck.submission(of: row) != nil
             // what you put into a turn already running (session.steer): your words, in that turn,
             // also where Hermes's own compaction stored the row again as its wrapper for the model
-            if let words = Notices.steered(body, kind: kind) {
+            if let words = Notices.steered(body, kind: kind, submitted: submitted) {
                 var item = Self.userItem(id: id, at: at, text: words)
                 item.midTurn = true
                 return [item]
@@ -750,7 +753,8 @@ extension AppStore {
             // what Hermes gave the assistant as a turn in your name: the board's word, another
             // assistant's message, a background result. A card each, not a message of yours, and
             // so is such a row stored again by Hermes's own compaction, its kind gone (Notices.read)
-            let notices = Notices.read(body, kind: kind, display: row["display_metadata"]?["display_text"]?.string)
+            let notices = Notices.read(body, kind: kind, display: row["display_metadata"]?["display_text"]?.string,
+                                       submitted: submitted)
             guard notices.isEmpty else { return Self.noticeCards(notices, id: id, at: at) }
             return [Self.userItem(id: id, at: at, text: body)]
         case "assistant":

@@ -1059,5 +1059,80 @@ do {
           "copies. a result with Hermes's paragraph after it, with no kind: its card")
 }
 
+// ---- what a row says it is comes before what its words look like (R5-04 of the fifth review) ------
+// Hermes's own pages (explicit.json: ../../real, stage explicit): prompts sent as anyone sends one,
+// each naming its submission, in the words of what Hermes writes itself. Its wrapper for a message
+// put into a turn, whole (row 3, its turn stopped as it streamed: row 4); a question ending with the
+// paragraph Hermes ends its notices with (5), one going on after it (7); a plain sentence (9); and a
+// message put into a running turn (14, kind steer) in the words another assistant's message comes
+// in. A row that names its submission is a prompt as it reads, and a steer your words; only a row
+// that says nothing of itself (Hermes's own compaction's copy) is read by its words, as before.
+
+let explicit = try JSONValue.parse(String(contentsOfFile: CommandLine.arguments[4], encoding: .utf8))
+do {
+    let data = explicit["default"]
+    func said(_ key: String) -> String { key == "plain" ? "就是普通的一句话（粘贴）" : data?["words"]?[key]?.string ?? "" }
+    func rows(_ page: String) -> [JSONValue] { data?[page]?["rows"]?.array ?? [] }
+    let (stopped, page) = (rows("stopped"), rows("page"))
+    func numbered(_ number: Int, in rows: [JSONValue]) -> JSONValue? { rows.first { $0["row_id"]?.int == number } }
+    /// The row as Hermes's own compaction stores it again: its words and time, nothing of what it was.
+    func copied(_ row: JSONValue?) -> JSONValue {
+        guard case .object(var fields)? = row else { return .null }
+        fields["display_metadata"] = nil
+        fields["display_kind"] = nil
+        return .object(fields)
+    }
+    let prompts: [(Int, String)] = [(3, "pasted"), (5, "footer"), (7, "going_on"), (9, "plain")]
+    check(prompts.allSatisfy { number, key in
+              let row = numbered(number, in: number == 3 ? stopped : page)
+              return row?["display_metadata"]?["submission_id"]?.string == data?["submissions"]?[key]?.string
+                  && row?["display_kind"] == nil && row?["text"]?.string == said(key)
+          }
+            && numbered(14, in: page)?["display_kind"] == "steer" && numbered(14, in: page)?["display_metadata"] == nil
+            && numbered(14, in: page)?["text"]?.string == said("peer") && stopped.last?["display_metadata"]?["interrupted"] == true,
+          "explicit. Hermes's pages: each prompt (rows 3, 5, 7, 9) names its submission, has no kind, and is in the words sent (the wrapper, the footer); the steer (14) is of kind steer, names nothing, in the words of another assistant's message")
+    // read into the chat
+    let pasted = items(stopped).first { $0.id == "row-3" }
+    check(pasted?.role == .user && pasted?.text == said("pasted") && pasted?.midTurn == false,
+          "explicit. Hermes's wrapper pasted as a prompt (row 3, naming its submission): a prompt as typed, not put into a turn: \(pasted.map { "\($0.role), \($0.midTurn ? "in a turn" : "a turn's start"): \($0.text.prefix(30))" } ?? "none")")
+    let read = items(page)
+    func shownAs(_ number: Int) -> String {
+        read.filter { $0.id == "row-\(number)" }.map { item in
+            item.role == .card ? "card \(item.event.map { "\($0)" } ?? "-")" : "\(item.role)\(item.midTurn ? " in a turn" : ""): \(item.text.prefix(20))"
+        }.joined(separator: "; ")
+    }
+    func yours(_ number: Int, _ key: String, midTurn: Bool = false) -> Bool {
+        let shown = read.filter { $0.id == "row-\(number)" }
+        return shown.count == 1 && shown[0].role == .user && shown[0].text == said(key) && shown[0].midTurn == midTurn
+    }
+    check(yours(5, "footer"), "explicit. a question ending with Hermes's notice paragraph, naming its submission: yours, as typed, no card: \(shownAs(5))")
+    check(yours(7, "going_on") && yours(9, "plain"),
+          "explicit. …one going on after the paragraph, and a plain sentence: yours, as before: \(shownAs(7)); \(shownAs(9))")
+    check(yours(14, "peer", midTurn: true),
+          "explicit. the steer in another assistant's message's words: yours, put into its turn, as before: \(shownAs(14))")
+    // the talk before a skill (SkillReviewMaterial)
+    let talk = await store([], answer: pages(page)).talkBefore(review).filter { $0.mine }.map { $0.words }
+    let expected = ["整理上周的计划（粘贴）", said("footer"), said("going_on"), "就是普通的一句话（粘贴）", "慢慢做（粘贴）", said("peer")]
+    check(talk == expected,
+          "explicit. the talk before a skill: every prompt as typed, the footer's question among them, and the steer's words, though they read as another assistant's message: \(talk.map { $0.prefix(16).replacingOccurrences(of: "\n", with: " ") })")
+    // the controls: the same rows as Hermes's own compaction stores them again (nothing of what
+    // they were left but their words): read by their words, as before
+    let wrapperCopy = items([copied(numbered(3, in: stopped))]).first
+    check(wrapperCopy?.role == .user && wrapperCopy?.text == "慢慢说（粘贴）" && wrapperCopy?.midTurn == true,
+          "explicit. the pasted wrapper's row naming nothing (as a compaction's copy): read as what was put into a turn, as before")
+    check(items([copied(numbered(5, in: page))]).first?.event == .background,
+          "explicit. the footer's question naming nothing (as a compaction's copy): read as Hermes's notice, as before")
+    // a steer's copy in another assistant's words: your words in the talk before a skill too
+    let steerCopy: JSONValue = ["row_kind": "message", "role": "user", "row_id": 20,
+                                "timestamp": numbered(14, in: page)?["timestamp"] ?? .null,
+                                "text": .string(steerOpening + "\n" + said("peer") + "\n" + steerClosing)]
+    let shownCopy = items([steerCopy]).first
+    let talkCopy = await store([], answer: pages([steerCopy])).talkBefore(review).filter { $0.mine }.map { $0.words }
+    check(shownCopy?.role == .user && shownCopy?.text == said("peer") && shownCopy?.midTurn == true,
+          "explicit. that steer's copy (Hermes's wrapper round its words, no kind): yours, put into its turn, as before")
+    check(talkCopy == [said("peer")],
+          "explicit. …and in the talk before a skill, its words yours, not taken for another assistant's message: \(talkCopy)")
+}
+
 print(failures == 0 ? "all passed" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)

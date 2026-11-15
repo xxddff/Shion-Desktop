@@ -117,11 +117,15 @@ extension AppStore {
                 else { continue }
                 let kind = row["display_kind"]?.string
                 var words = text(of: row).trimmingCharacters(in: .whitespacesAndNewlines)
-                // what you put into a running turn: your words, from Hermes's own compaction's copy too
-                if role == "user", let steered = Notices.steered(words, kind: kind) { words = steered }
+                // a prompt someone's client sent (it names its submission) is theirs as it reads
+                let submitted = DeliveryCheck.submission(of: row) != nil
+                // what you put into a running turn: your words, from Hermes's own compaction's copy
+                // too, whatever they look like
+                let steered = role == "user" ? Notices.steered(words, kind: kind, submitted: submitted) : nil
+                if let steered { words = steered }
                 // nor a notice, its compaction's copy included: the chat shows a card for it (Notices.read)
                 guard !words.isEmpty, kind != "hidden", kind != "failed_turn",
-                      role != "user" || Notices.read(words, kind: kind, display: nil).isEmpty,
+                      role != "user" || steered != nil || Notices.read(words, kind: kind, display: nil, submitted: submitted).isEmpty,
                       !words.hasPrefix("［专注检查］"), !Silence.isMarker(words)
                 else { continue }
                 found.append((role == "user", words))

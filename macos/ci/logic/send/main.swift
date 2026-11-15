@@ -1224,5 +1224,61 @@ do {
           s.control.storedRows[checking] == 16)
 }
 
+// ---- 重试 of a prompt in the words of Hermes's wrapper (R5-04 of the fifth review) ----------------
+// Hermes's own page (explicit.json: ../../real, stage explicit): 「整理上周的计划（粘贴）」 answered
+// (rows 1, 2), then Hermes's wrapper for a message put into a turn, whole, sent as a prompt of its
+// own (row 3, naming its submission), its turn stopped as it streamed (row 4). Hermes took a rewind
+// to 3 back as 2 rows. The prompt is the stopped turn's own: 重试 takes back 3 and asks it again,
+// and never 1, which would take the turn that answered back too and ask the old question again.
+
+let explicit = try JSONValue.parse(String(contentsOfFile: CommandLine.arguments[5], encoding: .utf8))
+do {
+    let data = explicit["default"]
+    let words = data?["words"]?.string ?? ""
+    let rows = data?["page"]?["rows"]?.array ?? []
+    let taken = data?["rewound"]?["answer"]
+    check("pasted wrapper Hermes's page: row 3 names its submission, has no kind, is the wrapper as typed; 4 is its stopped reply, the last; a rewind to 3 took back \(taken?["rewound_count"]?.int ?? 0) rows",
+          numbered(3, in: rows)?["display_metadata"]?["submission_id"]?.string == data?["submission"]?.string
+            && numbered(3, in: rows)?["display_kind"] == nil && numbered(3, in: rows)?["text"]?.string == words
+            && rows.last?["row_id"]?.int == 4 && rows.last?["display_metadata"]?["interrupted"] == true
+            && data?["rewound"]?["row"]?.int == 3 && taken?["rewound_count"]?.int == 2)
+    /// The chat read from `page` (by the store's own newest-page read), the stopped reply its last;
+    /// the server answering a rewind to 3 as Hermes did (`typed` what it says was typed), and one to
+    /// 1 as it would (the two turns).
+    func pastedChat(_ page: [JSONValue], typed: String? = nil) async -> AppStore {
+        let s = store(.queue, running: false)
+        s.loadedChats = [bot]
+        let server = Server(for: s)
+        servers.append(server)
+        server.running = false
+        server.rows = page
+        s.attachMarks[bot] = 0
+        try? await s.loadLatestPage(bot)
+        var answer = taken ?? .null
+        if let typed, case .object(var fields) = answer, case .object(var target)? = fields["target_message"] {
+            target["content"] = .string(typed)
+            fields["target_message"] = .object(target)
+            answer = .object(fields)
+        }
+        server.rewinds = [3: answer, 1: ["target_message": ["id": 1, "content": "整理上周的计划（粘贴）"], "rewound_count": 4]]
+        return s
+    }
+    let pasted = await pastedChat(rows)
+    check("pasted wrapper: 重试 under its stopped reply: \(pasted.retryTarget(bot) ?? "none")", pasted.retryTarget(bot) == "row-4")
+    await retryNow(pasted)
+    check("pasted wrapper: …takes back its own row, 3, and asks it again as typed, not the turn before: \(retried(pasted))",
+          rewound(pasted) == [3] && asked(pasted) == [words] && notRetried(pasted) == nil)
+    // the control: a plain prompt in its place
+    let plainRows = rows.map { row -> JSONValue in
+        guard row["row_id"]?.int == 3, case .object(var fields) = row else { return row }
+        fields["text"] = "慢慢说（粘贴）"
+        return .object(fields)
+    }
+    let plain = await pastedChat(plainRows, typed: "慢慢说（粘贴）")
+    await retryNow(plain)
+    check("pasted wrapper: the control, a plain prompt as row 3: taken back as 3, asked again, as before: \(retried(plain))",
+          rewound(plain) == [3] && asked(plain) == ["慢慢说（粘贴）"] && notRetried(plain) == nil)
+}
+
 print(failures == 0 ? "all passed" : "\(failures) failed")
 exit(failures == 0 ? 0 : 1)

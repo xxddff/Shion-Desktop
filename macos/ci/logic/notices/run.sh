@@ -7,7 +7,8 @@
 # the files the rows are read with whole, against stand-ins for the rest of the app (stubs.swift) and
 # transcripts paged as Hermes pages them, some of them Hermes's own, read before and after a
 # compaction (compaction.json, from ../../real stage compact; autocompaction.json and copies.json,
-# stages auto and copies, Hermes compacting by itself).
+# stages auto and copies, Hermes compacting by itself), and of prompts in the words of what Hermes
+# writes itself (explicit.json, stage explicit).
 #   ./run.sh                    SWIFTC names the compiler where `swiftc` is not it
 #   SHION_ROOT=/another/copy    the app's files of another copy of the repository
 set -euo pipefail
@@ -27,4 +28,4 @@ grep -q "var midTurn" "$work/event.swift"
     "$model/NoticeCards.swift" "$model/Notices.swift" "$model/Delivery.swift" "$model/Silence.swift" \
     "$model/TurnFailure.swift" "$model/ChatMedia.swift" "$model/SkillReview.swift" \
     "$root/macos/Shion/Gateway/JSONValue.swift"
-"$work/check" "$here/compaction.json" "$here/autocompaction.json" "$here/copies.json"
+"$work/check" "$here/compaction.json" "$here/autocompaction.json" "$here/copies.json" "$here/explicit.json"

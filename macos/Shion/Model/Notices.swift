@@ -35,8 +35,13 @@ nonisolated enum Notices {
     /// `display` is the short form Hermes's own clients show for a background result
     /// (`display_metadata.display_text`), used in place of the text written for the model. A row
     /// with no kind that Hermes's own compaction stored again from one of its notices (`copied`) is
-    /// read as the notification it was; it has no short form left.
-    static func read(_ text: String, kind: String?, display: String?) -> [Notice] {
+    /// read as the notification it was; it has no short form left. What the row says it is comes
+    /// before what its words look like: one that names the submission it was stored for
+    /// (`submitted`: DeliveryCheck.submission) is a prompt someone's client sent, and one of kind
+    /// `steer` is what you put into a running turn; neither is a notice, whatever it says (quoting
+    /// another assistant's message, or ending with the paragraph Hermes ends its notices with).
+    static func read(_ text: String, kind: String?, display: String?, submitted: Bool = false) -> [Notice] {
+        guard kind != "steer", !submitted || kind.map(machineKinds.contains) == true else { return [] }
         let kind = kind ?? (copied(text) ? "internal_notification" : nil)
         let body = withoutProvenance(text)
         // only a row Hermes marks as its own notification: a message you typed that starts the
@@ -433,8 +438,10 @@ nonisolated enum Notices {
     /// The words of what you put into a turn already running (session.steer), as its row has them:
     /// a row of kind `steer`, whose text a page gives without Hermes's wrapper
     /// (tui_gateway/session_history.py), or Hermes's own compaction's copy of it, which has no kind
-    /// and is the wrapper whole, the words on the lines between. Nil for any other row.
-    static func steered(_ text: String, kind: String?) -> String? {
+    /// and is the wrapper whole, the words on the lines between. Nil for any other row, and for a
+    /// row that names the submission it was stored for (`submitted`): a prompt sent as such, the
+    /// wrapper pasted into it included.
+    static func steered(_ text: String, kind: String?, submitted: Bool = false) -> String? {
         let open = steerOpening + "\n", close = "\n" + steerClosing
         let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
         var words: String?
@@ -444,7 +451,7 @@ nonisolated enum Notices {
         }
         switch kind {
         case "steer": return words ?? text
-        case nil: return words
+        case nil: return submitted ? nil : words
         default: return nil
         }
     }
