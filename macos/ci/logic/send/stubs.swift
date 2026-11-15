@@ -61,6 +61,8 @@ final class ChatControl {
     var retrying: Set<String> = []
     var fences: [String: Fence] = [:]
     var storedRows: [String: Int] = [:]
+    var rowSubmissions: [String: [Int: String]] = [:]
+    // what ed80a0a and older keep of the rows that name a submission: their numbers alone
     var namedRows: [String: Set<Int>] = [:]
     #if BEFORE
     // what sources that read the transcript for a message put into a running turn keep (f41701d)

@@ -3,16 +3,17 @@
 # swiftc): what becomes of a message whose receipt the connection took, of one put into a running
 # turn whose answer never came (marked so for good, kept across a relaunch, 再发一次), of one said
 # while the chat is being attached again, what a page read in the chat's place keeps, and which
-# row 重试 takes back once the session is compacted.
+# row 重试 takes back once the session is compacted, the pages read through for it as far as it takes.
 #
 # The methods are the production ones: cut from the store's files as they are (extract.py), the
 # reading of a page's rows into the chat's items among them, and compiled with AppStore+Compose.swift,
 # Deliveries.swift, Delivery.swift, Compose.swift, NoticeCards.swift, Notices.swift, Silence.swift,
 # ChatMedia.swift, Rejoin.swift, TurnFailure.swift, JSONValue.swift and EventCursors.swift whole,
 # against stand-ins for the rest of the app (stubs.swift). main.swift runs them against a server it
-# scripts and says what it expects, line by line; where the server's pages and answers are Hermes's
-# own (read before and after a compaction: compaction.json, from ../../real, stage compact;
-# autocompaction.json and copies.json, stages auto and copies), it serves them as they came. Exits
+# scripts and says what it expects, line by line; the server pages its transcript as Hermes does
+# (`limit`, `next_cursor`, `reset`), and where its pages and answers are Hermes's own (read before
+# and after a compaction: compaction.json, from ../../real, stage compact; autocompaction.json,
+# copies.json and longturn.json, stages auto, copies and long), it serves them as they came. Exits
 # non-zero when a check fails or the sources no longer compile with the stand-ins.
 #
 #   ./run.sh                    the checks, against the sources this file sits among
@@ -46,4 +47,4 @@ grep -q "var midTurn" "$work/event.swift"
     "$model/NoticeCards.swift" "$model/Notices.swift" "$model/Silence.swift" "$model/ChatMedia.swift" \
     "$model/Rejoin.swift" "$model/TurnFailure.swift" \
     "$root/macos/Shion/Gateway/JSONValue.swift" "$root/macos/Shion/Gateway/EventCursors.swift"
-"$work/checks" "$here/compaction.json" "$here/autocompaction.json" "$here/copies.json"
+"$work/checks" "$here/compaction.json" "$here/autocompaction.json" "$here/copies.json" "$here/longturn.json"

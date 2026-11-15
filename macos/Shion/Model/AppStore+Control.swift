@@ -18,15 +18,19 @@ final class ChatControl {
     @ObservationIgnored var fences: [String: Fence] = [:]
     /// A prompt (its `submission_id`: one sent from here is named by its chat item's id) → the
     /// transcript row Hermes stored it as, as its turn's end says (`message.complete.persisted_turn`)
-    /// or any page with that row on it, which names the submission (AppStore.transcriptPage).
-    /// Also what came live in a turn Hermes started and is known to be a row since that turn's
-    /// end: its reply's bubble, the cards its start made (AppStore.noteTurnRows).
+    /// or any page with that row on it, which names the submission (AppStore.transcriptPage): the
+    /// newest, once a compaction stored it again. Also what came live in a turn Hermes started and
+    /// is known to be a row since that turn's end: its reply's bubble, the cards its start made
+    /// (AppStore.noteTurnRows).
     @ObservationIgnored var storedRows: [String: Int] = [:]
-    /// session id → the transcript rows known to name a submission (DeliveryCheck.named): each is
-    /// that prompt's, so none of them says another prompt in the same words got there
-    /// (AppStore.reconcile). Numbers are enough here: Hermes never gives one twice, and a page
-    /// names a compaction's copy of such a row under its new number.
-    @ObservationIgnored var namedRows: [String: Set<Int>] = [:]
+    /// session id → the transcript rows known to name a submission (DeliveryCheck.named), by
+    /// number, and the submission each names. Each is that prompt's, so none of them says another
+    /// prompt in the same words got there (AppStore.reconcile); and a prompt read from the
+    /// transcript as such a row (`row-<id>`) is that submission's, whatever row a compaction has
+    /// made it since: storedRows says which (AppStore.retryReply). Numbers are enough: Hermes
+    /// never gives one twice, and a page names a compaction's copy of such a row under its new
+    /// number.
+    @ObservationIgnored var rowSubmissions: [String: [Int: String]] = [:]
     /// Assistant id → the cards the turn under way began with (a frame said what started it),
     /// until its end names their row.
     @ObservationIgnored var turnCards: [String: [String]] = [:]
@@ -69,6 +73,9 @@ struct RetryRisk: Equatable {
 nonisolated enum ControlError: LocalizedError {
     case unknownRun
     case notStored
+    /// The transcript could not be read through for the prompt's row (AppStore.findRow): whether
+    /// one is it is not known.
+    case notFound
     case refused(String, detail: String?)
 
     var errorDescription: String? {
@@ -77,6 +84,8 @@ nonisolated enum ControlError: LocalizedError {
             return "还不知道这一轮是服务器上的哪一次运行"
         case .notStored:
             return "找不到这条消息在服务器上存成了哪一行"
+        case .notFound:
+            return "没能把对话记录读完，不知道这条消息现在是哪一行"
         case .refused(let reason, let detail):
             switch reason {
             case "session_busy": return "这一轮还没结束"
@@ -282,7 +291,8 @@ extension AppStore {
     /// it are taken back (`session.mutate` rewind, fenced by the session's revision and run), then
     /// the same words go in as a new turn. Refused because its row is not one of the session's
     /// (`invalid_params`), the prompt is taken back by the row it has now, if a compaction kept it
-    /// (`rowNow`).
+    /// (`rowNow`). Nothing is said once the chat has moved to another session meanwhile: what is
+    /// left of the retry is no longer its.
     func retryReply(_ botId: String) {
         guard let replyId = retryTarget(botId), let sessionId = sessions[botId],
               let items = chats[botId], let reply = items.firstIndex(where: { $0.id == replyId }),
@@ -311,24 +321,24 @@ extension AppStore {
                 let typed = receipt["target_message"]?["content"]?.string ?? ""
                 send(typed.isEmpty ? prompt.text : typed, to: botId)
             } catch {
+                guard sessions[botId] == sessionId else { return }
                 controlNote("没能重试：\(error.localizedDescription)", in: botId)
             }
         }
     }
 
-    /// The row the prompt was stored as: in its id when it came from the transcript (`row-<id>`),
-    /// from its turn's `persisted_turn` when it was sent from here; failing both, the newest page
-    /// says: by the submission id Hermes keeps on the row, else by its words.
+    /// The row the prompt was stored as, the newest known: the one its submission is known to be
+    /// now (its turn's `persisted_turn`, or a page that named it: ChatControl.storedRows), for a
+    /// prompt sent from here (its id is its submission) and for one read from the transcript as a
+    /// row that named its submission (ChatControl.rowSubmissions: a compaction may have stored it
+    /// again since, as when it compacted the session in the prompt's own turn); else, read from the
+    /// transcript, the row it was read as (`row-<id>`). Failing all, the pages say (`findRow`).
     private func storedRow(of prompt: ChatItem, botId: String, sessionId: String) async throws -> Int {
-        if prompt.id.hasPrefix("row-"), let row = Int(prompt.id.dropFirst(4)) { return row }
-        if let row = control.storedRows[prompt.id] { return row }
-        let page = try await transcriptPage(botId, sessionId, limit: 20)
-        // the page names it where its row is on it (transcriptPage)
-        if let row = control.storedRows[prompt.id] { return row }
-        let match = (page["rows"]?.array ?? []).last { row in
-            row["role"]?.string == "user" && (row["text"]?.string ?? row["content"]?.string) == prompt.text
+        if let submission = submission(of: prompt, in: sessionId), let row = control.storedRows[submission] { return row }
+        if let row = DeliveryCheck.row(of: prompt.id) { return row }
+        guard let row = try await findRow(of: prompt, besides: nil, botId: botId, sessionId: sessionId) else {
+            throw ControlError.notStored
         }
-        guard let row = match?["row_id"]?.int else { throw ControlError.notStored }
         return row
     }
 
@@ -336,22 +346,65 @@ extension AppStore {
     /// compaction. A compaction stores the messages it keeps again under new numbers (in place, or
     /// in the session it moves to), and Hermes refuses the old number of one it kept as it refuses
     /// one it summarized (`compacted:`), or, once it compacted the session by itself in place, as
-    /// one taken back (no longer in the session's history: the old row is marked so). The newest
-    /// page says which: the row that names the prompt's submission (one sent from here: the copy
-    /// of the turn's own prompt keeps it, transcriptPage reads it), else, for a prompt read from
-    /// the transcript, the row with its time and words (StoredUserRow.Identity). Nil: no other row
-    /// is it; it was summarized, or taken back.
+    /// one taken back (no longer in the session's history: the old row is marked so). The pages
+    /// say which (`findRow`). Nil: every page was read, and no other row is it; it was summarized,
+    /// or taken back.
     private func rowNow(of prompt: ChatItem, was row: Int, botId: String, sessionId: String) async throws -> Int? {
-        // a whole page: the prompt is above every row its turn left, and a turn stopped in its
-        // tools leaves many
-        let page = try await transcriptPage(botId, sessionId, limit: Self.pageSize)
-        if let now = control.storedRows[prompt.id], now != row { return now }
-        guard DeliveryCheck.row(of: prompt.id) != nil else { return nil }
+        try await findRow(of: prompt, besides: row, botId: botId, sessionId: sessionId)
+    }
+
+    /// How many pages `findRow` reads at most: a turn stopped in its tools leaves two rows a call,
+    /// and Hermes lets a turn make some ninety calls (agent.max_turns), so this is many such turns.
+    static let searchPages = 20
+
+    /// The row `prompt` is now, other than `besides`: the pages read newest first, each next one
+    /// by the cursor the one before gave, until a row proves to be it. One that names the
+    /// prompt's submission is it (transcriptPage takes the newest such row for it), and, for a
+    /// prompt read from the transcript, so is the row at its time in its words, unless it names
+    /// another submission than the prompt is known by (StoredUserRow.Identity: a compaction's
+    /// copy keeps both); a row in its words alone is not. The prompt is above every row its turn
+    /// left, and a turn stopped in its tools leaves many: not on the newest page is not gone. Nil:
+    /// the last page was read, and none is it. Not every page could be read
+    /// (ControlError.notFound): `searchPages` of them, a cursor given twice (they would go round),
+    /// a page read by a cursor that starts over (`reset`: the transcript is read from its newest
+    /// page again, as once a compaction moved the session on), or the chat moved to another
+    /// session meanwhile.
+    private func findRow(of prompt: ChatItem, besides: Int?, botId: String, sessionId: String) async throws -> Int? {
+        let submission = submission(of: prompt, in: sessionId)
+        let read = DeliveryCheck.row(of: prompt.id) != nil
         let identity = StoredUserRow(text: prompt.text, at: prompt.at).identity
-        return transcriptItems(page).compactMap { item -> Int? in
-            guard item.role == .user, StoredUserRow(text: item.text, at: item.at).identity == identity else { return nil }
-            return DeliveryCheck.row(of: item.id)
-        }.last { $0 != row }
+        var cursor: String?
+        var given: Set<String> = []
+        for _ in 0..<Self.searchPages {
+            let page = try await transcriptPage(botId, sessionId, limit: Self.pageSize, cursor: cursor)
+            guard sessions[botId] == sessionId, cursor == nil || page["reset"]?.bool != true else { break }
+            if let submission, let row = control.storedRows[submission], row != besides {
+                return row
+            }
+            // the newest such row: a page may show a copy above the row it copied
+            let named = control.rowSubmissions[sessionId] ?? [:]
+            let copy = !read ? nil : transcriptItems(page).compactMap { item -> Int? in
+                guard item.role == .user, StoredUserRow(text: item.text, at: item.at).identity == identity,
+                      let row = DeliveryCheck.row(of: item.id), row != besides,
+                      submission == nil || named[row].map({ $0 == submission }) ?? true
+                else { return nil }
+                return row
+            }.max()
+            if let copy {
+                return copy
+            }
+            guard let next = page["next_cursor"]?.string else { return nil }
+            guard given.insert(next).inserted else { break }
+            cursor = next
+        }
+        throw ControlError.notFound
+    }
+
+    /// The submission a prompt is known by: its id, for one sent from here; for one read from the
+    /// transcript, the one its row named, if it named one.
+    private func submission(of prompt: ChatItem, in sessionId: String) -> String? {
+        guard let row = DeliveryCheck.row(of: prompt.id) else { return prompt.id }
+        return control.rowSubmissions[sessionId]?[row]
     }
 
     /// `session.mutate` rewind to `row`. A conflict names the session's fresh revision and run:

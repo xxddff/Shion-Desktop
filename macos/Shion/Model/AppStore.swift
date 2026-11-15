@@ -668,10 +668,12 @@ extension AppStore {
     /// rows, or the `limit` rows before `cursor`. Every page of a chat is read here, so whatever
     /// it is read for, a row on it that names a submission (Hermes keeps a prompt's
     /// `submission_id` on its row: DeliveryCheck.named) is that prompt's from then on
-    /// (ChatControl.storedRows, namedRows), the prompt followed here or not. One whose receipt
+    /// (ChatControl.storedRows, rowSubmissions), the prompt followed here or not. One whose receipt
     /// came is followed no more, and with its turn's end missed only a page says which row it is.
     /// Not known, that row could be taken for another prompt in the same words whose receipt the
-    /// connection took (AppStore.reconcile).
+    /// connection took (AppStore.reconcile). A prompt is its newest row: a page that shows an
+    /// older one (read before a compaction stored it again, or above where it is now) does not
+    /// take it back to that.
     func transcriptPage(_ botId: String, _ sessionId: String, limit: Int, cursor: String? = nil) async throws -> JSONValue {
         var params: [String: JSONValue] = [
             "profile": .string(botId), "session_id": .string(sessionId),
@@ -682,8 +684,10 @@ extension AppStore {
         }
         let page = try await gateway.call("session.transcript", .object(params))
         let named = DeliveryCheck.named(in: page)
-        control.storedRows.merge(named) { _, row in row }
-        control.namedRows[sessionId, default: []].formUnion(named.values)
+        control.storedRows.merge(named) { known, row in max(known, row) }
+        for (submission, row) in named {
+            control.rowSubmissions[sessionId, default: [:]][row] = submission
+        }
         return page
     }
 

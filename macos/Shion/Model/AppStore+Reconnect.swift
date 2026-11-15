@@ -343,9 +343,9 @@ extension AppStore {
         let pending = DeliveryCheck.pending(in: snapshot)
         // a row known to name a submission is that prompt's (one that named this message was
         // taken for it as the page was read: `onPage`), so it is not what says this one arrived
-        let named = sessions[botId].flatMap { control.namedRows[$0] } ?? []
+        let named = sessions[botId].flatMap { control.rowSubmissions[$0] } ?? [:]
         let rows = (chats[botId] ?? []).filter { $0.role == .user && deliveries.state($0.id) == nil }
-            .filter { !(DeliveryCheck.row(of: $0.id).map(named.contains) ?? false) }
+            .filter { !(DeliveryCheck.row(of: $0.id).map { named[$0] != nil } ?? false) }
             .map { StoredUserRow(text: $0.text, at: $0.at) }
         for (id, sent) in doubtful {
             // as a row shows it: a file's `@file:` line is not among its words

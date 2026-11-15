@@ -21,7 +21,9 @@ WANTED = {
     "macos/Shion/Model/AppStore+Control.swift": [
         "func noteFences(", "func controlNote(", "func retryTarget(", "static func startsTurn(", "static func endsTurn(",
         "func retryReply(",
-        "func storedRow(", "?func rowNow(", "func rewind(to row:", "static func failedTurn("],
+        "func storedRow(", "?func rowNow(", "func rewind(to row:", "static func failedTurn(",
+        # how the pages are read through for a prompt's row (ed80a0a and older read the newest only)
+        "?static let searchPages", "?func findRow(", "?func submission(of prompt:"],
     "macos/Shion/Model/AppStore+Reconnect.swift": [
         "func say(", "func submit(_ text: String, id:", "func waitForChat(", "func requeue(", "func resend(",
         "func canResend(", "func rejoin(", "func keepReply(", "func reconcile(", "?func onPage(",

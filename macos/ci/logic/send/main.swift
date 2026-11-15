@@ -194,17 +194,45 @@ do {
 /// A server as a check scripts it: the newest page of its transcript, whether a turn runs, and
 /// what becomes of a message put into the turn or submitted.
 final class Server {
+    /// The transcript, oldest first, paged as Hermes pages it (`page`)
     var rows: [JSONValue] = []
+    /// Hermes's own pages, newest first, served as they came in place of `rows`: the first for a
+    /// read without a cursor, then each by the cursor the one before gave
+    var pages: [JSONValue] = []
+    /// What a transcript read answers, where a check scripts it; else `page`
+    var paging: ((JSONValue) -> JSONValue)?
+    /// The cursor each transcript read gave (nil: the newest page)
+    var cursors: [String?] = []
     var running = true
     var correction: () throws -> JSONValue = { throw GatewayError.offline }
     var prompt: () throws -> JSONValue = { ["status": "queued"] }
     /// What a rewind (session.mutate) answers, by the row it names: a receipt, or a refusal's error object
     var rewinds: [Int: JSONValue] = [:]
 
+    /// A page as Hermes gives one (gateway/session_stored_reads.py, latest order): the newest
+    /// `limit` rows, or the `limit` rows above `cursor`, with a cursor for the rows above them
+    /// while there are any, `reset` on a read without a cursor. A cursor it did not give starts
+    /// over from the newest page, as one of another scope does.
+    func page(_ params: JSONValue) -> JSONValue {
+        let cursor = params["cursor"]?.string
+        if !pages.isEmpty {
+            let index = cursor.flatMap { cursor in pages.firstIndex { $0["next_cursor"]?.string == cursor } }.map { $0 + 1 }
+            return index.map { $0 < pages.count ? pages[$0] : ["rows": [], "next_cursor": .null, "reset": false] } ?? pages[0]
+        }
+        let limit = params["limit"]?.int ?? 100
+        let given = cursor.flatMap { $0.hasPrefix("c:") ? Int($0.dropFirst(2)) : nil }
+        let end = min(given ?? rows.count, rows.count)
+        let begin = max(0, end - limit)
+        return ["session_id": .string(session), "rows": .array(Array(rows[begin..<end])), "reset": .bool(given == nil),
+                "next_cursor": begin > 0 ? .string("c:\(begin)") : .null]
+    }
+
     init(for s: AppStore) {
         s.gateway.answer = { [unowned self] method, params in
             switch method {
-            case "session.transcript": return ["rows": .array(self.rows)]
+            case "session.transcript":
+                self.cursors.append(params["cursor"]?.string)
+                return self.paging?(params) ?? self.page(params)
             case "session.resume":
                 return ["session_id": .string(session), "running": .bool(self.running), "messages_omitted": .bool(true)]
             case "session.steer", "session.redirect": return try self.correction()
@@ -952,6 +980,248 @@ for path in paths {
         check("copies (\(path)) the turn row \(original) began, its copy row \(number) read after the compaction, stopped: no 重试 (\(s.chats[bot]?.dropLast().last.map { "\($0.role)" } ?? "none") before it)",
               s.retryTarget(bot) == nil)
     }
+}
+
+// ---- 重试 of a long turn Hermes compacted in itself (R5-03 of the fifth review) -------------------
+// Hermes's own pages (longturn.json: ../../real, stage long, in place and into a new session): the
+// prompt 「逐个检查这些文件，满了（长轮）」 read as row 9 while its first command ran, naming its
+// submission; Hermes compacted the session once that command's result was back, the prompt's copy
+// row 16 naming it still; 28 commands, the turn stopped in the last, its end naming 16. The newest
+// page of 50 after it is 25 rows of tool calls with a cursor, the prompt on the second. A rewind to
+// 9 is refused (in place as no longer in the session's history, in a new session as compacted), one
+// to 16 takes the turn back. 重试 takes the prompt back by the row its submission is now, and, where
+// that is not known, reads the pages through by their cursors to the row that is it: not on the
+// newest page is not summarized. With 3 commands (78, then 83) the copy is on the newest page, and a
+// prompt sent from here has its row from its end: the controls.
+
+let long = try JSONValue.parse(String(contentsOfFile: CommandLine.arguments[4], encoding: .utf8))
+
+/// The row of `page` that names `submission`.
+func naming(_ submission: String, in page: JSONValue?) -> JSONValue? {
+    (page?["rows"]?.array ?? []).first { $0["display_metadata"]?["submission_id"]?.string == submission }
+}
+
+/// `page` with its rows that name `submission` naming nothing.
+func unnaming(_ submission: String, in page: JSONValue) -> JSONValue {
+    guard case .object(var fields) = page else { return page }
+    fields["rows"] = .array((page["rows"]?.array ?? []).map { row in
+        guard row["display_metadata"]?["submission_id"]?.string == submission, case .object(var named) = row else { return row }
+        named["display_metadata"] = nil
+        return .object(named)
+    })
+    return .object(fields)
+}
+
+/// 詩音's chat with stage long's turn (`long`, `short`) stopped: read while it ran (Hermes's page of
+/// then, by the store's own newest-page read, as a chat opened or attached again mid-run reads it),
+/// or, `sentHere`, its prompt this Mac's bubble under its submission, after the rows before it; its
+/// end noted, unless `missed` (the connection went); the line the stop left. The server then gives
+/// Hermes's pages after the end, and answers the two rewinds as Hermes did. `unnamed`: as though
+/// the prompt's row named no submission, on every page.
+func longChat(_ path: String, _ name: String, missed: Bool = false, sentHere: Bool = false,
+              unnamed: Bool = false) async -> (AppStore, Server) {
+    let data = long[path]?[name]
+    let submission = data?["submission"]?.string ?? ""
+    func shown(_ page: JSONValue) -> JSONValue { unnamed ? unnaming(submission, in: page) : page }
+    let s = store(.queue, running: false)
+    s.loadedChats = [bot]
+    let server = Server(for: s)
+    servers.append(server)
+    server.running = false
+    let during = data?["during"] ?? .null
+    if sentHere {
+        let rows = during["rows"]?.array ?? []
+        let before = Array(rows.prefix { $0["display_metadata"]?["submission_id"]?.string != submission })
+        s.chats[bot] = s.transcriptItems(["rows": .array(before)])
+            + [ChatItem(id: submission, role: .user, at: Date(), text: naming(submission, in: during)?["text"]?.string ?? "")]
+    } else {
+        server.pages = [shown(during)]
+        s.attachMarks[bot] = 0
+        try? await s.loadLatestPage(bot)
+    }
+    if !missed, let turn = data?["persisted_turn"] {
+        s.noteFences(["session_id": .string(session), "type": "message.complete", "payload": ["persisted_turn": turn]])
+    }
+    s.chats[bot, default: []].append(ChatItem(id: "stopped", role: .system, at: Date(), text: "已停止", stopped: true))
+    server.pages = (data?["after"]?.array ?? []).map(shown)
+    server.cursors = []
+    for key in ["old", "now"] {
+        if let row = data?["rewinds"]?[key]?["row"]?.int {
+            server.rewinds[row] = data?["rewinds"]?[key]?["answer"]
+        }
+    }
+    return (s, server)
+}
+
+/// 重试 under the chat's stopped turn, and what it came to: the retry over, and what it asked
+/// again or said (or the chat on another session).
+func retryNow(_ s: AppStore) async {
+    s.retryReply(bot)
+    await until { !s.control.retrying.contains(bot) }
+    await until { !asked(s).isEmpty || notRetried(s) != nil || s.sessions[bot] != session }
+}
+
+/// The pages a chat's server was asked for since, in words.
+func pagesRead(_ server: Server) -> String {
+    "pages read: " + server.cursors.map { $0 == nil ? "the newest" : "by cursor" }.joined(separator: ", ")
+}
+
+for path in paths {
+    for (name, calls) in [("long", 28), ("short", 3)] {
+        let data = long[path]?[name]
+        let submission = data?["submission"]?.string ?? ""
+        let after = data?["after"]?.array ?? []
+        let old = data?["rewinds"]?["old"]?["row"]?.int ?? 0, now = data?["rewinds"]?["now"]?["row"]?.int ?? 0
+        let first = naming(submission, in: data?["during"]), copy = after.lazy.compactMap { naming(submission, in: $0) }.first
+        let on = after.firstIndex { naming(submission, in: $0) != nil }
+        let refusal = data?["rewinds"]?["old"]?["answer"]?["error"]?["data"]?["detail"]?.string ?? "no refusal"
+        let taken = data?["rewinds"]?["now"]?["answer"]?["rewound_count"]?.int ?? 0
+        check("long turn (\(path), \(calls) commands) Hermes's pages: the prompt read mid-run as row \(old), naming its submission, is row \(now) once Hermes compacted in its turn, at its time, naming it still, and its end names \(now); after the end it is on page \((on ?? -1) + 1) of \(after.count) (the newest has \(after.first?["next_cursor"]?.string == nil ? "no" : "a") cursor); a rewind to \(old) is refused (\(refusal)), one to \(now) takes back \(taken) rows",
+              first?["row_id"]?.int == old && copy?["row_id"]?.int == now && old != now && copy?["timestamp"] == first?["timestamp"]
+                && data?["persisted_turn"]?["user_row_id"]?.int == now && on == (name == "long" ? 1 : 0)
+                && (name == "short" || naming(submission, in: after.first) == nil && after.first?["next_cursor"]?.string != nil)
+                && data?["rewinds"]?["old"]?["answer"]?["error"] != nil
+                && taken == data?["persisted_turn"]?["row_ids"]?.array.count)
+    }
+    let words = naming(long[path]?["long"]?["submission"]?.string ?? "", in: long[path]?["long"]?["during"])?["text"]?.string ?? ""
+    let old = long[path]?["long"]?["rewinds"]?["old"]?["row"]?.int ?? 0, now = long[path]?["long"]?["rewinds"]?["now"]?["row"]?.int ?? 0
+    let firstCursor = long[path]?["long"]?["after"]?.array.first?["next_cursor"]?.string
+
+    // the review's case: read mid-run as row 9, its end naming 16
+    let (mid, _) = await longChat(path, "long")
+    await retryNow(mid)
+    check("重试 long turn (\(path)) read mid-run as row \(old), its end naming \(now): taken back as \(now), the row its submission is now, and asked again: \(retried(mid))",
+          rewound(mid).last == now && asked(mid) == [words] && notRetried(mid) == nil)
+    check("重试 long turn (\(path)) …by that row, not first by \(old), which Hermes no longer takes back: \(rewound(mid))", rewound(mid) == [now])
+    // its end missed (the connection went): the pages read through, by their cursors, to the row that names it
+    let (missed, server) = await longChat(path, "long", missed: true)
+    await retryNow(missed)
+    check("重试 long turn (\(path)) read mid-run, its end missed: \(old) refused; not on the newest page, on the second, by its cursor, \(now) names it: taken back as it, asked again: \(retried(missed)); \(pagesRead(server))",
+          rewound(missed) == [old, now] && asked(missed) == [words] && notRetried(missed) == nil
+            && server.cursors == [nil, firstCursor])
+    // and with its row naming nothing, on every page: the copy at its time in its words
+    let (plain, _) = await longChat(path, "long", missed: true, unnamed: true)
+    await retryNow(plain)
+    check("重试 long turn (\(path)) read mid-run, its row naming no submission, its end missed: \(now) found on the second page at its time in its words: \(retried(plain))",
+          rewound(plain) == [old, now] && asked(plain) == [words] && notRetried(plain) == nil)
+    // sent from here: its end names the copy (a control), or, missed, the pages are read through for it
+    let (sent, _) = await longChat(path, "long", sentHere: true)
+    await retryNow(sent)
+    check("重试 long turn (\(path)) sent from here, its end naming \(now): taken back as it, as before: \(retried(sent))",
+          rewound(sent) == [now] && asked(sent) == [words] && notRetried(sent) == nil)
+    let (sentMissed, sentServer) = await longChat(path, "long", missed: true, sentHere: true)
+    await retryNow(sentMissed)
+    check("重试 long turn (\(path)) sent from here, its end missed, no page read since naming it: the second page does, \(now): \(retried(sentMissed)); \(pagesRead(sentServer))",
+          rewound(sentMissed) == [now] && asked(sentMissed) == [words] && notRetried(sentMissed) == nil)
+    // 3 commands: the copy on the newest page, its end seen or not (the controls)
+    let short = long[path]?["short"]
+    let shortWords = naming(short?["submission"]?.string ?? "", in: short?["during"])?["text"]?.string ?? ""
+    let shortNow = short?["rewinds"]?["now"]?["row"]?.int ?? 0
+    for missed in [false, true] {
+        let (s, _) = await longChat(path, "short", missed: missed)
+        await retryNow(s)
+        check("重试 short turn (\(path)) read mid-run, its end \(missed ? "missed" : "seen"): taken back as \(shortNow), on the newest page, asked again, as before: \(retried(s))",
+              rewound(s).last == shortNow && asked(s) == [shortWords] && notRetried(s) == nil)
+    }
+}
+
+// ---- reading the pages through: as far as it takes, bounded, never round ---------------------------
+// The stand-in's own pages (50 rows a page, a cursor for the rows above while there are any): the
+// prompt 「逐个检查（替身）」 read as row 9 while its turn ran, naming its submission, its end missed;
+// a rewind to 9 refused as no longer in the session's history (as Hermes refused it in place), one
+// to 16 taken.
+
+let checkWords = "逐个检查（替身）", checking = "CHECKING-SUBMISSION"
+
+func refusedAs(_ detail: String) -> JSONValue {
+    ["error": ["code": 4001, "message": "invalid_params",
+               "data": ["reason": "invalid_params", "field": "target_message_id", "detail": .string(detail)]]]
+}
+let noLonger = refusedAs("target user message is no longer in session history")
+let summarizedAway = refusedAs("compacted: target user message was summarized when the session was compressed")
+
+/// `count` rows of a turn's tool calls, numbered from `from`.
+func toolRows(_ count: Int, from: Int) -> [JSONValue] { (0..<count).map { theirRow(from + $0, "检查了第\($0 + 1)个文件") } }
+
+/// The chat read while the turn ran (row 9 naming the submission), stopped since, its end missed;
+/// the server then paging `rows` (oldest first), a rewind to 9 refused with `refusal`, one to 16 taken.
+func pagedChat(_ rows: [JSONValue], refusal: JSONValue = noLonger) async -> (AppStore, Server) {
+    let s = store(.queue, running: false)
+    s.loadedChats = [bot]
+    let server = Server(for: s)
+    servers.append(server)
+    server.running = false
+    server.rows = [oldRow(1, "开始吧"), theirRow(2, "好。"), namedRow(9, checkWords, submission: checking)]
+    s.attachMarks[bot] = 0
+    try? await s.loadLatestPage(bot)
+    s.chats[bot, default: []].append(ChatItem(id: "stopped", role: .system, at: Date(), text: "已停止", stopped: true))
+    server.rows = rows
+    server.cursors = []
+    server.rewinds = [9: refusal, 16: ["target_message": ["id": 16, "content": .string(checkWords)], "rewound_count": 3]]
+    return (s, server)
+}
+
+// what ControlError.notFound says (not in sources older than the change)
+let notRead = "没能重试：没能把对话记录读完，不知道这条消息现在是哪一行"
+// how many pages it reads at most (AppStore.searchPages)
+let searchPages = 20
+do {
+    // far up, within the bound: page 13
+    let (far, server) = await pagedChat([namedRow(16, checkWords, submission: checking)] + toolRows(600, from: 17))
+    await retryNow(far)
+    check("paged 重试: the prompt's copy 13 pages up: read through to it, taken back, asked again: \(retried(far)); \(server.cursors.count) pages read",
+          rewound(far) == [9, 16] && asked(far) == [checkWords] && server.cursors.count == 13)
+    // further up than it reads: it says it could not read them all, not that the prompt was summarized
+    let (beyond, beyondServer) = await pagedChat([namedRow(16, checkWords, submission: checking)] + toolRows(1100, from: 17))
+    await retryNow(beyond)
+    check("paged 重试: the copy 23 pages up: \(searchPages) read, nothing taken back, and the chat says it could not read them all: \(retried(beyond)); \(beyondServer.cursors.count) pages read",
+          rewound(beyond) == [9] && asked(beyond).isEmpty && notRetried(beyond) == notRead && beyondServer.cursors.count == searchPages)
+    // every page read and none is it: then, and only then, Hermes's refusal says it (here: summarized)
+    let (gone, goneServer) = await pagedChat(toolRows(120, from: 17), refusal: summarizedAway)
+    await retryNow(gone)
+    check("paged 重试: no copy on any of the 3 pages: every one read, then Hermes's word for it: \(retried(gone)); \(goneServer.cursors.count) pages read",
+          rewound(gone) == [9] && asked(gone).isEmpty && notRetried(gone) == "没能重试：这条消息已经压缩进摘要里了" && goneServer.cursors.count == 3)
+}
+do {
+    // a server that gives the same cursor again: two pages, not round and round
+    let (again, server) = await pagedChat(toolRows(120, from: 17))
+    server.paging = { params in
+        ["rows": .array(toolRows(50, from: params["cursor"] == nil ? 200 : 100)), "next_cursor": "c:once", "reset": .bool(params["cursor"] == nil)]
+    }
+    await retryNow(again)
+    check("paged 重试: a cursor given twice: two pages read, then it stops, says it could not read them all: \(retried(again)); \(server.cursors.count) pages read",
+          rewound(again) == [9] && notRetried(again) == notRead && server.cursors == [nil, "c:once"])
+    // a page read by a cursor that starts over (`reset`: the newest page again)
+    let (over, overServer) = await pagedChat(toolRows(120, from: 17))
+    overServer.paging = { params in
+        params["cursor"] == nil ? ["rows": .array(toolRows(50, from: 200)), "next_cursor": "c:50", "reset": true]
+            : ["rows": .array(toolRows(50, from: 300)), "next_cursor": "c:60", "reset": true]
+    }
+    await retryNow(over)
+    check("paged 重试: the page read by the cursor starts over (reset): it stops there, says it could not read them all: \(retried(over)); \(overServer.cursors.count) pages read",
+          rewound(over) == [9] && notRetried(over) == notRead && overServer.cursors.count == 2)
+    // the chat moves to another session while the pages are read: nothing more is done or said
+    let (moved, movedServer) = await pagedChat([namedRow(16, checkWords, submission: checking)] + toolRows(120, from: 17))
+    movedServer.paging = { [unowned movedServer] params in
+        moved.sessions[bot] = "s2"
+        return movedServer.page(params)
+    }
+    await retryNow(moved)
+    try? await Task.sleep(for: .milliseconds(100))
+    check("paged 重试: the chat on another session meanwhile: no row of the old one taken back past 9, nothing asked, nothing said: \(retried(moved)); \(movedServer.cursors.count) pages read",
+          rewound(moved) == [9] && asked(moved).isEmpty && notRetried(moved) == nil && movedServer.cursors.count == 1)
+}
+do {
+    // a page read later that shows the prompt as the row it was before a compaction stored it again
+    // (one above where it is now) leaves the newer one standing for it
+    let s = store(.queue, running: false)
+    let server = Server(for: s)
+    servers.append(server)
+    s.control.storedRows[checking] = 16
+    server.rows = [namedRow(9, checkWords, submission: checking)]
+    _ = try? await s.transcriptPage(bot, session, limit: 50)
+    check("a page showing the prompt's row before its copy, read after its end named the copy: it is the copy still: \(s.control.storedRows[checking] ?? 0)",
+          s.control.storedRows[checking] == 16)
 }
 
 print(failures == 0 ? "all passed" : "\(failures) failed")

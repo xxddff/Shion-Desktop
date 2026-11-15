@@ -67,12 +67,14 @@ nonisolated enum DeliveryCheck {
 
     /// The rows of a transcript page that name the submission they were stored for, by that
     /// submission (Hermes keeps a prompt's `submission_id` on its row: display_metadata). Such a
-    /// row is that prompt and no other message: one in the same words is not it.
+    /// row is that prompt and no other message: one in the same words is not it. Where two do, the
+    /// newer: a compaction's copy is a row of a higher number than the one it copied (Hermes never
+    /// gives a number twice), wherever the page shows it.
     static func named(in page: JSONValue) -> [String: Int] {
         var named: [String: Int] = [:]
         for row in page["rows"]?.array ?? [] {
             if let submission = row["display_metadata"]?["submission_id"]?.string, let number = row["row_id"]?.int {
-                named[submission] = number
+                named[submission] = max(number, named[submission] ?? number)
             }
         }
         return named

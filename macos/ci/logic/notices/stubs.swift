@@ -9,6 +9,8 @@ import Foundation
 
 final class ChatControl {
     var storedRows: [String: Int] = [:]
+    var rowSubmissions: [String: [Int: String]] = [:]
+    // what ed80a0a and older keep of the rows that name a submission: their numbers alone
     var namedRows: [String: Set<Int>] = [:]
 }
 
