@@ -60,15 +60,16 @@ extension AppStore {
     /// (`notification.clear`) is settled. Every frame goes through, live or replayed.
     func noteSaid(_ type: String, _ payload: JSONValue, in botId: String, shown: Bool) {
         status.take(type, payload, in: botId, at: Date(), shown: shown, after: shown ? knownRow(botId) : nil)
+        let held = notes[botId] ?? []
+        var kept = held
         if type == "notification.clear", let key = payload["key"]?.string, !key.isEmpty {
-            var kept = notes[botId] ?? []
             StatusNotes.clear(key: key, in: &kept)
-            notes[botId] = kept
         } else if let card = StatusNotes.card(type, payload, frame: frameName, at: Date()) {
-            var kept = notes[botId] ?? []
             StatusNotes.keep(card, in: &kept, limit: Self.notesKept)
-            notes[botId] = kept
         }
+        // a write only when something changed: a frame said again changes nothing, and the chat is
+        // not drawn again for it
+        if kept != held { notes[botId] = kept }
     }
 
     /// Hermes is compacting this chat's session: the composer offers 排队 and 引导 only, and 打断

@@ -139,7 +139,7 @@ final class ChatStatus {
     /// chat's rows are loaded, so the compaction has its card now (else once they are: `opened`);
     /// `after` is the highest transcript row the chat knows, for a compaction that begins now.
     func take(_ type: String, _ payload: JSONValue, in botId: String, at: Date, shown: Bool, after row: Int?) {
-        if HermesStatus.endsWait.contains(type) { waits[botId] = nil }
+        if HermesStatus.endsWait.contains(type) { endWait(botId) }
         if HermesStatus.resumesTurn.contains(type) || HermesStatus.endsTurn.contains(type) { end(botId) }
         switch type {
         case "status.update":
@@ -155,7 +155,7 @@ final class ChatStatus {
             // nothing runs: whatever ran is over, also when its own end was not seen (the official
             // client's reconcile on a gateway-authored running=false)
             end(botId)
-            waits[botId] = nil
+            endWait(botId)
         default:
             break
         }
@@ -179,7 +179,7 @@ final class ChatStatus {
     /// Hermes says the compaction is over (`compacted`, `ready`): its card is done. Said after its
     /// turn ended first (nothing seen in between), it is the newest card's word all the same.
     func over(_ line: String, in botId: String) {
-        running[botId] = nil
+        if running[botId] != nil { running[botId] = nil }
         guard let last = compactions[botId]?.indices.last, Self.state(of: compactions[botId]![last]) != .done else { return }
         compactions[botId]![last].event = .compaction(.done, messages: nil)
         if !line.isEmpty { compactions[botId]![last].text = line }
@@ -190,7 +190,10 @@ final class ChatStatus {
     /// on one with too little to fold without a word), unless the transcript turns out to have its
     /// summary (`settle`).
     func end(_ botId: String) {
-        guard running.removeValue(forKey: botId) != nil else { return }
+        // only a write that changes something: every piece of a reply comes through here, and each
+        // write would have the chat's composer drawn again
+        guard running[botId] != nil else { return }
+        running[botId] = nil
         if let last = compactions[botId]?.indices.last, Self.state(of: compactions[botId]![last]) == .running {
             compactions[botId]![last].event = .compaction(.ended, messages: nil)
         }
@@ -210,7 +213,13 @@ final class ChatStatus {
     func attached(_ botId: String, running: Bool) {
         guard !running else { return }
         end(botId)
-        waits[botId] = nil
+        endWait(botId)
+    }
+
+    /// The wait for the provider is over, if there is one (a write only then: the spinner's every
+    /// face comes through here, and each write would have the chat drawn again).
+    private func endWait(_ botId: String) {
+        if waits[botId] != nil { waits[botId] = nil }
     }
 
     private func begin(_ botId: String, at: Date, line: String, after row: Int?) {
@@ -226,7 +235,7 @@ final class ChatStatus {
     /// wait began; any other such frame (the spinner, the empty one that clears it) ends it.
     func think(_ text: String, in botId: String, at: Date) {
         guard let wait = HermesStatus.providerWait(text) else {
-            waits[botId] = nil
+            endWait(botId)
             return
         }
         if waits[botId] != nil {

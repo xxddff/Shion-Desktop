@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 
 // The cards for what Hermes says on its own, checked away from a Mac: the app's own StatusCards.swift
 // and Compose.swift compiled in as they are, and the store's own AppStore.noteSaid, shownChat and
@@ -448,6 +449,34 @@ do {
     for n in 0..<40 { take(t, status("goal", "↻ Continuing toward goal (\(n)/40)", seq: n + 1)) }
     check(kept(t).count == AppStore.notesKept && kept(t).last?.text == "↻ Continuing toward goal (39/40)",
           "kept. at most \(AppStore.notesKept), the newest")
+}
+
+do {
+    // a frame that changes nothing of what the status holds notifies no one: the chat and its composer
+    // are not drawn again for each piece of a reply, each face of the spinner, each tool
+    // the onChange closure is any thread's: a counter of no actor's
+    nonisolated final class Count: @unchecked Sendable { var changes = 0 }
+    let s = AppStore()
+    let seen = Count()
+    withObservationTracking {
+        _ = s.status.compacting(bot)
+        _ = s.status.cards(bot, rows: [])
+        _ = s.notes[bot]
+    } onChange: { seen.changes += 1 }
+    for f in [frame("message.start"), frame("thinking.delta", ["text": "(◔_◔) pondering..."]), frame("thinking.delta", ["text": ""]),
+              frame("message.delta", ["text": "好"]), frame("tool.start", ["name": "terminal", "tool_id": "t1"]),
+              frame("tool.complete", ["name": "terminal", "tool_id": "t1"]), frame("message.complete", ["text": "好"]),
+              frame("session.info", ["running": false]), frame("notification.clear", ["key": "credits.usage"])] {
+        take(s, f)
+    }
+    s.status.attached(bot, running: false)
+    check(seen.changes == 0, "quiet. frames that change nothing of it notify no one: \(seen.changes)")
+    // and one that does still notifies
+    let t = AppStore()
+    let moved = Count()
+    withObservationTracking { _ = t.status.compacting(bot) } onChange: { moved.changes += 1 }
+    take(t, status("compacting", summarizing))
+    check(moved.changes == 1 && t.status.compacting(bot), "quiet. …a compaction that begins still does")
 }
 
 do {
