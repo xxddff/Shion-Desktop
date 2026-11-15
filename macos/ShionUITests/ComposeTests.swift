@@ -230,8 +230,8 @@ final class ComposeTests: XCTestCase {
             XCTFail("no 打断 to choose before Hermes compacts")
             app.typeKey(.escape, modifierFlags: [])
         }
-        let card = element("compaction-card", in: app)
-        let compactingShown = card.waitForExistence(timeout: 15) && waitForText("正在压缩对话", in: app, timeout: 5)
+        let compactionCard = element("compaction-card", in: app)
+        let compactingShown = compactionCard.waitForExistence(timeout: 15) && waitForText("正在压缩对话", in: app, timeout: 5)
         keep(window.screenshot(), "compose-4d-compacting")
         XCTAssertTrue(compactingShown, "no card while Hermes compacts the session")
         XCTAssertTrue(shows(busyMenu, "排队"), "with 打断 chosen, the menu does not show 排队 while Hermes compacts: \(busyMenu.label) \(String(describing: busyMenu.value))")
