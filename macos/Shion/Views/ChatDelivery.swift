@@ -6,7 +6,8 @@ import SwiftUI
 /// it has it; 没发出去, with 重发 (AppStore+Reconnect.swift); put into a running turn that did not
 /// take it, saying so without saying it never got there, with 再发一次 (Delivery.declined); or put
 /// into a running turn with no answer, saying that nothing will tell whether it got there, with
-/// 再发一次, which may then say it twice (Delivery.unconfirmed).
+/// 再发一次, which may then say it twice, and 不发了, which takes it out of the chat and sends
+/// nothing (Delivery.unconfirmed).
 struct DeliveryMark: ViewModifier {
     @Environment(AppStore.self) private var store
     let item: ChatItem
@@ -50,6 +51,15 @@ struct DeliveryMark: ViewModifier {
                     .disabled(!store.canResend(botId))
                     .help(Delivery.unansweredResend(to: store.bot(botId)?.name ?? "助手"))
                     .accessibilityIdentifier("resend")
+                    // the chat's own: no connection needed
+                    Button {
+                        store.giveUp(item.id, in: botId)
+                    } label: {
+                        Label("不发了", systemImage: "xmark")
+                    }
+                    .buttonStyle(.plain)
+                    .help(Delivery.unansweredGiveUp)
+                    .accessibilityIdentifier("give-up")
                 }
             } else if state == .declined {
                 HStack(spacing: 10) {

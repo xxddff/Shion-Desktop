@@ -11,8 +11,9 @@ nonisolated enum Delivery: Equatable, Sendable {
     /// submission, so nothing Hermes publishes names it, and no row of the transcript is taken for
     /// it (Hermes's own clients look in none either). It stays so under its bubble, a relaunch
     /// included (Deliveries.kept), until 再发一次 sends it as a message of its own behind the
-    /// running turn, which says it twice if the first one did get there. It is not sent again by
-    /// itself.
+    /// running turn, which says it twice if the first one did get there, or 不发了 takes it out of
+    /// the chat (AppStore.giveUp), as 重试 does with the turn it was put into. It is not sent again
+    /// by itself.
     case unconfirmed
     /// Put into a running turn, and Hermes answered that the turn did not take it, without saying
     /// that no assistant saw it: with most assistants none did, but one that runs on Codex may
@@ -32,12 +33,13 @@ nonisolated enum Delivery: Equatable, Sendable {
     }
 
     /// What the line under a message put into a running turn says when no answer came
-    /// (`unconfirmed`), and what 再发一次 under it says it does. Hermes's answer is the only word
-    /// there is on such a message: without it, it may have got there or not, for good.
+    /// (`unconfirmed`), and what 再发一次 and 不发了 under it say they do. Hermes's answer is the
+    /// only word there is on such a message: without it, it may have got there or not, for good.
     static let unansweredNote = "没等到回音，送没送到不知道，以后也不会知道；再发一次可能会说两遍"
     static func unansweredResend(to assistant: String) -> String {
         "作为新的一句发给\(assistant)，排在这一轮后面；要是刚才那句其实送到了，这句话就说了两遍"
     }
+    static let unansweredGiveUp = "把这句话从对话里拿掉，不再发；要是它其实送到了，对话记录里的那一条还在"
 }
 
 /// Whether Hermes got what went out just before the connection went. Hermes admits a prompt once

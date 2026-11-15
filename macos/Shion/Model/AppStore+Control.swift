@@ -289,7 +289,8 @@ extension AppStore {
 
     /// Asks the last prompt again, as Hermes's `/retry` does: the prompt's row and everything after
     /// it are taken back (`session.mutate` rewind, fenced by the session's revision and run), then
-    /// the same words go in as a new turn. Refused because its row is not one of the session's
+    /// the same words go in as a new turn; in the chat the turn goes too, with what was put into it
+    /// and never answered (`giveUp`). Refused because its row is not one of the session's
     /// (`invalid_params`), the prompt is taken back by the row it has now, if a compaction kept it
     /// (`rowNow`). Nothing is said once the chat has moved to another session meanwhile: what is
     /// left of the retry is no longer its.
@@ -314,9 +315,15 @@ extension AppStore {
                     receipt = try await rewind(to: now, botId: botId, sessionId: sessionId)
                 }
                 guard sessions[botId] == sessionId else { return }
-                // the turn is gone on the server: here too, then the same words again
+                // the turn is gone on the server: here too, then the same words again. What was put
+                // into it and never answered goes with it for good, as 不发了 takes it: whether it
+                // got there no longer matters (`giveUp`)
                 if let index = chats[botId]?.firstIndex(where: { $0.id == prompt.id }) {
+                    let gone = chats[botId]?[index...].map(\.id) ?? []
                     chats[botId]?.removeSubrange(index...)
+                    for id in gone {
+                        giveUp(id, in: botId)
+                    }
                 }
                 let typed = receipt["target_message"]?["content"]?.string ?? ""
                 send(typed.isEmpty ? prompt.text : typed, to: botId)

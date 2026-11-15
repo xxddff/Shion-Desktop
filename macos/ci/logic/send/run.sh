@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # The store's sending, rejoining and retrying, checked away from the app (Linux, or a Mac's own
 # swiftc): what becomes of a message whose receipt the connection took, of one put into a running
-# turn whose answer never came (marked so for good, kept across a relaunch, 再发一次), of one said
-# while the chat is being attached again, what a page read in the chat's place keeps, and which
-# row 重试 takes back once the session is compacted, the pages read through for it as far as it takes.
+# turn whose answer never came (marked so for good, kept across a relaunch, 再发一次, 不发了, gone
+# with the turn 重试 takes back), of one said while the chat is being attached again, what a page
+# read in the chat's place keeps, and which row 重试 takes back once the session is compacted, the
+# pages read through for it as far as it takes.
 #
 # The methods are the production ones: cut from the store's files as they are (extract.py), the
 # reading of a page's rows into the chat's items among them, and compiled with AppStore+Compose.swift,
@@ -19,7 +20,9 @@
 #
 #   ./run.sh                    the checks, against the sources this file sits among
 #   SWIFTC=/path/to/swiftc      another compiler than `swiftc`
-#   SHION_ROOT=/another/copy    the production files of another copy of the repository
+#   SHION_ROOT=/another/copy    the production files of another copy of the repository (one
+#                               without 不发了 gets a stand-in for it that does nothing, so that its
+#                               checks run there and fail: extract.py STANDINS)
 #   SHION_BEFORE=1              with SHION_ROOT at a copy that still read the transcript for a
 #                               message put into a running turn (f41701d or older, back to 3e1c409):
 #                               gives the stand-ins its shape and leaves out the checks that name

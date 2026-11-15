@@ -323,7 +323,8 @@ func ids(_ s: AppStore) -> [String] { (s.chats[bot] ?? []).map(\.id) }
 // (Delivery.unconfirmed): it may have got there or not, and no row of the transcript is taken for
 // it, as Hermes's own desktop client takes none. 再发一次 sends it as a message of its own, behind
 // the running turn; if the first got there, it is then said twice, and a page read later shows its
-// row as well. Nothing merges, moves or drops either of the two.
+// row as well. Nothing merges, moves or drops either of the two. 不发了 takes it out of the chat,
+// nothing sent, and so does 重试 of the turn it was put into.
 
 /// Put into the turn under way (generation 1), and the connection takes the answer: its item's id.
 func lostInto(_ s: AppStore, _ words: String) async -> String {
@@ -534,6 +535,108 @@ do {
     t.resend(id, in: bot)
     await until { t.deliveries.state(id) == nil }
     check("relaunched: 再发一次 sent it, and nothing is kept any more", defaults.data(forKey: "ShionUnanswered") == nil)
+    defaults.removePersistentDomain(forName: suite)
+}
+
+/// What the store follows of a message, and whether the chat has its bubble.
+func record(_ id: String, in s: AppStore) -> String {
+    (s.deliveries.state(id).map { "followed, \($0)" } ?? "followed no more") + (ids(s).contains(id) ? ", its bubble" : ", no bubble")
+}
+
+/// The ids of the messages whose answer never came that this Mac keeps in `defaults`.
+func kept(in defaults: UserDefaults) -> [String] {
+    guard let data = defaults.data(forKey: "ShionUnanswered"),
+          let kept = try? JSONDecoder().decode([AppStore.KeptUnanswered].self, from: data)
+    else { return [] }
+    return kept.map(\.message.id)
+}
+
+// 不发了 (AppStore.giveUp): a message whose answer never came taken out of the chat. Nothing is
+// sent and nothing needs the server; it is followed and kept no more, so neither a page read later
+// nor a relaunch brings it back, and had it got there its row shows as any row does. Another such
+// message is marked still
+do {
+    let suite = "ci.shion.send.giveup"
+    let defaults = UserDefaults(suiteName: suite)!
+    defaults.removePersistentDomain(forName: suite)
+    let (s, server) = turnChat([oldRow(1, "继续")])
+    s.keepUnanswered(in: defaults)
+    let id = await lostInto(s, "继续")
+    let other = await lostInto(s, "讲短一点")
+    let calls = s.gateway.calls.count
+    // offline, and the chat not attached
+    s.gateway.phase = .offline
+    s.gateway.attached = []
+    s.giveUp(id, in: bot)
+    check("不发了, offline, the chat not attached: out of the chat, followed no more, nothing sent: \(record(id, in: s)); \(s.gateway.calls.count - calls) calls",
+          !ids(s).contains(id) && s.deliveries.state(id) == nil && s.gateway.calls.count == calls)
+    check("不发了: …kept on this Mac no more, the other one still: \(kept(in: defaults))", kept(in: defaults) == [other])
+    check("不发了: …the other one marked still, with 再发一次: \(standing(other, in: s))", unanswered(other, in: s))
+    // back, and a page read in the chat's place with its row on it: it got there after all
+    s.gateway.phase = .online
+    server.rows = [oldRow(1, "继续"), row(2, "继续", steer: true)]
+    await comeBack(s, replayed: false)
+    check("不发了: …a page read later, its row on it: the row shows, the bubble does not come back: \(said("继续", in: s))",
+          said("继续", in: s) == ["row-1", "row-2"] && s.deliveries.state(id) == nil)
+    // relaunched
+    let t = store(.queue, running: false)
+    t.chats[bot] = t.transcriptItems(["rows": .array([oldRow(1, "继续")])])
+    t.keepUnanswered(in: defaults)
+    check("不发了: …nor a relaunch, the other one back, marked: \(ids(t))",
+          !ids(t).contains(id) && t.deliveries.state(id) == nil && unanswered(other, in: t))
+    defaults.removePersistentDomain(forName: suite)
+}
+
+// only under a message whose answer never came: a declined one stays as it was
+do {
+    let s = store(.steer)
+    s.gateway.answer = { method, params in
+        method == "session.steer" ? ["status": "rejected", "text": params["text"] ?? .null, "execution_generation": 1]
+            : ["status": "queued"]
+    }
+    _ = typed("别讲了", in: s)
+    let id = s.chats[bot]?.last?.id ?? ""
+    await until { s.deliveries.state(id) == .declined }
+    s.giveUp(id, in: bot)
+    check("不发了 only under a message whose answer never came: a declined one stays, with 再发一次: \(standing(id, in: s))",
+          s.deliveries.state(id) == .declined && ids(s).contains(id))
+}
+
+// 重试 of the turn such a message was put into (AppStore.retryReply): the turn is taken back, and
+// with it what was put into it; the message whose answer never came goes for good, as 不发了 takes
+// it, and no page read later brings it back. One put into an earlier turn is marked still
+do {
+    let suite = "ci.shion.send.retried"
+    let defaults = UserDefaults(suiteName: suite)!
+    defaults.removePersistentDomain(forName: suite)
+    let s = store(.queue, running: false)
+    s.loadedChats = [bot]
+    let server = Server(for: s)
+    servers.append(server)
+    server.running = false
+    s.keepUnanswered(in: defaults)
+    /// Put into a turn, its answer lost.
+    func lost(_ id: String, _ words: String) -> ChatItem {
+        s.deliveries.track(id, botId: bot, text: words, at: then)
+        s.deliveries.set(id, .unconfirmed)
+        var item = AppStore.userItem(id: id, at: then, text: words)
+        item.midTurn = true
+        return item
+    }
+    s.chats[bot] = [ChatItem(id: "row-1", role: .user, at: then, text: "第一句"), lost("earlier", "等一下"),
+                    ChatItem(id: "row-2", role: .assistant, at: then, text: "好。"),
+                    ChatItem(id: "P", role: .user, at: then, text: "讲个长故事"),
+                    ChatItem(id: "R", role: .assistant, at: then, text: "从前有座山", stopped: true),
+                    lost("into", "讲短一点")]
+    s.control.storedRows["P"] = 3
+    server.rewinds = [3: ["target_message": ["id": 3, "content": "讲个长故事"], "rewound_count": 2]]
+    await retryNow(s)
+    check("重试 of the turn a message was put into, its answer never come: taken back and asked again, that message followed and kept no more, the one put into an earlier turn still: \(retried(s)); \(record("into", in: s)); kept \(kept(in: defaults))",
+          rewound(s) == [3] && asked(s) == ["讲个长故事"] && s.deliveries.state("into") == nil && kept(in: defaults) == ["earlier"])
+    server.rows = [oldRow(1, "第一句"), theirRow(2, "好。"), row(4, "讲个长故事")]
+    await comeBack(s, replayed: false)
+    check("重试 of that turn: …a page read in the chat's place later does not bring it back; the earlier one is there, marked: \(ids(s))",
+          !ids(s).contains("into") && unanswered("earlier", in: s))
     defaults.removePersistentDomain(forName: suite)
 }
 

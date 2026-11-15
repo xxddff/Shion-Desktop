@@ -1,7 +1,8 @@
 """Cuts the store's sending, rejoining and retrying methods out of the production files, verbatim
 (less `private`), into one `extension AppStore`, so they compile and run against stand-ins
 (stubs.swift) away from the app. A method that moved or was renamed stops the run: say where it is
-now. Usage:
+now. One marked optional (`?`) that older sources lack is left out, or, where STANDINS has one,
+replaced by a stand-in that does nothing, so its checks run there and fail. Usage:
     python3 extract.py <repository root> <out file>"""
 import sys
 from pathlib import Path
@@ -27,13 +28,20 @@ WANTED = {
     "macos/Shion/Model/AppStore+Reconnect.swift": [
         "func say(", "func submit(_ text: String, id:", "func waitForChat(", "func requeue(", "func resend(",
         "func canResend(", "func rejoin(", "func keepReply(", "func reconcile(", "?func onPage(",
-        # what keeps a message put into a turn whose answer never came (f41701d and older have none)
+        # what keeps a message put into a turn whose answer never came (f41701d and older have none),
+        # and takes it out of the chat (cfbbdb9 and older have none: STANDINS)
         "?static func keepingUnanswered(", "?func putBack(", "?func keepUnanswered(", "?static func keptUnanswered(",
-        "?static let unansweredKey", "?nonisolated struct KeptUnanswered",
+        "?static let unansweredKey", "?nonisolated struct KeptUnanswered", "?func giveUp(",
         # what f41701d and older read the transcript with for such a message (SHION_BEFORE)
         "?func settleCorrections(", "?func began("],
     # what 3e1c409 and a4c1a83 read an item's row from, to see them fail (SHION_ROOT)
     "macos/Shion/Model/AppStore+Events.swift": ["?static func rowNumber("],
+}
+
+# What sources that lack one of the optional declarations above get in its place, so that the checks
+# of it compile there and are seen to fail: a way the app did not offer yet, which does nothing.
+STANDINS = {
+    "func giveUp(": ["    func giveUp(_ id: String, in botId: String) {}"],
 }
 
 
@@ -57,6 +65,8 @@ for path, wanted in WANTED.items():
         found = [i for i, line in enumerate(lines)
                  if line.startswith("    ") and line.strip().removeprefix("private ").startswith(signature)]
         if optional and not found:
+            if signature in STANDINS:
+                parts += [f"    // not in {path}: a stand-in that does nothing (extract.py STANDINS)"] + STANDINS[signature] + [""]
             continue
         if len(found) != 1:
             raise SystemExit(f"{path}: {signature!r} found {len(found)} times")

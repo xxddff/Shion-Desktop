@@ -11,7 +11,7 @@ import Foundation
 /// - what went out just before the connection went is checked: Hermes has it, or it shows 没发出去
 ///   with 重发, which sends it again under the same submission id (Delivery.swift); what was put
 ///   into a running turn and got no answer is not checked, there being nothing to check it by: it
-///   says so for good, with 再发一次 (Delivery.unconfirmed);
+///   says so for good, with 再发一次 and 不发了 (Delivery.unconfirmed);
 /// - what you said while not connected waited under the chat, with the ⌥Space window's sentences
 ///   (QuickAsk.swift), and goes out in order, saying when it was written when that was long ago.
 /// The sidebar says 重新连接中… and when the next try is (Gateway.nextRetry); waking from sleep or a
@@ -43,7 +43,7 @@ extension AppStore {
         while let sentence = sentences.first {
             let text = sentence.line(sentAt: Date())
             chats[botId, default: []].append(Self.userItem(id: sentence.id, at: Date(), text: text))
-            // followed as it is said, with what else in the chat reads the same now (`say`)
+            // followed as it is said (`say`)
             follow(sentence.id, botId: botId, text: text, at: Date())
             guard await submit(text, id: sentence.id, to: botId, sessionId: sessionId) else {
                 chats[botId]?.removeAll { $0.id == sentence.id }
@@ -67,9 +67,9 @@ extension AppStore {
         let sending = settled(mode, to: botId, sessionId: sessionId)
         // as the transcript will show it: words a retry sends again can start with their files' `@file:` lines
         chats[botId, default: []].append(Self.userItem(id: id, at: written, text: text))
-        // followed from this moment, with what else in the chat reads the same now: it may wait
-        // for the chat to be attached again before it goes, and the chat be read again meanwhile
-        // (loadLatestPage), which must not take it for an older message in the same words
+        // followed from this moment: it may wait for the chat to be attached again before it goes,
+        // and the chat be read again meanwhile (loadLatestPage), which must not take it for an
+        // older message in the same words (AppStore.follow)
         follow(id, botId: botId, text: text, at: written)
         Task {
             if await !submit(text, id: id, to: botId, sessionId: sessionId, sending: sending) {
@@ -83,8 +83,7 @@ extension AppStore {
     /// has it; a refusal that it does not (没发出去, with 重发); no answer, the connection having gone,
     /// leaves it unsure until the server can say (`comeBack`). False when it did not go out at all:
     /// no connection by the time it could. While the assistant is still in the turn it was sent
-    /// for, `sending` may put it into that turn instead (AppStore+Compose.swift). What else in the
-    /// chat read the same when it was said stays on its record (Deliveries.track).
+    /// for, `sending` may put it into that turn instead (AppStore+Compose.swift).
     @discardableResult
     func submit(_ text: String, id: String, to botId: String, sessionId: String, sending: Sending = .queued) async -> Bool {
         deliveries.track(id, botId: botId, text: text, at: Date())
@@ -150,6 +149,17 @@ extension AppStore {
                 requeue(id, text: sent.text, at: written, to: botId)
             }
         }
+    }
+
+    /// 不发了, under a message put into a running turn whose answer never came (Delivery.unconfirmed):
+    /// its bubble out of the chat, and the message no longer followed nor kept on this Mac, so that
+    /// nothing brings it back. Nothing is sent, and nothing needs the server: it is the chat's own.
+    /// Had it got there after all, the transcript's row of it stays, and shows as any row does.
+    /// 重试 does the same with what was put into the turn it takes back (AppStore.retryReply).
+    func giveUp(_ id: String, in botId: String) {
+        guard deliveries.state(id) == .unconfirmed else { return }
+        chats[botId]?.removeAll { $0.id == id }
+        deliveries.untrack(id)
     }
 
     /// 重发 can go now: connected, and the chat attached on this socket. Whether Hermes refused to
@@ -452,7 +462,8 @@ extension AppStore {
     /// The messages put into a running turn whose answer never came are kept on this Mac, per
     /// server: what was kept before this launch is in doubt still, its bubble where the chat has
     /// it (the last data) or at its end, and what changes from now on is kept as it changes.
-    /// Nothing read from the server takes them away; 再发一次 does.
+    /// Nothing read from the server takes them away; 再发一次 and 不发了 do (`giveUp`), and 重试 of the
+    /// turn one was put into.
     func keepUnanswered(in defaults: UserDefaults = .standard) {
         let server = serverKey
         let mine = Self.keptUnanswered(in: defaults).filter { $0.server == server }.map(\.message)

@@ -268,7 +268,7 @@ extension AppStore {
         let sending = settled(busyMode, to: botId, sessionId: sessionId)
         chats[botId, default: []].append(ChatItem(id: id, role: .user, at: Date(), text: words,
                                                   media: drafts.map(\.media)))
-        // followed from this moment, with what else in the chat reads the same now (AppStore.say)
+        // followed from this moment (AppStore.say)
         follow(id, botId: botId, text: words, at: Date(), drafts: drafts)
         Task {
             // Hermes keeps a sent picture for about a day; the Mac keeps its own for good
