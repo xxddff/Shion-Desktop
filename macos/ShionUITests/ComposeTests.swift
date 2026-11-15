@@ -212,7 +212,10 @@ final class ComposeTests: XCTestCase {
         // it compacts. While it does, its card says so; the menu offers 排队 and 引导, shows 排队, and
         // has 打断 greyed, saying why; a message goes as 排队 (prompt.submit, behind the turn), not as
         // session.redirect, which the stand-in answers as Hermes did then: rejected, kept nowhere.
-        // Once it is over the same card says so, and 打断 is still the way chosen
+        // Once it is over the same card says so, and 打断 is still the way chosen. The chat's older
+        // pages have compactions of their own (fake_hermes.py seed_transcripts): this turn's is one more
+        let compactionCards = app.descendants(matching: .any).matching(identifier: "compaction-card")
+        let cardsBefore = compactionCards.count
         composer.click()
         composer.typeText("压缩一下（CI）")
         send.click()
@@ -252,8 +255,7 @@ final class ComposeTests: XCTestCase {
         let compactedShown = waitForText("压缩了对话", in: app, timeout: 30)
         keep(window.screenshot(), "compose-4f-compacted")
         XCTAssertTrue(compactedShown, "the card did not say the compaction is done")
-        XCTAssertEqual(app.descendants(matching: .any).matching(identifier: "compaction-card").count, 1,
-                       "more than one card for one compaction")
+        XCTAssertEqual(compactionCards.count, cardsBefore + 1, "not one card for one compaction")
         XCTAssertFalse(hasText("正在压缩对话", in: app), "the card still says Hermes compacts once it is done")
         XCTAssertTrue(waitUntil(timeout: 20) { !stop.exists }, "the turn that compacted did not end")
         XCTAssertTrue(waitForText("收到：压缩时说的话（CI）", in: app, timeout: 20),
