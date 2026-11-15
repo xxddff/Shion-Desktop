@@ -12,6 +12,9 @@ import XCTest
 ///    is marked as part of the turn, and the reply says it heard it; a message the turn does not
 ///    take says so (not 没发出去) and goes again only on 再发一次, as a message of its own; and
 ///    what is said in 今天's field waits for the turn to end, though the composer is set to 引导;
+///    in a turn Hermes compacts the session in, the compaction is one card from start to done, and
+///    while it runs the menu offers 排队 and 引导 only (打断 greyed, saying why): with 打断 chosen,
+///    a message goes as 排队, behind the turn, and 打断 is still the way chosen afterwards;
 /// 4. a turn that wrote to another assistant and then failed: the message is a card, and 重试 asks
 ///    first, naming it;
 /// 5. a turn with nothing to say (`[SILENT]`) leaves no bubble; what its review kept is a card,
@@ -202,6 +205,77 @@ final class ComposeTests: XCTestCase {
         keep(window.screenshot(), "compose-4c-behind-the-turn")
         XCTAssertTrue(resentAnswered, "再发一次 did not send the declined message as one of its own")
         XCTAssertTrue(todayAnswered, "what 今天's field said was not answered once the turn ended")
+
+        // 3c. a turn Hermes compacts the session in (the stand-in's 「压缩一下（CI）」: a few sentences,
+        // then `compacting` until something is said to the session and a few seconds more, then
+        // `compacted` and the rest). 打断 is chosen before
+        // it compacts. While it does, its card says so; the menu offers 排队 and 引导, shows 排队, and
+        // has 打断 greyed, saying why; a message goes as 排队 (prompt.submit, behind the turn), not as
+        // session.redirect, which the stand-in answers as Hermes did then: rejected, kept nowhere.
+        // Once it is over the same card says so, and 打断 is still the way chosen. The chat's older
+        // pages have compactions of their own (fake_hermes.py seed_transcripts): this turn's is one more
+        let compactionCards = app.descendants(matching: .any).matching(identifier: "compaction-card")
+        let cardsBefore = compactionCards.count
+        composer.click()
+        composer.typeText("压缩一下（CI）")
+        send.click()
+        let busyMenu = element("busy-mode", in: app)
+        XCTAssertTrue(waitForText("先说两句。", in: app, timeout: 10) && busyMenu.waitForExistence(timeout: 5),
+                      "the turn that compacts did not start")
+        busyMenu.click()
+        let interrupt = app.menuItems.matching(NSPredicate(format: "title BEGINSWITH %@", "打断：让这一轮")).firstMatch
+        if interrupt.waitForExistence(timeout: 3), interrupt.isEnabled {
+            interrupt.click()
+        } else {
+            XCTFail("no 打断 to choose before Hermes compacts")
+            app.typeKey(.escape, modifierFlags: [])
+        }
+        let compactionCard = element("compaction-card", in: app)
+        let compactingShown = compactionCard.waitForExistence(timeout: 15) && waitForText("正在压缩对话", in: app, timeout: 5)
+        keep(window.screenshot(), "compose-4d-compacting")
+        XCTAssertTrue(compactingShown, "no card while Hermes compacts the session")
+        XCTAssertTrue(shows(busyMenu, "排队"), "with 打断 chosen, the menu does not show 排队 while Hermes compacts: \(busyMenu.label) \(String(describing: busyMenu.value))")
+        busyMenu.click()
+        let greyed = app.menuItems.matching(NSPredicate(format: "title BEGINSWITH %@", "打断：压缩对话时用不了")).firstMatch
+        let queueItem = app.menuItems.matching(NSPredicate(format: "title BEGINSWITH %@", "排队：")).firstMatch
+        let steerItem = app.menuItems.matching(NSPredicate(format: "title BEGINSWITH %@", "引导：")).firstMatch
+        let offered = greyed.waitForExistence(timeout: 3)
+        keep(window.screenshot(), "compose-4e-compacting-menu")
+        XCTAssertTrue(offered && !greyed.isEnabled, "打断 is not there greyed, saying why, while Hermes compacts")
+        XCTAssertTrue(queueItem.exists && queueItem.isEnabled && steerItem.exists && steerItem.isEnabled,
+                      "排队 and 引导 are not both offered while Hermes compacts")
+        XCTAssertFalse(app.menuItems.matching(NSPredicate(format: "title BEGINSWITH %@", "打断：让这一轮")).firstMatch.exists,
+                       "打断 can still be chosen while Hermes compacts")
+        app.typeKey(.escape, modifierFlags: [])
+        composer.click()
+        composer.typeText("压缩时说的话（CI）")
+        send.click()
+        XCTAssertFalse(element("declined", in: app).waitForExistence(timeout: 4),
+                       "the message sent while Hermes compacts went as 打断, and the turn did not take it")
+        let compactedShown = waitForText("压缩了对话", in: app, timeout: 30)
+        keep(window.screenshot(), "compose-4f-compacted")
+        XCTAssertTrue(compactedShown, "the card did not say the compaction is done")
+        XCTAssertEqual(compactionCards.count, cardsBefore + 1, "not one card for one compaction")
+        XCTAssertFalse(hasText("正在压缩对话", in: app), "the card still says Hermes compacts once it is done")
+        XCTAssertTrue(waitUntil(timeout: 20) { !stop.exists }, "the turn that compacted did not end")
+        XCTAssertTrue(waitForText("收到：压缩时说的话（CI）", in: app, timeout: 20),
+                      "the message sent while Hermes compacted was not answered as a turn of its own, behind that one")
+        XCTAssertFalse(hasText("听到了：压缩时说的话", in: app), "the message sent while Hermes compacted went into the turn")
+        // 打断 is still the way chosen: the next turn's menu shows it; 引导 again for what follows
+        composer.click()
+        composer.typeText("讲一个长故事")
+        send.click()
+        XCTAssertTrue(stop.waitForExistence(timeout: 10) && busyMenu.waitForExistence(timeout: 5), "the next story did not start")
+        XCTAssertTrue(shows(busyMenu, "打断"), "打断 is no longer the way chosen once the compaction is over: \(busyMenu.label)")
+        busyMenu.click()
+        let backToSteer = app.menuItems.matching(NSPredicate(format: "title BEGINSWITH %@", "引导")).firstMatch
+        if backToSteer.waitForExistence(timeout: 3) {
+            backToSteer.click()
+        } else {
+            app.typeKey(.escape, modifierFlags: [])
+        }
+        stop.click()
+        XCTAssertTrue(waitUntil(timeout: 20) { !stop.exists }, "the story after the compaction did not stop")
 
         // 4. a message to another assistant, then a failure: the message is a card, and 重试 asks
         // first, since it would go out again; 取消 leaves the chat as it is, 重试 goes ahead
@@ -547,6 +621,21 @@ final class ComposeTests: XCTestCase {
             Thread.sleep(forTimeInterval: 0.3)
         } while Date() < deadline
         return false
+    }
+
+    /// Whether some text under `root` has these words now.
+    @MainActor
+    private func hasText(_ text: String, in root: XCUIElement) -> Bool {
+        waitForText(text, in: root, timeout: 0)
+    }
+
+    /// Whether the busy-mode menu shows this way now: its title, or the value it says it with.
+    @MainActor
+    private func shows(_ menu: XCUIElement, _ mode: String) -> Bool {
+        waitUntil(timeout: 3) {
+            menu.label == mode || (menu.value as? String) == mode || menu.title == mode
+                || menu.staticTexts[mode].exists
+        }
     }
 
     /// Text anywhere under `root`, plain or selectable (see SignInTests).

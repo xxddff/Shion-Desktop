@@ -54,6 +54,14 @@ For ComposeTests, as Hermes main (2026-11-12) has them:
 - A prompt for the default echo sent while one of this module's turns runs waits behind it, in
   order, as Hermes queues a prompt behind the turn under way and never cuts it short (`behind`):
   its turn starts once that one has ended.
+- 「压缩一下（CI）」 is a turn Hermes compacts the session in, as Hermes 611bf53 does once a tool's result
+  comes back into a full context (macos/ci/real, stage held): a few sentences, then `status.update`
+  kind `compacting` (Hermes's own line) and nothing else until something is said to the session
+  meanwhile (a prompt, a steer, a redirect) and COMPACT_LINGER seconds more, COMPACT_HOLD seconds at
+  most, then a summary row (`row_kind: compaction`, a row number past every other), `status.update`
+  kind `compacted`, and the rest of the reply. While it compacts a redirect is answered as Hermes answered one then,
+  `rejected` without `delivered`, and kept nowhere; a steer is taken for the turn's next step;
+  a prompt waits behind the turn.
 """
 import itertools
 import threading
@@ -82,6 +90,15 @@ PEER_FAIL = "带个话再出错（CI）"
 PEER_CALL = {"target": "study", "message": "把第 8 回的课件发我一份（CI）。"}
 CORRECTIONS = {"session.steer": "queued", "session.redirect": "redirected"}
 DECLINED = "别接这一句（CI）"
+COMPACT = "压缩一下（CI）"
+COMPACT_BEFORE = ["先说两句。", "这是第二句，", "接下来要压缩对话了，", "再等一下。"] * 4
+# held until something is said meanwhile and this long more, so a test sees it run as long as it needs
+COMPACT_HOLD = 45.0
+COMPACT_LINGER = 3.0
+# Hermes's own lines (agent/conversation_compression.py COMPACTION_STATUS, COMPACTION_DONE_STATUS)
+COMPACTING_LINE = "🗜️ Compacting context — summarizing earlier conversation so I can continue..."
+COMPACTED_LINE = "✓ Context compaction complete — continuing turn..."
+COMPACT_AFTER = "压缩好了，接着讲完：故事讲完了。"
 MUTATE_KEYS = {"session_id", "request_id", "expected_revision", "operation", "payload"}
 
 state = {"log": print, "transcripts": None, "lock": threading.Lock()}
@@ -111,7 +128,7 @@ def handles(method, params):
     if method in ("session.interrupt", "session.mutate") or method in CORRECTIONS:
         return True
     text = str(params.get("text", ""))
-    return method == "prompt.submit" and any(words in text for words in (STORY, FAIL, TOOLED, PEER_FAIL))
+    return method == "prompt.submit" and any(words in text for words in (STORY, FAIL, TOOLED, PEER_FAIL, COMPACT))
 
 
 def handle(conn, method, params, rid):
@@ -121,6 +138,8 @@ def handle(conn, method, params, rid):
         return mutate(conn, params, rid)
     if method in CORRECTIONS:
         return correct(conn, method, params, rid)
+    if COMPACT in fake_words.read(str(params.get("text", ""))):
+        return compact(conn, params, rid)
     if FAIL in str(params.get("text", "")) or PEER_FAIL in str(params.get("text", "")):
         return fail(conn, params, rid)
     if TOOLED in str(params.get("text", "")):
@@ -186,6 +205,13 @@ def correct(conn, method, params, rid):
     declined = DECLINED in fake_words.read(text)
     with state["lock"]:
         turn = running.get(session_id)
+        # a redirect while the session is compacted: no model request to cut short, so the agent says no
+        # (agent/interrupt_control.py redirect), and Hermes answers as for any agent that did not take it
+        if turn is not None and turn.get("compacting"):
+            turn["told"] = True
+            if method == "session.redirect":
+                state["log"](f"    session.redirect while compacting: rejected, no `delivered`, kept nowhere: {text!r}")
+                declined = True
         if turn is not None and not declined:
             state["transcripts"].setdefault(session_id, []).append(
                 {"row_id": next(row_ids), "row_kind": "message", "role": "user", "text": text,
@@ -303,6 +329,98 @@ def run_story(conn, session_id, turn, short):
         idle_info(conn, session_id)
     except OSError:
         running.pop(session_id, None)
+
+
+def compact(conn, params, rid):
+    session_id, text = params.get("session_id"), params.get("text", "")
+    conn.send_json({"jsonrpc": "2.0", "id": rid, "result": {"status": "queued", "admission_id": f"adm-{rid}"}})
+    with state["lock"]:
+        current = fence(session_id)
+        current["generation"] += 1
+        user_row = next(row_ids)
+        state["transcripts"].setdefault(session_id, []).append(
+            {"row_id": user_row, "row_kind": "message", "role": "user", "text": fake_words.sent(text),
+             "timestamp": time.time()})
+        turn = {"generation": current["generation"], "stop": threading.Event(), "user_row": user_row,
+                "submission": params.get("submission_id")}
+        running[session_id] = turn
+    threading.Thread(target=run_compact, args=(conn, session_id, turn), daemon=True).start()
+
+
+def run_compact(conn, session_id, turn):
+    """A few sentences; Hermes's compaction, saying nothing meanwhile, held until something is said to
+    the session (a prompt waits behind the turn, a steer or a redirect comes) and COMPACT_LINGER seconds
+    more, COMPACT_HOLD at most; its summary row and `compacted`; the rest of the reply, which says what
+    was put into it meanwhile. A compaction comes between two of the model's answers (after a tool's
+    result), so what it said before is a row of its own, and the turn's end says the last answer, as
+    Hermes's `message.complete` does."""
+    log, generation = state["log"], turn["generation"]
+    before, after, made = "", "", []
+    try:
+        event(conn, "session.info", session_id, {"running": True, "execution_generation": generation}, generation)
+        event(conn, "message.start", session_id, {}, generation)
+        for part in COMPACT_BEFORE:
+            if turn["stop"].wait(0.5):
+                break
+            before += part
+            event(conn, "message.delta", session_id, {"text": part}, generation)
+        stopped = turn["stop"].is_set()
+        if not stopped:
+            with state["lock"]:
+                made.append(stored(session_id, "assistant", before))
+                waiting = len(queued.get(session_id) or [])
+                turn["compacting"] = True
+            log(f"  -> compacting {session_id}: until something is said to it, {COMPACT_HOLD:.0f} s at most")
+            event(conn, "status.update", session_id, {"kind": "compacting", "text": COMPACTING_LINE}, generation)
+            until = time.monotonic() + COMPACT_HOLD
+            told = False
+            while not stopped and time.monotonic() < until:
+                if not told and (turn.get("told") or len(queued.get(session_id) or []) > waiting):
+                    told = True
+                    until = min(until, time.monotonic() + COMPACT_LINGER)
+                    log(f"  -> something was said to {session_id} while it compacts: compacted in {COMPACT_LINGER:.0f} s")
+                stopped = turn["stop"].wait(0.1)
+            turn["compacting"] = False
+            if not stopped:
+                with state["lock"]:
+                    folded = len(state["transcripts"].setdefault(session_id, []))
+                    made.append(stored(session_id, "system", f"## 摘要（CI）\n之前的 {folded} 条消息说了些什么。",
+                                       row_kind="compaction", compacted_messages=folded))
+                event(conn, "status.update", session_id, {"kind": "compacted", "text": COMPACTED_LINE}, generation)
+                log(f"  -> compacted {session_id}: {folded} rows folded")
+        if not stopped:
+            after = COMPACT_AFTER + (f"（听到了：{turn['heard']}）" if turn.get("heard") else "")
+            event(conn, "message.delta", session_id, {"text": after}, generation)
+        with state["lock"]:
+            if not stopped:
+                made.append(stored(session_id, "assistant", after))
+            elif not made:
+                # stopped before it compacted: what had come, as any reply stopped
+                made.append(stored(session_id, "assistant", before, display_metadata={"interrupted": True}))
+            running.pop(session_id, None)
+            fence(session_id)["revision"] += 1
+        said = before if stopped else after
+        complete = {"text": said, "content": said, "admission_id": f"adm-{generation}",
+                    "outcome": "cancelled" if stopped else "completed",
+                    "status": "interrupted" if stopped else "complete",
+                    "persisted_turn": {"row_ids": [turn["user_row"]] + made, "complete": False,
+                                       "user_row_id": turn["user_row"], "user_row_ids": [turn["user_row"]],
+                                       "submission_id": turn["submission"]}}
+        if not stopped:
+            complete["persisted_turn"]["final_assistant_row_id"] = made[-1]
+        event(conn, "message.complete", session_id, complete, generation)
+        idle_info(conn, session_id)
+    except OSError:
+        running.pop(session_id, None)
+
+
+def stored(session_id, role, text, row_kind="message", **more):
+    """A row of the session's transcript, numbered past every row it has, as Hermes numbers them (the
+    other stand-ins count apart): its number. The caller holds the lock."""
+    rows = state["transcripts"].setdefault(session_id, [])
+    number = max([next(row_ids)] + [r["row_id"] + 1 for r in rows if isinstance(r.get("row_id"), int)])
+    rows.append({"row_id": number, "row_kind": row_kind, "role": role, "text": text, "timestamp": time.time(), **more})
+    return number
 
 
 def fail(conn, params, rid):

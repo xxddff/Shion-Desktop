@@ -63,6 +63,47 @@ do {
     check("R09 引导 chosen, said from outside the composer: prompt.submit", st.gateway.methods == ["prompt.submit"])
 }
 
+// ---- while Hermes compacts the session: 排队 and 引导 only ------------------------------------
+// Held open against Hermes itself (../../real, stage held; ../cards), a redirect while a compaction
+// runs is answered `rejected` and kept nowhere; a steer is kept for the turn's next step.
+do {
+    let c = store(.interrupt)
+    c.compactingBots = [bot]
+    _ = typed("改一下（压缩中）", in: c)
+    await until { !c.gateway.calls.isEmpty }
+    try? await Task.sleep(for: .milliseconds(100))
+    check("compacting. 打断 chosen, Hermes compacting the session: prompt.submit, no session.redirect",
+          c.gateway.methods == ["prompt.submit"])
+    check("compacting. …not marked as part of the running turn", c.chats[bot]?.last?.midTurn == false)
+    check("compacting. …and 打断 stays the way chosen", c.busyMode == .interrupt)
+    let st = store(.steer)
+    st.compactingBots = [bot]
+    _ = typed("讲短一点（压缩中）", in: st)
+    await until { st.chats[bot]?.last?.midTurn == true }
+    check("compacting. 引导 while it compacts: session.steer, for the run under way",
+          st.gateway.methods == ["session.steer"] && generation(st.gateway.calls[0]) == 1)
+    let q = store(.queue)
+    q.compactingBots = [bot]
+    _ = typed("等你做完（压缩中）", in: q)
+    await until { !q.gateway.calls.isEmpty }
+    check("compacting. 排队 while it compacts: prompt.submit", q.gateway.methods == ["prompt.submit"])
+    // said as 打断 before the compaction began, going out once it runs (the chat attached again meanwhile)
+    let late = store(.interrupt, attached: false)
+    _ = typed("改一下（压缩之前说的）", in: late)
+    try? await Task.sleep(for: .milliseconds(150))
+    late.compactingBots = [bot]
+    late.gateway.attached = [session]
+    await until { !late.gateway.calls.isEmpty }
+    try? await Task.sleep(for: .milliseconds(100))
+    check("compacting. 打断 said before the compaction, going out while it runs: prompt.submit, no session.redirect",
+          late.gateway.methods == ["prompt.submit"])
+    // the compaction over, 打断 as it always went
+    let over = store(.interrupt)
+    _ = typed("改一下（压缩之后）", in: over)
+    await until { !over.gateway.calls.isEmpty }
+    check("compacting. no compaction: 打断 is session.redirect again", over.gateway.methods == ["session.redirect"])
+}
+
 // ---- R07 -------------------------------------------------------------------------------------
 do {
     // sent for generation 1 while the chat is not attached (a replay gap: it is being attached

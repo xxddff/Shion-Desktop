@@ -41,7 +41,7 @@ extension AppStore {
     }
 
     /// The board's word as Hermes's own poller sends it, ahead of the turn it starts
-    /// (`status.update`, kind process). Other status lines are not for the chat.
+    /// (`status.update`, kind process). The other status lines the chat shows are `noteSaid`'s.
     func noteStatus(_ payload: JSONValue, in botId: String) {
         guard payload["kind"]?.string == "process", let text = payload["text"]?.string else { return }
         let notices = Notices.read(text, kind: nil, display: nil).filter { $0.event == .board }
@@ -49,6 +49,48 @@ extension AppStore {
         for card in Self.noticeCards(notices, id: NoticeCards.id(.told), at: Date()) {
             NoticeCards.tell(card, in: &chats[botId, default: []]) { Self.notice($0, rows: rows) }
         }
+    }
+
+    /// What Hermes says on its own in a frame of the chat's session, as the official client reads
+    /// it (StatusCards.swift): a compaction and a wait for the provider are live cards (the chat's
+    /// rows not loaded yet, a compaction is only followed, and has its card once they are); a
+    /// switch to the fallback model, a /goal verdict, a turn picked up again after a crash, a side
+    /// question's or a side task's answer and a notice are kept among the chat's notes, under the
+    /// frame's name; a notice taken back
+    /// (`notification.clear`) is settled. Every frame goes through, live or replayed.
+    func noteSaid(_ type: String, _ payload: JSONValue, in botId: String, shown: Bool) {
+        status.take(type, payload, in: botId, at: Date(), shown: shown, after: shown ? knownRow(botId) : nil)
+        let held = notes[botId] ?? []
+        var kept = held
+        if type == "notification.clear", let key = payload["key"]?.string, !key.isEmpty {
+            StatusNotes.clear(key: key, in: &kept)
+        } else if let card = StatusNotes.card(type, payload, frame: frameName, at: Date()) {
+            StatusNotes.keep(card, in: &kept, limit: Self.notesKept)
+        }
+        // a write only when something changed: a frame said again changes nothing, and the chat is
+        // not drawn again for it
+        if kept != held { notes[botId] = kept }
+    }
+
+    /// Hermes is compacting this chat's session: the composer offers 排队 and 引导 only, and 打断
+    /// goes as 排队 (Compose.swift), from its first line until its end (ChatStatus).
+    func compacting(_ botId: String) -> Bool {
+        live && status.compacting(botId)
+    }
+
+    /// A frame's place in its session's stream, which names it: `replay_epoch` and `seq`. Nil for a
+    /// frame a server did not number.
+    static func frameName(_ params: JSONValue) -> String? {
+        guard let seq = params["seq"]?.int, let epoch = params["replay_epoch"]?.string else { return nil }
+        return "\(epoch)-\(seq)"
+    }
+
+    /// The highest transcript row the chat knows: a page's rows by their ids, what came live by the
+    /// row its turn's end named. A compaction that begins now stores its summary past it.
+    func knownRow(_ botId: String) -> Int? {
+        (chats[botId] ?? []).compactMap { item in
+            Self.rowNumber(item.id) ?? ChatStatus.compactionRow(item.id) ?? control.storedRows[item.id]
+        }.max()
     }
 
     /// A chat's item as NoticeCards tells notices apart: only an event's card says a notice.
@@ -108,9 +150,12 @@ extension AppStore {
                 guard let page = asked, sessions[botId] == sessionId, loadedChats.contains(botId) else { return }
                 // the chat may have changed while the page was read: the place is found again by its item
                 let known = control.storedRows
-                let put = NoticeCards.put(page: transcriptItems(page), in: &chats[botId, default: []], above: above) {
+                let items = transcriptItems(page)
+                let put = NoticeCards.put(page: items, in: &chats[botId, default: []], above: above) {
                     Self.notice($0, rows: known)
                 }
+                // a compaction seen live whose summary row is on the page is done (StatusCards.swift)
+                status.settle(botId, rows: items)
                 pages += 1
                 let rows = page["rows"]?.array ?? []
                 read += rows.compactMap { $0["row_id"]?.int }
@@ -159,12 +204,14 @@ extension AppStore {
     // MARK: a chat as it shows
 
     /// The transcript's rows, and among them, by their time, the cards that are not rows: what the
-    /// review kept, the skills to look at, and what was asked (withAskCards). Only the cards as
-    /// old as the rows read so far: the rest wait above, with the older pages.
+    /// review kept and what Hermes said worth keeping, the skills to look at, a compaction seen
+    /// live that no row of the transcript held stands for yet, a wait for the provider under way
+    /// (StatusCards.swift), and what was asked (withAskCards). Only the cards as old as the rows read
+    /// so far: the rest wait above, with the older pages.
     func shownChat(_ botId: String) -> [ChatItem] {
         let rows = chats[botId] ?? []
         let reaches = olderPages[botId] == nil ? Date.distantPast : (rows.first?.at ?? .distantFuture)
-        let cards = ((notes[botId] ?? []) + skillCards(botId)).filter { $0.at >= reaches }
+        let cards = ((notes[botId] ?? []) + skillCards(botId) + status.cards(botId, rows: rows)).filter { $0.at >= reaches }
         return withAskCards(Self.placing(cards, among: rows), of: botId)
     }
 

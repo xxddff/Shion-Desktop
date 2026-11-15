@@ -28,10 +28,18 @@ bot "$HERMES_HOME/profiles/diary" "日记（mock）" "日记"
 bot "$HERMES_HOME/profiles/errand" "跑腿（mock）" "跑腿"
 printf 'compression:\n  threshold_tokens: 4000\n' >> "$HERMES_HOME/profiles/diary/config.yaml"
 printf 'compression:\n  threshold_tokens: 4000\n  in_place: false\n' >> "$HERMES_HOME/profiles/errand/config.yaml"
+# a profile with a fallback model, the same stand-in on a port of its own (stage status): Hermes
+# moves to it when mock-model is not there (mock_model.py: 换个模型)
+$hermes profile create spare --clone --no-alias --description "备用（mock）" > /dev/null
+bot "$HERMES_HOME/profiles/spare" "备用（mock）" "备用"
+printf 'fallback_model:\n  provider: "custom"\n  model: "mock-fallback"\n  base_url: "http://127.0.0.1:9912/v1"\n  api_key: "mock-key"\n' \
+    >> "$HERMES_HOME/profiles/spare/config.yaml"
 # the gateway refuses a home others can write to
 chmod -R go-w "$HOME"
 
 nohup python /real/mock_model.py 9911 /out/mock-model.log > /out/mock-model.out 2>&1 &
+# the fallback model's endpoint: another backend, as far as Hermes can tell
+nohup python /real/mock_model.py 9912 /out/mock-model-spare.log > /out/mock-model-spare.out 2>&1 &
 # the gateway, Hermes's own, started through hold_gateway.py: it can hold the answer to an attach (stage behind)
 nohup python /real/hold_gateway.py gateway run -v > /out/gateway.log 2>&1 &
 ready=""
@@ -41,7 +49,7 @@ for _ in $(seq 1 60); do
 done
 [ -n "$ready" ] || { echo "the gateway did not come up"; tail -20 /out/gateway.log; exit 1; }
 
-for stage in ${STAGES:-plain peer peer2 background gap behind compact auto queued copies long explicit}; do
+for stage in ${STAGES:-plain peer peer2 background gap behind compact auto queued copies long explicit held status}; do
     echo "######## $stage"
     python /real/probe.py "$stage" "/out/capture-$stage.json" > "/out/$stage.txt" 2>&1 || { tail -20 "/out/$stage.txt"; exit 1; }
     # the frames that say little are left out of what is shown (they are in the .txt); stage behind

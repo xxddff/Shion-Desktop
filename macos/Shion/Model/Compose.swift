@@ -41,6 +41,25 @@ nonisolated enum BusyMode: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
+    /// Whether it can be chosen while Hermes compacts the session. 打断 cannot: a compaction is no
+    /// model request to cut short, so Hermes answers `rejected` and keeps nothing of the message
+    /// (macos/ci/real, stage held), and its own messaging gateway and terminal client turn an
+    /// interrupt into a queued message for as long as a compaction runs (gateway/run_busy.py,
+    /// tui_gateway/session_auto_continue.py). 引导 is kept until the next step of the turn, which
+    /// comes once the compaction is done.
+    func offered(compacting: Bool) -> Bool {
+        !(compacting && self == .interrupt)
+    }
+
+    /// How a message sent now goes: as chosen, or, while Hermes compacts the session, 打断 as 排队.
+    /// What was chosen stays chosen (BusyMode.saved).
+    func now(compacting: Bool) -> BusyMode {
+        offered(compacting: compacting) ? self : .queue
+    }
+
+    /// Why 打断 cannot be chosen now, beside it in the composer's menu.
+    static let compactingNote = "压缩对话时用不了，这时发的话会排队"
+
     private static let key = "ShionBusyMode"
 
     /// The way chosen last, on this Mac. Screenshot and test runs start from 排队 and keep nothing.
@@ -71,9 +90,11 @@ nonisolated struct Sending: Equatable, Sendable {
 
     /// The call that puts it into a running turn, and the run to name: only while the turn it
     /// was sent for is still the one running. Otherwise (that turn is over, or another has
-    /// started) it goes as a prompt, behind whatever runs now.
-    func correction(running: Bool, generation current: Int?) -> (method: String, generation: Int)? {
-        guard let method = mode.correction, running, let generation, generation == current else { return nil }
+    /// started) it goes as a prompt, behind whatever runs now; so does 打断 while Hermes compacts
+    /// the session (`compacting`), however it was settled: `session.redirect` is never sent then.
+    func correction(running: Bool, generation current: Int?, compacting: Bool = false) -> (method: String, generation: Int)? {
+        guard let method = mode.now(compacting: compacting).correction, running, let generation, generation == current
+        else { return nil }
         return (method, generation)
     }
 }

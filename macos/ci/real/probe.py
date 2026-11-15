@@ -98,7 +98,7 @@ def short(value, limit=320):
 class Socket:
     """One connection, as a viewer's: every session frame is kept in the order it came."""
 
-    def __init__(self, name, quiet=False, small_buffer=False, profile=None):
+    def __init__(self, name, quiet=False, small_buffer=False, profile=None, stamp=False):
         # a ticket is for one profile: another profile's sessions are refused on it (profile_mismatch)
         found = json.loads(subprocess.run(HERMES + (["-p", profile] if profile else []) + ["gateway", "attach", "--json"],
                                           capture_output=True, text=True, cwd="/opt/hermes").stdout.strip().splitlines()[-1])
@@ -112,6 +112,8 @@ class Socket:
             more["sock"] = raw
         self.ws = connect(found["url"], subprotocols=found["protocols"], open_timeout=15, max_size=None, **more)
         self.name, self.frames, self.n, self.quiet = name, [], 0, quiet
+        # each frame noted with when it came (`_at`, seconds since the probe started), and each answer too
+        self.stamp, self.answered_when = stamp, {}
         # a request's answer, and how many session frames had come when it did
         self.answers, self.answered_at = {}, {}
         self.call("client.capabilities", {"server_requests": True}, quiet=True)
@@ -124,9 +126,12 @@ class Socket:
         if "id" in frame and "method" not in frame:
             self.answers[frame["id"]] = frame
             self.answered_at[frame["id"]] = len(self.frames)
+            self.answered_when[frame["id"]] = round(time.monotonic() - T0, 3)
         if frame.get("method") == "event":
             params = frame.get("params") or {}
             if params.get("session_id"):
+                if self.stamp:
+                    params = {**params, "_at": round(time.monotonic() - T0, 3)}
                 self.frames.append(params)
                 kind = params.get("type")
                 if not self.quiet and kind != "message.delta":
@@ -362,6 +367,29 @@ def text(value, indent):
         return "{\n" + ",\n".join(f"{pad}{json.dumps(key, ensure_ascii=False)}: {text(item, indent + 1)}"
                                    for key, item in value.items()) + "}"
     return json.dumps(value, ensure_ascii=False)
+
+
+def kept_frame(frame):
+    """A frame as ../logic/cards reads it: its type, place in the stream and run, and its payload, but
+    for the bulk of a session.info (the model, context and config it reports: what runs and what
+    waits are kept) and of a usage report."""
+    frame = {key: value for key, value in frame.items() if key != "_at"}
+    payload = frame.get("payload") or {}
+    if frame.get("type") == "session.info":
+        frame["payload"] = {key: payload[key] for key in ("running", "pending", "execution_generation", "revision")
+                            if key in payload}
+        if "pending" in frame["payload"]:
+            frame["payload"]["pending"] = [{key: entry.get(key) for key in ("input_id", "execution_generation", "status")}
+                                           for entry in frame["payload"]["pending"] or []]
+    elif frame.get("type") == "session.usage":
+        frame["payload"] = {}
+    return frame
+
+
+def kept_page(page):
+    """A page with a reply of thousands of characters cut short (mock_model.py: 长长地回), as `text` does."""
+    return {**page, "rows": [{**row, "text": row["text"][:40] + "…"} if len(row.get("text") or "") > 1000 else row
+                             for row in page.get("rows") or []]}
 
 
 def write_pages(pages, name):
@@ -1150,6 +1178,244 @@ elif STAGE == "explicit":
                                          "words": {"pasted": pasted_words, "footer": footer_words,
                                                    "going_on": going_on_words, "peer": peer_words},
                                          "stopped": page_stopped, "page": page}}}, "explicit")
+elif STAGE == "held":
+    HOLD = os.path.join(os.path.dirname(OUT), "hold-summary")
+
+    def generation_now(viewer):
+        """The newest run a frame named, as Shion keeps it (ChatControl.fences): what a steer or a redirect names."""
+        runs = [f.get("execution_generation") for f in viewer.frames if isinstance(f.get("execution_generation"), int)]
+        return max(runs) if runs else None
+
+    def until_idle(viewer, mark, longest=180.0, quiet=5.0):
+        """Reads until the newest session.info since `mark` says nothing runs and nothing came for `quiet`
+        seconds (every turn there was to run has run), or for `longest` seconds."""
+        deadline, last = time.monotonic() + longest, time.monotonic()
+        while time.monotonic() < deadline:
+            before = len(viewer.frames)
+            viewer.read(0.25)
+            if len(viewer.frames) > before:
+                last = time.monotonic()
+            said = [(f.get("payload") or {}).get("running") for f in viewer.frames[mark:]
+                    if f.get("type") == "session.info" and "running" in (f.get("payload") or {})]
+            if said and said[-1] is False and time.monotonic() - last > quiet:
+                return True
+        return False
+
+    def held(viewer, profile, chat, words, sends, linger=0.0, name=""):
+        """`words` begins a turn in which Hermes compacts the session by itself; the model holds the summary
+        (mock_model.py, HOLD_SUMMARY) while each of `sends` goes, as Shion's composer sends it: (method, text),
+        a prompt with a submission id, a steer or a redirect naming the newest run a frame named. Then the
+        summary goes, and every turn there is to run runs. What each was answered, the frames, a snapshot
+        read while it was held, and the page and the store afterwards."""
+        for path in (HOLD, HOLD + ".reached"):
+            if os.path.exists(path):
+                os.remove(path)
+        # every row number issued so far: the most a chat can know of before the turn (a row the
+        # compaction stores is past it)
+        issued = stored(profile)["issued"]
+        open(HOLD, "w").close()
+        mark = len(viewer.frames)
+        submission = str(uuid.uuid4()).upper()
+        receipt = viewer.call("prompt.submit", {"profile": profile, "session_id": chat, "text": words,
+                                                "submission_id": submission})
+        deadline = time.monotonic() + 120
+        # a compaction that gives up asks for no summary: the turn ends meanwhile
+        while (not os.path.exists(HOLD + ".reached") and time.monotonic() < deadline
+               and not any(f.get("type") == "message.complete" for f in viewer.frames[mark:])):
+            viewer.read(0.1)
+        reached = os.path.exists(HOLD + ".reached")
+        say(f"=== {name}: the summary", "is held" if reached else "WAS NOT ASKED FOR (the turn ended, or 120 s went by)")
+        # what the gateway says as the compaction begins
+        viewer.listen(1.5)
+        generation = generation_now(viewer)
+        said = []
+        for method, text in sends:
+            params = {"profile": profile, "session_id": chat, "text": text}
+            if method == "prompt.submit":
+                params["submission_id"] = str(uuid.uuid4()).upper()
+            else:
+                params["execution_generation"] = generation
+            at = len(viewer.frames) - mark
+            rid = viewer.begin(method, params)
+            deadline = time.monotonic() + 30
+            while rid not in viewer.answers and time.monotonic() < deadline:
+                viewer.read(0.1)
+            answer = viewer.answers.get(rid) or {}
+            say(f"   {method} {text!r} ->", short(answer.get("result", answer.get("error")), 400))
+            said.append({"method": method, "text": text, "params": params, "sent_after_frames": at,
+                         "answer": answer.get("result") if "result" in answer else {"error": answer.get("error")},
+                         "answered_at": viewer.answered_when.get(rid)})
+        snapshot = viewer.call("session.resume", {"profile": profile, "session_id": chat, "omit_messages": True}, quiet=True)
+        say("   a viewer attaching now reads: running", snapshot.get("running"), "execution_state",
+            snapshot.get("execution_state"), "pending",
+            short([{k: p.get(k) for k in ("input_id", "execution_generation", "status")} for p in snapshot.get("pending") or []], 300))
+        if linger:
+            say(f"   the summary held {linger:.0f} s more")
+            viewer.listen(linger)
+        released = len(viewer.frames) - mark
+        os.remove(HOLD)
+        say("   the summary goes; every turn to run", "ran" if until_idle(viewer, mark) else "DID NOT ALL END in 180 s")
+        page = rows_of(viewer, profile, chat, limit=50)
+        rows = stored(profile)
+        for entry in said:
+            entry["rows"] = [{k: r.get(k) for k in ("row_id", "role", "display_kind", "timestamp")}
+                             for r in page.get("rows") or [] if entry["text"] in (r.get("text") or "")]
+            say(f"   {entry['text']!r} is on the page as", entry["rows"] or "NOTHING")
+        status = [(f.get("_at"), (f.get("payload") or {}).get("kind"), (f.get("payload") or {}).get("text"))
+                  for f in viewer.frames[mark:] if f.get("type") == "status.update"]
+        say("   status lines:", short(status, 900))
+        return {"words": words, "submission": submission, "receipt": receipt, "reached": reached,
+                "generation": generation, "sends": said, "issued_before": issued,
+                "snapshot": {k: snapshot.get(k) for k in ("running", "execution_state", "execution_generation", "pending",
+                                                          "last_sequence", "replay_epoch", "session_id")},
+                "frames": viewer.frames[mark:], "released_after_frames": released, "page": page, "stored": rows}
+
+    cards = {}
+    say("######## a compaction with too little to fold (diary, a session of its own)")
+    v = Socket("gu", profile="diary", stamp=True)
+    chat = bot_chat(v, "diary")
+    for words in ("第一句，长长地回（太少）", "第二句，长长地回（太少）", "满了（太少）"):
+        turn(v, "diary", chat, words)
+    issued = stored("diary")["issued"]
+    mark = len(v.frames)
+    turn(v, "diary", chat, "第三句（太少）")
+    gave_up = v.frames[mark:]
+    say("   status lines:", short([(f.get("payload") or {}).get("kind") for f in gave_up if f.get("type") == "status.update"], 300),
+        "| the frames after the last one:", [f.get("type") for f in gave_up
+                                             if f.get("type") not in ("message.delta", "session.usage", "agent.print")][-8:])
+    capture["gave up"] = {"session": chat, "frames": gave_up, "page": rows_of(v, "diary", chat, limit=50, quiet=True)}
+    cards["gave up"] = {"cards": {"start": {"frames": [kept_frame(f) for f in gave_up],
+                                            "issued_before": issued, "page": kept_page(capture["gave up"]["page"])}}}
+    v.close()
+    for profile, path in (("diary", "in place"), ("errand", "rotation")):
+        say(f"######## {path} ({profile})")
+        v = Socket(profile[:2], profile=profile, stamp=True)
+        chat = bot_chat(v, profile)
+        # enough for a compaction to fold (with fewer messages Hermes says `compacting` and gives up:
+        # agent/context_compressor.py, insufficient_messages): two long replies, four short turns
+        for words in ("第一句，长长地回（压缩中）", "第二句，长长地回（压缩中）", "一（压缩中）", "二（压缩中）", "三（压缩中）",
+                      "四（压缩中）", "满了（压缩中）"):
+            turn(v, profile, chat, words)
+        say("--- the next turn's start compacts the session; while the summary is held a prompt, a steer and a "
+            "redirect go")
+        start = held(v, profile, chat, "第三句（压缩中）", [
+            ("prompt.submit", "排队的一句（压缩中）"), ("session.steer", "引导的一句（压缩中）"),
+            ("session.redirect", "打断的一句（压缩中）")],
+            # long enough, once, for the compaction's own heartbeat (agent/conversation_compression.py: 60 s)
+            linger=65 if profile == "diary" else 0, name="at a turn's start")
+        for words in ("第四句，长长地回（压缩中）", "第五句，长长地回（压缩中）", "五（压缩中）", "六（压缩中）", "七（压缩中）",
+                      "八（压缩中）"):
+            turn(v, profile, chat, words)
+        say("--- a turn whose command's result comes back into a context past the threshold: compacted in the turn")
+        middle = held(v, profile, chat, "慢慢做，满了（压缩中）", [
+            ("prompt.submit", "排队的二句（压缩中）"), ("session.steer", "引导的二句（压缩中）"),
+            ("session.redirect", "打断的二句（压缩中）")], name="in a turn, after its command")
+        capture[path] = {"profile": profile, "session": chat, "start": start, "middle": middle}
+        # what ../logic/cards reads: each compaction's frames as Shion takes them, what the three were
+        # answered, and the page read once every turn had run
+        cards[path] = {"cards": {name: {"frames": [kept_frame(f) for f in ran["frames"]],
+                                        "sends": [{k: e[k] for k in ("method", "text", "answer", "sent_after_frames")}
+                                                  for e in ran["sends"]],
+                                        "issued_before": ran["issued_before"], "page": kept_page(ran["page"])}
+                                 for name, ran in (("start", start), ("middle", middle))}}
+        v.close()
+    write_pages(cards, "held")
+
+elif STAGE == "status":
+    WAIT_GO = os.path.join(os.path.dirname(OUT), "wait-go")
+    if os.path.exists(WAIT_GO):
+        os.remove(WAIT_GO)
+    v = Socket("sp", profile="spare", stamp=True)
+    chat = bot_chat(v, "spare")
+    parts = {}
+
+    def part(name, run):
+        """One case: its frames as they came, and what `run` said of it."""
+        say(f"=== {name}")
+        mark = len(v.frames)
+        said = run()
+        v.listen(2)
+        frames = v.frames[mark:]
+        kinds = {}
+        for f in frames:
+            kinds[f.get("type")] = kinds.get(f.get("type"), 0) + 1
+        say("   frames:", kinds)
+        for f in frames:
+            if f.get("type") in ("status.update", "notification.show", "notification.clear", "btw.complete",
+                                 "background.complete", "thinking.delta", "error"):
+                say("   ", f.get("_at"), f.get("type"), "seq", f.get("seq"), short(f.get("payload"), 500))
+        parts[name] = {"frames": frames, "said": said}
+
+    def turns(*words):
+        for line in words:
+            turn(v, "spare", chat, line)
+
+    def waited(until, seconds, check=None):
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            v.read(0.2)
+            if any(f.get("type") == until and (check is None or check(f)) for f in v.frames[mark_of[0]:]):
+                return True
+        return False
+
+    mark_of = [0]
+
+    def mark_now():
+        mark_of[0] = len(v.frames)
+
+    # Hermes's credits notices (agent/credits_tracker.py), from the headers of the model's replies: a cap
+    # used under half, half, three quarters, the access paused, restored
+    part("credits", lambda: turns("额度正常（通知）", "额度过半（通知）", "额度七成（通知）", "额度用完（通知）", "额度恢复（通知）"))
+    # mock-model is not there: the fallback model answers; the next turn starts on mock-model again
+    part("fallback", lambda: turns("换个模型（探测）", "你好（探测）"))
+
+    def wait_for_provider():
+        mark_now()
+        submission = str(uuid.uuid4()).upper()
+        v.call("prompt.submit", {"profile": "spare", "session_id": chat, "text": "慢一点回（探测）", "submission_id": submission})
+        came = waited("thinking.delta", 140, lambda f: ((f.get("payload") or {}).get("text") or "").lstrip().startswith("⏳"))
+        say("   the wait", "was explained" if came else "WAS NOT EXPLAINED in 140 s")
+        v.listen(3)
+        open(WAIT_GO, "w").close()
+        ended = v.listen(60, until="message.complete", after=mark_of[0])
+        say("   the turn", "ended" if ended else "DID NOT END in 60 s")
+        os.remove(WAIT_GO)
+        return {"explained": came}
+
+    part("provider wait", wait_for_provider)
+
+    def side(method, event, words):
+        def run():
+            mark_now()
+            answer = v.call(method, {"profile": "spare", "session_id": chat, "text": words})
+            came = waited(event, 120)
+            say(f"   {event}", "came" if came else "DID NOT COME in 120 s")
+            return {"answer": answer, "came": came}
+        return run
+
+    part("btw", side("prompt.btw", "btw.complete", "顺便问一句（探测）"))
+    part("background", side("prompt.background", "background.complete", "后台问一句（探测）"))
+
+    def goal():
+        mark_now()
+        answer = v.call("slash.exec", {"profile": "spare", "session_id": chat, "command": "/goal 写一句话（目标）"},
+                        timeout=60)
+        # the goal is set; its first turn is the client's to send (a `send` directive: the official
+        # client submits `message`, showing `display`)
+        if answer.get("type") == "send" and answer.get("message"):
+            v.call("prompt.submit", {"profile": "spare", "session_id": chat, "text": answer["message"],
+                                     "submission_id": str(uuid.uuid4()).upper()})
+        came = waited("status.update", 150, lambda f: (f.get("payload") or {}).get("kind") == "goal")
+        say("   the goal's verdict", "came" if came else "DID NOT COME in 150 s")
+        v.listen(5)
+        return {"answer": answer, "came": came}
+
+    part("goal", goal)
+    page = rows_of(v, "spare", chat, limit=50)
+    capture.update(session=chat, parts=parts, page=page)
+    # what ../logic/cards reads: each case's frames as Shion takes them
+    write_pages({"spare": {"cards": {name: {"frames": [kept_frame(f) for f in ran["frames"]]}
+                                     for name, ran in parts.items()}}}, "status")
 
 with open(OUT, "w", encoding="utf-8") as out:
     json.dump(capture, out, ensure_ascii=False, indent=1)

@@ -30,8 +30,12 @@ final class AppStore {
         didSet { busyMode.save() }
     }
     /// Cards of a chat that are not rows of its transcript: what the assistant's review after a
-    /// turn kept, as it came (AppStore+Events.swift).
+    /// turn kept, and what Hermes said on its own that is worth keeping (a switch to the fallback
+    /// model, a /goal verdict, a side question's answer, a notice), as it came (AppStore+Events.swift).
     var notes: [String: [ChatItem]] = [:]
+    /// What Hermes says on its own that lasts only while it is so: a compaction under way and the
+    /// ones seen, a wait for the model provider (StatusCards.swift).
+    let status = ChatStatus()
     /// The skills each assistant wrote by itself, to look at (AppStore+SkillReviews.swift).
     var skillReviews: [String: [SkillReview]] = [:]
     var reviewing: SkillReviewTalk?
@@ -114,6 +118,9 @@ final class AppStore {
     @ObservationIgnored private(set) var sessionBots: [String: String] = [:]
     /// bot id → the assistant message being streamed
     @ObservationIgnored var streaming: [String: String] = [:]
+    /// The frame being taken, by its place in its session's stream (`replay_epoch` and `seq`): a card
+    /// it keeps is named by it, so the same frame again is the same card (StatusNotes).
+    @ObservationIgnored var frameName: String?
 
     init(now: Date) {
         let demo = Self.fixture(now: now)
@@ -138,6 +145,7 @@ final class AppStore {
             return try await self.credential(for: settings, renew: renew)
         }
         gateway.onFrame = { [weak self] params in
+            self?.frameName = AppStore.frameName(params)
             self?.words.note(params)
             self?.noteFences(params)
             self?.noteDelivery(params)
@@ -378,6 +386,7 @@ extension AppStore {
         chats[botId] = nil
         replying.remove(botId)
         unattached[botId] = nil
+        status.forget(botId)
         deliveries.forget(botId)
         for ask in asks where ask.botId == botId {
             Notifier.shared.withdraw(ask.id)
@@ -489,6 +498,8 @@ extension AppStore {
         loadedChats = []
         replying = []
         unattached = [:]
+        // the live cards are of the chats as they were: the next pages bring the compactions' rows
+        status.forgetAll()
         Notifier.shared.withdrawAll()
         endSecrets()
     }
@@ -517,6 +528,9 @@ extension AppStore {
                 }
             }
             loadedChats.insert(botId)
+            // a compaction under way since before the rows were here has its card from now on
+            status.opened(botId, after: knownRow(botId))
+            status.settle(botId, rows: chats[botId] ?? [])
         } catch {
             chatErrors[botId] = error.localizedDescription
         }
@@ -588,9 +602,12 @@ extension AppStore {
             let rows = snapshot["display_messages"]?.array ?? snapshot["messages"]?.array ?? []
             chats[botId] = uniqued(rows.flatMap(chatItems(from:)))
             olderPages[botId] = nil
+            status.settle(botId, rows: chats[botId] ?? [])
         }
         setRunning(botId, runs(snapshot))
         setReplying(botId, runs(snapshot))
+        // nothing runs: no compaction, no wait for the provider, whatever the last frames said
+        status.attached(botId, running: runs(snapshot))
         for prompt in snapshot["prompts"]?.array ?? [] {
             addPrompt(prompt, sessionId: sessionId, botId: botId)
         }
@@ -636,6 +653,8 @@ extension AppStore {
         }
         olderPages[botId] = page["next_cursor"]?.string
         olderErrors[botId] = nil
+        // a compaction seen live whose summary the page has is that row now (StatusCards.swift)
+        status.settle(botId, rows: rows)
     }
 
     /// The next older page, above what is shown. Called as the transcript's top comes into view.
@@ -654,6 +673,7 @@ extension AppStore {
             let held = page["reset"]?.bool == true ? [] : chats[botId] ?? []
             chats[botId] = uniqued(rows, besides: held) + held
             olderPages[botId] = page["next_cursor"]?.string
+            status.settle(botId, rows: chats[botId] ?? [])
         } catch {
             olderErrors[botId] = error.localizedDescription
         }
@@ -692,14 +712,18 @@ extension AppStore {
     }
 
     /// A transcript page's rows, oldest first. A compaction row stands where older messages
-    /// were folded into a summary. Hermes gives it the `row_id` of the message it was stored on,
-    /// which shows as its own row right after it when it holds real content too: their ids differ.
+    /// were folded into a summary: the card of that compaction (EventCards.swift), done, with the
+    /// summary as Hermes gives it for reading (`text`) and how many messages it folded
+    /// (`compacted_messages`). The card that showed it live is this one from then on
+    /// (ChatStatus.cards). Hermes gives it the `row_id` of the message it was stored on, which
+    /// shows as its own row right after it when it holds real content too: their ids differ.
     func transcriptItems(_ page: JSONValue) -> [ChatItem] {
         uniqued((page["rows"]?.array ?? []).flatMap { row -> [ChatItem] in
             guard row["row_kind"]?.string == "compaction" else { return chatItems(from: row) }
             let at = row["timestamp"]?.number.map { Date(timeIntervalSince1970: $0) } ?? Date()
             let id = row["row_id"]?.int.map { "compaction-\($0)" } ?? UUID().uuidString
-            return [ChatItem(id: id, role: .system, at: at, text: "更早的对话压缩成了摘要")]
+            return [ChatItem(id: id, role: .card, at: at, text: text(of: row).trimmingCharacters(in: .whitespacesAndNewlines),
+                             event: .compaction(.done, messages: row["compacted_messages"]?.int))]
         })
     }
 
@@ -845,6 +869,9 @@ extension AppStore {
         secretEvent(type, sessionId: sessionId, payload: payload)
         // a chat not opened yet has no rows to add to: its first page brings them
         let shown = loadedChats.contains(botId)
+        // what Hermes says on its own: a compaction, a wait for the provider, a fallback, a notice…
+        // (AppStore+Events.swift)
+        noteSaid(type, payload, in: botId, shown: shown)
         switch type {
         case "message.start", "message.delta", "message.interim", "tool.start":
             setReplying(botId, true)
@@ -929,6 +956,11 @@ extension AppStore {
         case "status.update":
             // the board's word on a card this chat made, just before the turn it starts
             if shown { noteStatus(payload, in: botId) }
+            // a compaction is a step of the turn, as a tool call is: what the reply says after it
+            // comes after its card
+            if shown, case .runs? = HermesStatus.compaction(kind: payload["kind"]?.string, text: payload["text"]?.string ?? "") {
+                endReply(botId)
+            }
         case "review.summary":
             // what the review after a turn kept: skills, memory (AppStore+Events.swift)
             noteLearned(payload, in: botId)
