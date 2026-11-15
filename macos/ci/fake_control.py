@@ -351,20 +351,23 @@ def run_compact(conn, session_id, turn):
     """A few sentences; Hermes's compaction, saying nothing meanwhile, held until something is said to
     the session (a prompt waits behind the turn, a steer or a redirect comes) and COMPACT_LINGER seconds
     more, COMPACT_HOLD at most; its summary row and `compacted`; the rest of the reply, which says what
-    was put into it meanwhile."""
+    was put into it meanwhile. A compaction comes between two of the model's answers (after a tool's
+    result), so what it said before is a row of its own, and the turn's end says the last answer, as
+    Hermes's `message.complete` does."""
     log, generation = state["log"], turn["generation"]
-    said = ""
+    before, after, made = "", "", []
     try:
         event(conn, "session.info", session_id, {"running": True, "execution_generation": generation}, generation)
         event(conn, "message.start", session_id, {}, generation)
         for part in COMPACT_BEFORE:
             if turn["stop"].wait(0.5):
                 break
-            said += part
+            before += part
             event(conn, "message.delta", session_id, {"text": part}, generation)
         stopped = turn["stop"].is_set()
         if not stopped:
             with state["lock"]:
+                made.append(stored(session_id, "assistant", before))
                 waiting = len(queued.get(session_id) or [])
                 turn["compacting"] = True
             log(f"  -> compacting {session_id}: until something is said to it, {COMPACT_HOLD:.0f} s at most")
@@ -380,40 +383,44 @@ def run_compact(conn, session_id, turn):
             turn["compacting"] = False
             if not stopped:
                 with state["lock"]:
-                    rows = state["transcripts"].setdefault(session_id, [])
-                    folded = len(rows)
-                    # past every row of the session, as Hermes numbers it (the other stand-ins count apart)
-                    number = max([next(row_ids)] + [r["row_id"] + 1 for r in rows if isinstance(r.get("row_id"), int)])
-                    rows.append({"row_id": number, "row_kind": "compaction", "role": "system",
-                                 "text": f"## 摘要（CI）\n之前的 {folded} 条消息说了些什么。", "compacted_messages": folded,
-                                 "timestamp": time.time()})
+                    folded = len(state["transcripts"].setdefault(session_id, []))
+                    made.append(stored(session_id, "system", f"## 摘要（CI）\n之前的 {folded} 条消息说了些什么。",
+                                       row_kind="compaction", compacted_messages=folded))
                 event(conn, "status.update", session_id, {"kind": "compacted", "text": COMPACTED_LINE}, generation)
                 log(f"  -> compacted {session_id}: {folded} rows folded")
         if not stopped:
-            part = COMPACT_AFTER + (f"（听到了：{turn['heard']}）" if turn.get("heard") else "")
-            said += part
-            event(conn, "message.delta", session_id, {"text": part}, generation)
-        assistant_row = next(row_ids)
+            after = COMPACT_AFTER + (f"（听到了：{turn['heard']}）" if turn.get("heard") else "")
+            event(conn, "message.delta", session_id, {"text": after}, generation)
         with state["lock"]:
-            row = {"row_id": assistant_row, "row_kind": "message", "role": "assistant", "text": said,
-                   "timestamp": time.time()}
-            if stopped:
-                row["display_metadata"] = {"interrupted": True}
-            state["transcripts"].setdefault(session_id, []).append(row)
+            if not stopped:
+                made.append(stored(session_id, "assistant", after))
+            elif not made:
+                # stopped before it compacted: what had come, as any reply stopped
+                made.append(stored(session_id, "assistant", before, display_metadata={"interrupted": True}))
             running.pop(session_id, None)
             fence(session_id)["revision"] += 1
+        said = before if stopped else after
         complete = {"text": said, "content": said, "admission_id": f"adm-{generation}",
                     "outcome": "cancelled" if stopped else "completed",
                     "status": "interrupted" if stopped else "complete",
-                    "persisted_turn": {"row_ids": [turn["user_row"], assistant_row], "complete": False,
+                    "persisted_turn": {"row_ids": [turn["user_row"]] + made, "complete": False,
                                        "user_row_id": turn["user_row"], "user_row_ids": [turn["user_row"]],
                                        "submission_id": turn["submission"]}}
         if not stopped:
-            complete["persisted_turn"]["final_assistant_row_id"] = assistant_row
+            complete["persisted_turn"]["final_assistant_row_id"] = made[-1]
         event(conn, "message.complete", session_id, complete, generation)
         idle_info(conn, session_id)
     except OSError:
         running.pop(session_id, None)
+
+
+def stored(session_id, role, text, row_kind="message", **more):
+    """A row of the session's transcript, numbered past every row it has, as Hermes numbers them (the
+    other stand-ins count apart): its number. The caller holds the lock."""
+    rows = state["transcripts"].setdefault(session_id, [])
+    number = max([next(row_ids)] + [r["row_id"] + 1 for r in rows if isinstance(r.get("row_id"), int)])
+    rows.append({"row_id": number, "row_kind": row_kind, "role": role, "text": text, "timestamp": time.time(), **more})
+    return number
 
 
 def fail(conn, params, rid):
