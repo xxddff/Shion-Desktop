@@ -2,7 +2,7 @@
 
 `macos/ci/fake_*.py` 是照着 Hermes 的源码和抓到的数据写的替身，CI 上的端到端测试跑的是它。这个目录反过来：Hermes 是真的，模型是假的。用来核对「只有模型回话才会发生」的那些轮次，Hermes 实际给观看者发了什么帧、存了什么行，再看 Shion 和替身是不是照这个样子。
 
-没有 CI 步骤跑它，改了和这些轮次有关的代码（`Model/Notices.swift`、`Model/NoticeCards.swift`、重连、`Model/SkillReviewTalk.swift` 和 `Gateway/EventCursors.swift` 里读快照的部分）或者服务器的 Hermes 升级之后手动跑一遍。
+没有 CI 步骤跑它，改了和这些轮次有关的代码（`Model/Notices.swift`、`Model/NoticeCards.swift`、`Model/StatusCards.swift`、忙着时的三种去法（`Model/Compose.swift`）、重连、`Model/SkillReviewTalk.swift` 和 `Gateway/EventCursors.swift` 里读快照的部分）或者服务器的 Hermes 升级之后手动跑一遍。
 
 ## 怎么跑
 
@@ -20,9 +20,9 @@
 
 容器不联网。里面做的事（`inside.sh`）：
 
-1. `mock_model.py` 在 `127.0.0.1:9911` 上扮一个 OpenAI 兼容的模型，按请求最后一句话决定回什么（一句话、一次工具调用、几兆字节的长回复、说到一半等探针放行再说完的回复），每个请求记一行日志。它报的用量都是 100 个提示 token，只有最后一句话里有「满了」的请求报 6000。压缩要的摘要不按这些规则（要摘要的那几轮里什么话都有），一律回一句固定的话。
-2. Hermes 的 `config.yaml` 写成 `provider: custom`、`base_url: http://127.0.0.1:9911/v1`。
-3. 建三个 profile（默认的、`study`、`commute`），`profile.yaml` 里都写上 `ui_meta['hermes-bots']`：Hermes 只在这样的安装上给 Bot Chat 提供 `message_agent`。`commute` 的 `config.yaml` 另外写上 `compression.in_place: false`：它压缩对话时换成新的会话，别的 profile 照 Hermes 默认的原地压缩。再建两个 profile，`diary` 和 `errand`，`compression.threshold_tokens: 4000`，上下文过了这个数 Hermes 自己压缩；`errand` 也写上 `compression.in_place: false`。它们也标成 Bot Mode 的，好让詩音能给它们带话（`copies` 阶段）。压缩的其余设置是 Hermes 默认的。
+1. `mock_model.py` 在 `127.0.0.1:9911` 上扮一个 OpenAI 兼容的模型，按请求最后一句话决定回什么（一句话、一次工具调用、几兆字节的长回复、说到一半等探针放行再说完的回复），每个请求记一行日志。它报的用量都是 100 个提示 token，只有最后一句话里有「满了」的请求报 6000。压缩要的摘要不按这些规则（要摘要的那几轮里什么话都有），一律回一句固定的话；探针放了 `hold-summary` 这个文件时，摘要等到文件没了才回（最多 150 秒），并放一个 `hold-summary.reached` 说它在等了。另外几种话（`held`、`status` 阶段用）：「换个模型」对 `mock-model` 回 404 `model_not_found`（Hermes 就换 profile 的备用模型），对别的模型照常回；「慢一点回」流开了、什么都不说，等到 `wait-go` 这个文件出现（最多 150 秒），Hermes 就在等模型；「额度正常」「额度过半」「额度七成」「额度用完」「额度恢复」照常回，回复带上 Nous 的额度头（`x-nous-credits-*`，20 美元的额度用到那一步），Hermes 从任何提供方的回复里读这些头、过了一档就发提醒；/goal 的裁判来问时回它要的 JSON，说做完了。
+2. Hermes 的 `config.yaml` 写成 `provider: custom`、`base_url: http://127.0.0.1:9911/v1`。另起一个 `mock_model.py` 在 `127.0.0.1:9912` 上，当备用模型（`mock-fallback`）的另一个提供方。
+3. 建三个 profile（默认的、`study`、`commute`），`profile.yaml` 里都写上 `ui_meta['hermes-bots']`：Hermes 只在这样的安装上给 Bot Chat 提供 `message_agent`。`commute` 的 `config.yaml` 另外写上 `compression.in_place: false`：它压缩对话时换成新的会话，别的 profile 照 Hermes 默认的原地压缩。再建两个 profile，`diary` 和 `errand`，`compression.threshold_tokens: 4000`，上下文过了这个数 Hermes 自己压缩；`errand` 也写上 `compression.in_place: false`。它们也标成 Bot Mode 的，好让詩音能给它们带话（`copies` 阶段）。压缩的其余设置是 Hermes 默认的。还有一个 `spare`，`config.yaml` 里写上 `fallback_model`（9912 上的 `mock-fallback`）。
 4. 起 `hermes gateway run`，然后 `probe.py` 像 Shion 那样连上去（`hermes gateway attach` 给的地址和票据；一张票只管一个 profile），建 Bot Chat，发话，把收到的帧和读到的行打印出来、存成 JSON。
 
 gateway 是经 `hold_gateway.py` 起的：Hermes 的文件一个不改，只在进程里把 `gateway/session_viewer_close.py` 的 `cancel_persisted_close` 包了一层。Hermes 接上一个观看者时（`session.resume`、`session.create`）先在一把锁里把它加进会话的帧流、读好快照，出了锁再等两件事才回答，头一件就是这个函数。包的那一层在 `/out/hold-attach` 这个文件存在时停在那里，文件没了才往下走；文件不存在时什么都不等，和直接起 gateway 一样。停的是一个工作线程，gateway 的事件循环照常转，所以这期间会话发布的帧先到观看者，快照后到。
@@ -41,6 +41,8 @@ gateway 是经 `hold_gateway.py` 起的：Hermes 的文件一个不改，只在�
 | `auto` | Hermes 自己压缩：两句要长回复的话，一句普通的「继续」，一轮里引导进去一句「继续」，一条后台命令和它的结果起的一轮，一句「满了」（它的回复说上下文满了）。下一轮一开始 Hermes 就压缩（preflight）；再来一条后台结果；再一轮里命令的结果回来时上下文又满了，Hermes 在这一轮中间压缩（post_tool），命令跑着时读一次最新一页；再来第三条后台结果。按压缩前的行号收回每一句你说的、留下来的或总结掉的话，最后按新的行号收回中间压缩的那一轮。`diary` 原地压缩，`errand` 换成新的会话。每次压缩前后读最新一页和 `state.db` 里所有的行，压缩前读最新六行，压缩后拿它的游标往上读；检查用的页和回答另外存成 `autocompaction-send.json`、`autocompaction-notices.json` |
 | `queued` | 一轮在跑（「慢慢做」）时，像 Shion 那样先发两句排队的话（`prompt.submit`，Hermes 排在这一轮后面），再把「继续」引导进这一轮；再说两句要长回复的话和一句「满了」，下一轮一开始 Hermes 压缩，这一轮里再引导进一句「继续」；最后一条后台结果。`diary` 原地压缩，`errand` 换成新的会话。读每次的最新一页和库里的行，记下每次运行的帧里 `pending` 说的是哪一条提交；页另外存成 `queued-send.json` |
 | `copies` | Hermes 自己压缩时，Bot Chat 里替你存的每一种行变成什么（`diary` 原地压缩，`errand` 换成新会话）：两句要长回复的话；然后一条后台结果，一轮里引导进去的「继续」，两条后台结果合并成的一轮（两条命令在后台跑着时，另一轮跑一条八秒的命令），詩音用 `message_agent` 给它带的话（她的 Bot Chat 在另一条连接上），它给课程带话、课程的回话作为后台结果回来；一句「满了」，下一轮一开始 Hermes 压缩。再来出错的一轮（假模型回 400），说到一半被停掉的回复，发的时候标成隐藏的一句（`display_kind: hidden`）；再「满了」，再压缩。每次压缩前后读最新一页、读库，记下每一轮开始帧带了什么、每次运行是哪一条提交、结束时存成了哪几行 |
+| `held` | 压缩的时候发的三种话：假模型把压缩要的摘要按住，按住期间像 Shion 那样发一句排队的（`prompt.submit`），一句引导（`session.steer`，按帧里最新的运行），一句打断（`session.redirect`），记下各自的回答，按住时读一次快照，放开后等每一轮都跑完，读最新一页和库里的行。两个地方压缩：一轮开始时（preflight），一轮里命令的结果回来时上下文满了（「慢慢做，满了」）；`diary` 原地压缩，`errand` 换成新的会话；`diary` 那次一轮开始时的压缩按住 65 秒，等到 Hermes 每分钟一句的那行。先在 `diary` 另一个会话里来一次能压的太少的压缩（Hermes 说在压缩，然后放弃）。检查用的帧、回答和页另外存成 `held-cards.json`（`../logic/cards` 用） |
+| `status` | 官方桌面端读、对话记录里没有的帧（`spare`）：五轮额度一档档用完再恢复（`notification.show`、`notification.clear`），一轮主模型不在、换成备用模型，一轮模型一分多钟不说话（`thinking.delta` 说在等），/btw 问一句（`prompt.btw`），/bg 交一件（`prompt.background`），设一个 /goal（`slash.exec`，再照官方桌面端那样发它给的那句）等裁判说完。存成 `status-cards.json`（`../logic/cards` 用） |
 
 结果在 `captures/`（不进仓库）：每个阶段一份 `capture-*.json` 和打印的 `*.txt`，还有 `gateway.log`、`mock-model.log`。
 
@@ -70,10 +72,12 @@ cp captures/autocompaction-notices.json ../logic/notices/autocompaction.json
 cp captures/queued-send.json ../logic/send/queued.json
 cp captures/copies-send.json ../logic/send/copies.json
 cp captures/copies-notices.json ../logic/notices/copies.json
-../logic/run.sh send notices
+cp captures/held-cards.json ../logic/cards/held.json
+cp captures/status-cards.json ../logic/cards/status.json
+../logic/run.sh send notices cards
 ```
 
-`send` 把应用自己发送、重新接上和重试的方法原样编进去，替身服务器照抓到的样子给出压缩前后的页和收回的回答，看一句引导进去、回答丢了的话，压缩以后会不会被认成送到了，重试收回的是不是那条消息现在的行；`notices` 把读通知的方法和把页上的行读成对话里各项的方法原样编进去，看压缩前读过的一条后台结果，压缩以后在对话里还是不是一张卡，Hermes 自己压缩存下的副本读成什么。
+`send` 把应用自己发送、重新接上和重试的方法原样编进去，替身服务器照抓到的样子给出压缩前后的页和收回的回答，看一句引导进去、回答丢了的话，压缩以后会不会被认成送到了，重试收回的是不是那条消息现在的行；`notices` 把读通知的方法和把页上的行读成对话里各项的方法原样编进去，看压缩前读过的一条后台结果，压缩以后在对话里还是不是一张卡，Hermes 自己压缩存下的副本读成什么；`cards` 把 `Model/StatusCards.swift`、`Model/Compose.swift` 和读这些帧、把页读成对话各项的方法原样编进去，按抓到的顺序喂帧，看压缩是不是从第一句到结束一张卡、结束了就不再「正在压缩」、读到摘要行以后和那一行是一张，压缩时发的话是不是只排队和引导，提醒、备用模型、目标、/btw、/bg、等模型各是不是一张卡。
 
 ## 2026-11-13 这一次看到的（Hermes `611bf53`）
 
@@ -167,3 +171,31 @@ cp captures/copies-notices.json ../logic/notices/copies.json
 - `../logic/send` 拿这几页跑应用自己的代码：「继续（副本）」从这台 Mac 引导进「慢慢做（副本）」那次运行，送到了（14）、回答丢了，重连时 Hermes 已经压缩过：改之前一直是「不确定有没有送到」，改之后由副本 53（54）确认。之后再引导一次同样的话、没送到：那句旧的副本读出来也是「继续（副本）」，不管旧的那句是从对话记录读来的（按它的时间和文字认），还是这台 Mac 发的、只知道行号 14（按「第三句」那次运行开头那一行的时间认），都不拿来确认这一句，改前改后都一样。后台结果或课程的回话起的一轮停下来、对话是压缩以后读的：改之前这一轮下面有「重试」（起它的那个副本算成你说的话，点了会把 Hermes 给模型的那段原文当成你的话收回再发一遍），改之后没有。
 - 认不出来的，照样留着：隐藏的那一句副本显示成你说的；停掉的回复副本没有「已停止」；出错那一行还是出错，但原因和详情没了，只写 Hermes 那句固定说明的中文（这一轮出错了：这次没有处理，还要做的话再发一次）。这几种行上没有 Hermes 写给模型、人不会打的字可认。
 - 没改、也没变坏的两件事：原地压缩以后，被总结掉的长回复还按原来的行号在页上，它的副本（换成压缩那一刻的时间）也在，同一段回复显示两遍（`auto` 也是这样）；压缩前拿到的游标，原地压缩以后往上读给的是另一段（`auto` 的游标那一条）。
+
+## 2026-11-15 这一次看到的：压缩的时候发的三种话（`held`，Hermes `611bf53`）
+
+全部阶段跑过一次，之后只跑 `held status`（`STAGES="held status" ./run.sh`），下面是最后一次的（帧、回答和页在 `../logic/cards/held.json`）。两种压缩说的话一样，行号前面是原地压缩的（`diary`），括号里是换成新会话的（`errand`）。
+
+- **能压的太少时，Hermes 说了压缩，然后一声不响地放弃**（`diary` 另一个会话，前面只有三轮）：这一轮开始时两句 `status.update` 的 `compacting`（「📦 Preflight compression: ~6,040 tokens >= 4,000 threshold. This may take a moment.」「🗜️ Compacting context — summarizing earlier conversation so I can continue...」），没有问模型要摘要，也没有 `compacted`，这一轮接着想、说话、结束；gateway 的日志里这次压缩是 `commit_status: aborted`、`failure_class: insufficient_messages`。库里没有摘要行。
+- **一轮开始时压缩**（「第三句」，preflight）：`message.start`、`session.info`（`running: true`）、那两句 `compacting`，然后一直到摘要回来，只有 `session.info`（排队的那句进了 `pending`）和压得久时的那句。这期间发的三句：
+  - 排队 `prompt.submit`：回 `{status: "queued", admission_id, sequence, execution_generation: null}`，`session.info` 的 `pending` 多了它一条。这一轮做完以后它自己一轮（新的 `message.start`、下一个 `execution_generation`），存成普通的一行：41（34）。
+  - 引导 `session.steer`：回 `{status: "queued", text, execution_generation: 12（8）}`，这一轮的编号。这时这一轮还没有工具结果可以接在后面：Hermes 等模型回完这一轮的提示，在同一次运行里（没有新的 `message.start`）把它当成你说的一句接着问，模型再回一次。存成普通的一行（没有 `display_kind`）：39（32），有它自己的回复 40（33）。这一轮的 `message.complete` 的 `persisted_turn` 是 `row_ids: [39, 40]`、`user_row_id: 39`（32），`submission_id` 却是「第三句」的提交编号：提示行 37（30）和它的回复不在 `row_ids` 里。
+  - 打断 `session.redirect`：回 `{status: "rejected", text, execution_generation: 12（8）}`，没有 `delivered`。这句话库里哪里都没有，以后也没有哪一轮处理它。这时没有模型请求可以打断（压缩不是），Hermes 的 `redirect()` 答不了，就是这个回答：Shion 原来会在这句话下面写「这一轮没有接下这句话，也可能已经看到了」，给「再发一次」。
+  - `diary` 那次按住 65 秒：60 秒时 Hermes 说「🗜️ Compacting context — still summarizing earlier conversation so I can continue...」，也是 `compacting`。按住时读的快照：`running: true`，`pending` 里是这一轮和排队的那句。
+  - 放开以后：`status.update` 的 `compacted`「✓ Context compaction complete — continuing turn...」，接着才是模型的 `thinking.delta`、`message.delta`。
+- **一轮里命令的结果回来时压缩**（「慢慢做，满了」，post_tool）：`tool.start`、`tool.complete` 之后 `compacting`「🗜️ Compacting context — summarizing…」。三句的回答和上面一样（打断还是 `rejected`，没有 `delivered`）。放开以后，模型下一次说话之前引导的那句就带进了这一轮，存成一行 `steer`：69（62）（页上 `display_kind: steer`，库里是 `[OUT-OF-BAND USER MESSAGE — …]` 那段原文），模型说一次话这一轮就结束：`persisted_turn` 是 `row_ids: [66, 67, 68, 69, 70]`（`[59, …, 63]`）、`user_row_ids: [66, 69]`、`complete: false`，提示行 66（59）和提交编号对得上。不用再等一批工具结果。排队的那句自己一轮：71（64）。
+- **压缩完以后标成 `compacting` 的警告**：`diary` 这是第二次压缩，Hermes 在 `compacted` 之前说「⚠️  Session compressed 2 times — accuracy may degrade. Consider /new to start fresh.」，`kind` 也是 `compacting`；下一轮（排队的那句）一开始又说一次，后面没有 `compacted`，什么也没在压缩。这是 gateway 把说到压缩的话都标成 `compacting`（`gateway/run_turn_progress.py` 的 `_viewer_status_kind`）。
+- **摘要行的行号**：比压缩开始前发出过的每个行号都大。原地压缩：压缩前库里发到第 22 行，摘要是第 26 行；第二次压缩前发到第 54 行，摘要第 58 行。换成新会话：压缩前发到第 14 行，新会话的摘要是第 19 行（前面 16–18 是复制过去的前几行）；第二次发到第 47 行，摘要第 51 行。页上摘要行是 `row_kind: compaction`、`role: system`，带 `compacted_messages`，时间是压缩那一刻（换成新会话时它在页上排在这一轮的提示后面，行号比提示小）。
+- `../logic/cards` 拿这些帧和页跑应用自己的代码：每次压缩从第一句 `compacting` 到 `compacted` 都是在压缩，之前之后都不是，⚠ 警告不算；三句都是在 Shion 说着「在压缩」的时候发的，所以打断照排队走；放弃的那次卡片是「压缩没有完成」，读到页后还是它；别的几次读到页后实时的卡就是那一行摘要，只一张。改之前（807bf72）这一组编不过（没有 `StatusCards.swift`），`../logic/send` 新加的 7 项里 3 项不过（压缩时打断照样发 `session.redirect`），`../logic/notices` 新加的 4 项都不过（压缩的行不是卡）。
+
+## 2026-11-15 这一次看到的：对话旁边的帧（`status`，Hermes `611bf53`）
+
+`spare` 的 Bot Chat，一条连接（帧和页在 `../logic/cards/status.json`）。
+
+- **额度**：五轮的回复依次带上用了一点、一半、四分之三、用完（付费关着）、恢复的额度头。Hermes 每过一档在下一轮里发 `notification.show`：用了一点不说；一半是 `{key: "credits.usage", level: "info", kind: "sticky", text: "• You've used $10.00 of your $20.00 cap"}`；四分之三先 `notification.clear` 掉 `credits.usage` 再发一条同 `key` 的 `warn`「⚠ You've used $15.00 of your $20.00 cap」；用完又换一次（「⚠ You've used $20.00 of your $20.00 cap」），再加一条 `{key: "credits.depleted", level: "error", text: "✕ Credit access paused · run /topup to top up"}`；恢复时 `clear` 掉这两条，发 `{key: "credits.restored", level: "success", kind: "ttl", ttl_ms: 8000, text: "✓ Credit access restored"}`。提醒在这一轮的 `message.start` 和 `message.complete` 之间，`id` 和 `key` 一样。
+- **换备用模型**：主模型回 404 `model_not_found`，Hermes 在这一轮里发 `status.update` `{kind: "lifecycle", text: "⚠️ Model fallback: mock-model via custom unavailable (model not found); using mock-fallback via custom."}`，备用模型回完这一轮；下一轮又从主模型开始，没有说换回来了的帧。
+- **等模型**：流开了 60 秒什么都不说，Hermes 发 `thinking.delta` `{text: "⏳ waiting on mock-model — 60s waiting for the first stream chunk (auto-reconnect: stream stale watchdog in 840s)"}`；回复来时先来一帧空的 `thinking.delta`（清掉这句），然后是 `message.delta`。没有别的帧说等完了。
+- **/btw**：`prompt.btw` 马上回 `{task_id}`，之后同一个会话上一帧 `btw.complete` `{task_id: "btw_…", question: "顺便问一句（探测）", text: "好（mock）。"}`，前后没有 `message.start`、`session.info`，库里没有行。
+- **/bg**：`prompt.background` 一样，`background.complete` `{task_id: "bg_…", text: "好（mock）。"}`。
+- **/goal**：`slash.exec` 回一个 `send` 的指示（官方桌面端照它发 `message`），Hermes 先发 `session.control.update`（目标 `active`），然后是这一轮；模型说完、`message.complete` 之前，裁判已经说完（又一次 `session.control.update`，目标 `done`），`status.update` `{kind: "goal", text: "✓ Goal achieved: 那句话写好了（mock 裁判）。"}` 却在 `message.complete` 和 `session.info running: false` 之后才到：目标的那句在这一轮结束以后。
+- 没抓到的：`compressing`、`ready`（只有 Hermes 自己的终端客户端的 /compress 发），「Resuming interrupted turn…」（只有它终端客户端的 sidecar 发，`tui_gateway/session_auto_continue.py`），`kind: fallback`（611bf53 里没有谁发），启动时的警告、登录链接、磁盘快满了、插件的提醒（这几种没有在容器里引出来）；这些是照源码做的。

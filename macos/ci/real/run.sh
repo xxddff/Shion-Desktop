@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The turns only a model can start (a teammate's message and its answer, a background result, a
-# subscription Hermes ends), against Hermes itself with a stand-in model, in a container without
+# subscription Hermes ends, a compaction, a fallback, a wait for the provider), against Hermes itself with a stand-in model, in a container without
 # network. Needs Docker and the image hermes-plugin/test-with-hermes.sh builds (Hermes at the commit
 # pinned there): run that once first.
 #
@@ -20,6 +20,10 @@
 #   cp captures/queued-send.json ../logic/send/queued.json
 #   cp captures/copies-send.json ../logic/send/copies.json
 #   cp captures/copies-notices.json ../logic/notices/copies.json
+# and the frames of compactions held open with a prompt, a steer and a redirect sent meanwhile (stage
+# held), and of what the official client reads besides (stage status), what the cards' checks run over:
+#   cp captures/held-cards.json ../logic/cards/held.json
+#   cp captures/status-cards.json ../logic/cards/status.json
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 image="${HERMES_TEST_IMAGE:-shion-hermes-test}"
