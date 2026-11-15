@@ -362,7 +362,7 @@ do {
                                         "kind": "sticky", "key": "disk.autoprune", "id": "disk.autoprune",
                                         "detail": "Hermes can prune old sessions.\nReply /autoprune on, off or later."], seq: 20))
     check(kept(u).first?.text == "⚠ Low disk (3.1 GB free) · /autoprune on|off|later\n\nHermes can prune old sessions.\nReply /autoprune on, off or later.",
-          "notices. a notice's detail: under its line: \(kept(u).first?.text ?? "")")
+          "notices. a notice's detail: under its line: \((kept(u).first?.text ?? "").debugDescription)")
 }
 
 do {
