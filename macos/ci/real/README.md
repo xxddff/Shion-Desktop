@@ -42,6 +42,7 @@ gateway 是经 `hold_gateway.py` 起的：Hermes 的文件一个不改，只在�
 | `queued` | 一轮在跑（「慢慢做」）时，像 Shion 那样先发两句排队的话（`prompt.submit`，Hermes 排在这一轮后面），再把「继续」引导进这一轮；再说两句要长回复的话和一句「满了」，下一轮一开始 Hermes 压缩，这一轮里再引导进一句「继续」；最后一条后台结果。`diary` 原地压缩，`errand` 换成新的会话。读每次的最新一页和库里的行，记下每次运行的帧里 `pending` 说的是哪一条提交；页另外存成 `queued-send.json` |
 | `copies` | Hermes 自己压缩时，Bot Chat 里替你存的每一种行变成什么（`diary` 原地压缩，`errand` 换成新会话）：两句要长回复的话；然后一条后台结果，一轮里引导进去的「继续」，两条后台结果合并成的一轮（两条命令在后台跑着时，另一轮跑一条八秒的命令），詩音用 `message_agent` 给它带的话（她的 Bot Chat 在另一条连接上），它给课程带话、课程的回话作为后台结果回来；一句「满了」，下一轮一开始 Hermes 压缩。再来出错的一轮（假模型回 400），说到一半被停掉的回复，发的时候标成隐藏的一句（`display_kind: hidden`）；再「满了」，再压缩。每次压缩前后读最新一页、读库，记下每一轮开始帧带了什么、每次运行是哪一条提交、结束时存成了哪几行 |
 | `long` | 一轮里压缩、工具调用很多、停下来以后重试要找的那一行（`diary` 原地压缩，`errand` 换成新会话）：四句要长回复的话，然后「逐个检查这些文件，满了」：假模型一个文件调一次命令，头一次跑三秒，跑着时像 Shion 那样读最新一页；这句话说了「满了」，头一条命令的结果回来时 Hermes 在这一轮中间压缩；一共 28 次，最后一次跑着时停掉（`session.interrupt`）。结束后像 Shion 那样一页 50 行、顺着每页的 `next_cursor` 把每一页读完，读库，按中途读到的行号、再按结束帧说的行号收回这句话（`session.mutate` 的 `rewind`）。收回以后再两句长回复、一句只调三次命令的「逐个检查三个文件，满了」，照样走一遍。检查用的页和回答另外存成 `longturn-send.json` |
+| `explicit` | 像谁都会那样发的话（`prompt.submit`，带着自己的提交编号），字面上却是 Hermes 自己写的那几种：默认 profile 先问一句「整理上周的计划」；再把 Hermes 包引导的那两行原样连同中间一句话当提示发出去（中间那句让假模型慢慢说），说到一半停掉，读最新一页，按这句提示的行号收回（`session.mutate` 的 `rewind`）；再发一句以 Hermes 给通知结尾的那一段（`INTERNAL_NOTIFICATION_FOOTER`）结尾的问题、一句引了那一段又接着问的、一句普通的话；最后一轮跑命令时引导进去一句别的助手的消息那种样子的话（`Message from 🤖 课程 (@study): …`）。那两段 Hermes 的原文从容器里 gateway 自己的模块读（`agent.prompt_builder`、`gateway.run_notifications`）。读每次的最新一页和库；页另外存成 `explicit-send.json`、`explicit-notices.json` |
 
 结果在 `captures/`（不进仓库）：每个阶段一份 `capture-*.json` 和打印的 `*.txt`，还有 `gateway.log`、`mock-model.log`。
 
@@ -61,7 +62,7 @@ gateway 是经 `hold_gateway.py` 起的：Hermes 的文件一个不改，只在�
 
 这个把审核会话的 `Shion/Model/SkillReviewTalk.swift` 和 `Shion/Gateway/EventCursors.swift` 原样编进去（应用的其余部分用 `ci/logic/talk/stubs.swift` 顶替），按抓到的顺序把帧和快照喂给它，逐项检查，有不对的以非零退出。走两遍：一遍照实际发生的（旧快照之后再问一次，拿到新的）；一遍假设每次再问拿到的都和第一份一样旧（把抓到的那份旧快照重复给它），看它只靠旧快照和帧能不能把话显示对。第二个参数可以换一份 `SkillReviewTalk.swift`，比如改动之前的，看它在哪一项上不对。
 
-`compact`、`auto`、`copies`、`long` 几个阶段存下的页和回答是 `../logic/send`、`../logic/notices` 的检查的数据，放过去就行（`queued` 阶段的页不再用：用它的检查随送进一轮的话按对话记录确认一起去掉了，见「送进一轮的话不再按对话记录确认」一节）：
+`compact`、`auto`、`copies`、`long`、`explicit` 几个阶段存下的页和回答是 `../logic/send`、`../logic/notices` 的检查的数据，放过去就行（`queued` 阶段的页不再用：用它的检查随送进一轮的话按对话记录确认一起去掉了，见「送进一轮的话不再按对话记录确认」一节）：
 
 ```bash
 cp captures/compaction-send.json ../logic/send/compaction.json
@@ -71,6 +72,8 @@ cp captures/autocompaction-notices.json ../logic/notices/autocompaction.json
 cp captures/copies-send.json ../logic/send/copies.json
 cp captures/copies-notices.json ../logic/notices/copies.json
 cp captures/longturn-send.json ../logic/send/longturn.json
+cp captures/explicit-send.json ../logic/send/explicit.json
+cp captures/explicit-notices.json ../logic/notices/explicit.json
 ../logic/run.sh send notices
 ```
 
@@ -184,4 +187,13 @@ cp captures/longturn-send.json ../logic/send/longturn.json
 - 收回：按中途读到的 9，原地压缩时回 `target user message is no longer in session history`，换成新会话时回 `compacted: target user message was summarized when the session was compressed`，都是 `invalid_params`，什么都没收回；按结束帧说的 16 照常收回，`rewound_count` 是 58。
 - 3 次的那一轮：前面又两句长回复（74、76），这句话中途是 78，压缩以后是 83（还写着编号），结束帧说 83；结束以后只有一页（19 行，换成新会话时 18 行），83 在上面。按 78 收回和上面一样被拒，按 83 收回了 8 行。
 - `../logic/send` 拿这几页跑应用自己的重试（中途那一页由应用自己读最新一页的方法读进对话，结束帧照样记下，再把结束以后的每一页按游标给它）：改之前（`6449e1e`），中途读过的对话（提示是 `row-9`）停下来点重试，先收回 9、被拒，再读最近一页，上面没有，写「没能重试：这条消息已经不在对话记录里了」（换成新会话的写「…压缩进摘要里了」），什么都没再问；结束帧没收到的也一样；这台 Mac 发的、结束帧没收到的，读最近 20 行按原文找不到，写「找不到这条消息在服务器上存成了哪一行」。改之后，中途读那一页时记下第 9 行写的是哪个提交编号，结束帧说这个编号现在是 16，就直接收回 16、原话再问一次；结束帧没收到的，收回 9 被拒以后顺着游标读到第二页，16 写着它的编号，收回 16；第 9 行假如没写编号，按时间和文字在第二页认出 16；这台 Mac 发的、结束帧没收到的，也读到第二页按编号找到 16。3 次的那一轮（83 在最近一页）和这台 Mac 发、结束帧收到了的（直接收回 16），改前改后都对。
+
+## 2026-11-15 这一次看到的：字面上像 Hermes 自己写的、你发的话（`explicit`，Hermes `611bf53`）
+
+跑了一次，行号如下（默认 profile 的 Bot Chat，原地）。
+
+- 发出去的每一句提示（`prompt.submit`，带 `submission_id`），存下的那一行 `display_kind` 都是空的，`display_metadata` 是 `{gateway_input_owner, submission_id}`，`submission_id` 就是发的时候带的那个，不管字面上是什么：问计划的那句 1，Hermes 包引导的那两行原样连同中间一句「慢慢说（粘贴）」 3，以那段通知结尾结尾的问题 5，引了那一段又接着问的 7，普通的一句 9，跑命令的那句 11。页上的文字就是发的原文，引导那两行、结尾那一段都在。
+- 3 那一轮说到一半停掉：结束帧 `status: interrupted`，`persisted_turn` 的 `user_row_id` 是 3，`row_ids` 是 3、4；4 是「第一段。」，`display_metadata: {interrupted: true}`。这时最新一页是 1 到 4，停掉的那一轮在最后。按 3 收回，`rewound_count` 是 2，`target_message.content` 是那两行原样的原文，库里 3、4 标成 `active=0`，1、2 照旧。
+- 引导进去的那句别的助手消息样子的话是 14：`display_kind: steer`，`display_metadata` 是空的（`gateway_input_owner` 也没有），库里存的是 Hermes 给模型的原文（那两行包着），页上给的是你说的那句 `Message from 🤖 课程 (@study): 周五的课改到下午了（粘贴）`。`session.steer` 的回答是 `{status: "queued", text: …}`。
+- 所以页上分得清：写着提交编号的是有人发的提示（Hermes 自己起的那几种行都不写，见 `auto`、`copies`），`steer` 是送进一轮的你的话；只有 Hermes 自己压缩存的副本，类型和 `display_metadata` 都没了，才只能看字。`gateway_input_owner` 分不出：别的助手的消息那一行也有（`copies` 的 30）。
 

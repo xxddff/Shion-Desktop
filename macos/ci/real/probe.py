@@ -56,6 +56,16 @@ which (diary, errand) compact a session by themselves.
                                               next_cursor followed), the store, and what a rewind to the
                                               prompt's row as the page showed it answers, then one to the row
                                               the turn's end names; the pages also go to longturn-send.json
+  python probe.py explicit <capture.json>     prompts sent as anyone sends one (prompt.submit, a submission of
+                                              their own) in the words of what Hermes writes itself: Hermes's
+                                              wrapper for a message put into a turn, whole, round words its
+                                              turn answers slowly, that turn stopped as it streams, the page,
+                                              and a rewind to that prompt's row; a question that ends with the
+                                              paragraph Hermes ends its notices with, and one that goes on
+                                              after it; a plain sentence; and a message put into a running
+                                              turn in the words another assistant's message comes in. The
+                                              newest page after each; the pages also go to explicit-send.json
+                                              and explicit-notices.json
 
 Each prints what a viewer gets, frame by frame, and writes it as JSON for the Mac's own code to be
 run over (read_notices.sh, read_behind.sh, ../logic/send, ../logic/notices)."""
@@ -1079,6 +1089,67 @@ elif STAGE == "long":
                 "rewinds": {"old": {"row": old, "answer": refused}, "now": {"row": now, "answer": taken}}}
         v.close()
     write_pages(pages, "longturn")
+
+elif STAGE == "explicit":
+    # Hermes's own words (agent/prompt_builder.py STEER_MARKER_OPEN / CLOSE; gateway/run_notifications.py
+    # INTERNAL_NOTIFICATION_FOOTER), read from the running gateway's own modules
+    from agent.prompt_builder import STEER_MARKER_CLOSE, STEER_MARKER_OPEN
+    from gateway.run_notifications import INTERNAL_NOTIFICATION_FOOTER
+    go = os.path.join(os.path.dirname(OUT), "model-go")
+    v = Socket("ex")
+    chat = bot_chat(v, "default")
+    say("--- a question, answered; then Hermes's wrapper for a message put into a turn, sent as a prompt, its turn stopped as it streams")
+    first = turn(v, "default", chat, "整理上周的计划（粘贴）")
+    if os.path.exists(go):
+        os.remove(go)
+    mark = len(v.frames)
+    pasted_words = f"{STEER_MARKER_OPEN}\n慢慢说（粘贴）\n{STEER_MARKER_CLOSE}"
+    pasted = str(uuid.uuid4()).upper()
+    v.call("prompt.submit", {"profile": "default", "session_id": chat, "text": pasted_words, "submission_id": pasted})
+    v.listen(60, until="message.delta", after=mark)
+    generation = next(f.get("execution_generation") for f in reversed(v.frames) if f.get("type") == "message.delta")
+    v.call("session.interrupt", {"profile": "default", "session_id": chat, "execution_generation": generation})
+    say("the turn", "ended" if v.listen(90, until="message.complete", after=mark) else "DID NOT END in 90 s")
+    with open(go, "w"):
+        pass
+    v.listen(1)
+    stopped_end = next((f.get("payload") or {} for f in reversed(v.frames[mark:]) if f.get("type") == "message.complete"), {})
+    say("   end", stopped_end.get("status"), short(stopped_end.get("persisted_turn"), 300))
+    say("--- the newest page: the stopped turn is the last")
+    page_stopped = rows_of(v, "default", chat, limit=50)
+    pasted_row = next((r.get("row_id") for r in page_stopped.get("rows") or []
+                       if (r.get("display_metadata") or {}).get("submission_id") == pasted), None)
+    taken = mutate(v, "default", chat, "rewind", {"target_message_id": pasted_row}) if pasted_row else {}
+    say(f"   rewind to {pasted_row} (the pasted wrapper's row):", short(taken, 500))
+    after_rewind = rows_of(v, "default", chat, limit=50, quiet=True)
+    say("--- a question ending with the paragraph Hermes ends its notices with; one going on after it; a plain sentence")
+    footer_words = f"请解释下面这段 Hermes 日志，尤其是最后一句：\n\n后台任务跑完了，结果是 0。\n\n{INTERNAL_NOTIFICATION_FOOTER.strip()}"
+    footer = turn(v, "default", chat, footer_words)
+    going_on_words = footer_words + "\n\n这一段为什么不让回复？"
+    going_on = turn(v, "default", chat, going_on_words)
+    plain = turn(v, "default", chat, "就是普通的一句话（粘贴）")
+    say("--- a message put into a running turn in the words another assistant's message comes in")
+    peer_words = "Message from 🤖 课程 (@study): 周五的课改到下午了（粘贴）"
+    slow, steer = steered(v, "default", chat, "慢慢做（粘贴）", peer_words)
+    page = rows_of(v, "default", chat, limit=50)
+    for row in page.get("rows") or []:
+        if row.get("role") == "user":
+            say("   yours:", row.get("row_id"), row.get("display_kind") or "-", sorted((row.get("display_metadata") or {}).keys()),
+                short(row.get("text"), 160))
+    capture.update(session=chat, submissions={"first": first, "pasted": pasted, "footer": footer, "going_on": going_on,
+                                              "plain": plain, "slow": slow},
+                   words={"pasted": pasted_words, "footer": footer_words, "going_on": going_on_words, "peer": peer_words},
+                   stopped_end=stopped_end, page_stopped=page_stopped, rewound={"row": pasted_row, "answer": taken},
+                   after_rewind=after_rewind, steer=steer, page=page, stored=stored("default"))
+    # what ../logic/send reads (the stopped turn of the pasted wrapper, and the rewind of its row) and
+    # ../logic/notices (the page with each of these rows)
+    write_pages({"default": {"send": {"submission": pasted, "words": pasted_words, "page": page_stopped,
+                                      "rewound": {"row": pasted_row, "answer": taken}},
+                             "notices": {"submissions": {"pasted": pasted, "footer": footer, "going_on": going_on,
+                                                         "plain": plain},
+                                         "words": {"pasted": pasted_words, "footer": footer_words,
+                                                   "going_on": going_on_words, "peer": peer_words},
+                                         "stopped": page_stopped, "page": page}}}, "explicit")
 
 with open(OUT, "w", encoding="utf-8") as out:
     json.dump(capture, out, ensure_ascii=False, indent=1)
